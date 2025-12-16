@@ -9,3 +9,7 @@
 Guideline.md
 Timeline.md
 Timeline_zh.md
+*.exe
+*.spec
+\build
+\dist
