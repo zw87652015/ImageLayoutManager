@@ -1,7 +1,11 @@
-.figlayout
-.pdf
-.jpg
-.tiff
+*.figlayout
+*.pdf
+*.jpg
+*.png
+*.svg
+*.jpeg
+*.tif
+*.tiff
 Guideline.md
 Timeline.md
 Timeline_zh.md
