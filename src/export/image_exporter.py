@@ -1,0 +1,302 @@
+from PyQt6.QtGui import QPainter, QFont, QImage, QColor
+from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtWidgets import QGraphicsTextItem, QStyleOptionGraphicsItem
+from PyQt6.QtSvg import QSvgRenderer
+from PIL import Image
+import os
+from src.model.data_model import Project, Cell
+from src.model.enums import FitMode
+from src.model.layout_engine import LayoutEngine
+
+
+class ImageExporter:
+    """Export project to raster image formats (TIFF, JPG, PNG)."""
+    
+    @staticmethod
+    def export(project: Project, output_path: str, format: str = "TIFF"):
+        """
+        Export project to a raster image.
+        
+        Args:
+            project: The project to export
+            output_path: Output file path
+            format: Image format - "TIFF", "JPG", "JPEG", or "PNG"
+        """
+        # Calculate Layout (mm)
+        layout_result = LayoutEngine.calculate_layout(project)
+
+        # Use the project's page size directly (WYSIWYG with canvas)
+        page_w_mm = project.page_width_mm
+        page_h_mm = project.page_height_mm
+        
+        # Convert mm to pixels using DPI
+        # DPI = dots per inch, 1 inch = 25.4 mm
+        scale = project.dpi / 25.4
+        width_px = int(page_w_mm * scale)
+        height_px = int(page_h_mm * scale)
+        
+        print(f"DEBUG: Exporting {format}: {page_w_mm}mm x {page_h_mm}mm at {project.dpi} DPI")
+        print(f"DEBUG: Image size: {width_px} x {height_px} pixels")
+
+        # Create QImage with white background
+        # Use ARGB32 for transparency support, RGB32 for JPG
+        if format.upper() in ("JPG", "JPEG"):
+            image = QImage(width_px, height_px, QImage.Format.Format_RGB32)
+            image.fill(Qt.GlobalColor.white)
+        else:
+            image = QImage(width_px, height_px, QImage.Format.Format_ARGB32)
+            image.fill(Qt.GlobalColor.white)
+        
+        # Set DPI metadata
+        # QImage uses dots per meter: dpi * 39.3701 (inches per meter)
+        dpm = int(project.dpi * 39.3701)
+        image.setDotsPerMeterX(dpm)
+        image.setDotsPerMeterY(dpm)
+        
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        
+        try:
+            # 1. Draw Images
+            for cell in project.cells:
+                if cell.id in layout_result.cell_rects and cell.image_path and os.path.exists(cell.image_path):
+                    x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
+                    
+                    # Convert rect to pixels
+                    target_rect = QRectF(
+                        x_mm * scale, 
+                        y_mm * scale, 
+                        w_mm * scale, 
+                        h_mm * scale
+                    )
+                    
+                    # Apply Padding
+                    p_top = cell.padding_top * scale
+                    p_right = cell.padding_right * scale
+                    p_bottom = cell.padding_bottom * scale
+                    p_left = cell.padding_left * scale
+                    
+                    content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
+                    
+                    if content_rect.width() > 0 and content_rect.height() > 0:
+                        ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode)
+                        
+            # 2. Draw Text Items
+            for text_item in project.text_items:
+                ImageExporter._draw_text(painter, project, text_item, layout_result, scale)
+                
+        finally:
+            painter.end()
+        
+        # Save using appropriate format
+        format_upper = format.upper()
+        if format_upper == "TIFF":
+            # Use PIL for TIFF to ensure proper compression and metadata
+            ImageExporter._save_as_tiff(image, output_path, project.dpi)
+        elif format_upper in ("JPG", "JPEG"):
+            image.save(output_path, "JPEG", quality=95)
+        elif format_upper == "PNG":
+            image.save(output_path, "PNG")
+        else:
+            # Default to PNG
+            image.save(output_path, "PNG")
+    
+    @staticmethod
+    def _save_as_tiff(qimage: QImage, output_path: str, dpi: int):
+        """Save QImage as TIFF with proper DPI metadata using PIL."""
+        # Convert QImage to PIL Image
+        width = qimage.width()
+        height = qimage.height()
+        
+        # Get raw data from QImage
+        ptr = qimage.bits()
+        ptr.setsize(qimage.sizeInBytes())
+        
+        # QImage Format_ARGB32 is actually BGRA in memory on little-endian systems
+        if qimage.format() == QImage.Format.Format_ARGB32:
+            pil_image = Image.frombytes("RGBA", (width, height), bytes(ptr), "raw", "BGRA")
+        else:  # Format_RGB32
+            pil_image = Image.frombytes("RGBA", (width, height), bytes(ptr), "raw", "BGRA")
+            pil_image = pil_image.convert("RGB")
+        
+        # Save as TIFF with DPI metadata
+        pil_image.save(output_path, "TIFF", dpi=(dpi, dpi), compression="tiff_lzw")
+
+    @staticmethod
+    def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str):
+        """Draw an image into the given rect."""
+        ext = os.path.splitext(path)[1].lower()
+        
+        if ext == '.svg':
+            ImageExporter._draw_svg(painter, path, rect, fit_mode_str)
+        else:
+            ImageExporter._draw_raster(painter, path, rect, fit_mode_str)
+    
+    @staticmethod
+    def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str):
+        """Draw SVG vector image."""
+        try:
+            renderer = QSvgRenderer(path)
+            if not renderer.isValid():
+                print(f"Invalid SVG file: {path}")
+                return
+            
+            fit_mode = FitMode(fit_mode_str)
+            default_size = renderer.defaultSize()
+            
+            if default_size.isEmpty():
+                img_w, img_h = rect.width(), rect.height()
+            else:
+                img_w, img_h = default_size.width(), default_size.height()
+            
+            if fit_mode == FitMode.CONTAIN:
+                ratio = min(rect.width() / img_w, rect.height() / img_h)
+                new_w = img_w * ratio
+                new_h = img_h * ratio
+                
+                x = rect.left() + (rect.width() - new_w) / 2
+                y = rect.top() + (rect.height() - new_h) / 2
+                
+                target_rect = QRectF(x, y, new_w, new_h)
+                renderer.render(painter, target_rect)
+                
+            elif fit_mode == FitMode.COVER:
+                ratio = max(rect.width() / img_w, rect.height() / img_h)
+                new_w = img_w * ratio
+                new_h = img_h * ratio
+                
+                x = rect.left() + (rect.width() - new_w) / 2
+                y = rect.top() + (rect.height() - new_h) / 2
+                
+                full_target_rect = QRectF(x, y, new_w, new_h)
+                
+                painter.save()
+                painter.setClipRect(rect)
+                renderer.render(painter, full_target_rect)
+                painter.restore()
+                
+        except Exception as e:
+            print(f"Failed to export SVG {path}: {e}")
+    
+    @staticmethod
+    def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str):
+        """Draw raster image using PIL."""
+        try:
+            with Image.open(path) as img:
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                
+                data = img.tobytes("raw", "RGBA")
+                qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+                
+                fit_mode = FitMode(fit_mode_str)
+                
+                img_w = qimage.width()
+                img_h = qimage.height()
+                
+                if fit_mode == FitMode.CONTAIN:
+                    ratio = min(rect.width() / img_w, rect.height() / img_h)
+                    new_w = img_w * ratio
+                    new_h = img_h * ratio
+                    
+                    x = rect.left() + (rect.width() - new_w) / 2
+                    y = rect.top() + (rect.height() - new_h) / 2
+                    
+                    target_draw_rect = QRectF(x, y, new_w, new_h)
+                    
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                    painter.drawImage(target_draw_rect, qimage)
+                    
+                elif fit_mode == FitMode.COVER:
+                    ratio = max(rect.width() / img_w, rect.height() / img_h)
+                    new_w = img_w * ratio
+                    new_h = img_h * ratio
+                    
+                    x = rect.left() + (rect.width() - new_w) / 2
+                    y = rect.top() + (rect.height() - new_h) / 2
+                    
+                    full_target_rect = QRectF(x, y, new_w, new_h)
+                    
+                    painter.save()
+                    painter.setClipRect(rect)
+                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                    painter.drawImage(full_target_rect, qimage)
+                    painter.restore()
+                    
+        except Exception as e:
+            print(f"Failed to export image {path}: {e}")
+
+    @staticmethod
+    def _draw_text(painter: QPainter, project: Project, text_item, layout_result, scale: float):
+        """Draw text item (same logic as PdfExporter for WYSIWYG)."""
+        base_pt = 24
+        text_scale = text_item.font_size_pt / base_pt
+        
+        # Create temporary QGraphicsTextItem - same as canvas does
+        temp_item = QGraphicsTextItem()
+        temp_item.setHtml(text_item.text)
+        
+        font = QFont(text_item.font_family, base_pt)
+        if text_item.font_weight == "bold":
+            font.setBold(True)
+        temp_item.setFont(font)
+        temp_item.setDefaultTextColor(QColor(text_item.color))
+        
+        # Get bounding rect at base font (same as canvas)
+        base_rect = temp_item.boundingRect()
+        
+        # Canvas "mm" = boundingRect * text_scale (this is what user sees)
+        tw_mm = base_rect.width() * text_scale
+        th_mm = base_rect.height() * text_scale
+        
+        # Calculate position in mm (same logic as canvas_scene.refresh_layout)
+        if text_item.scope == "cell" and text_item.parent_id and text_item.parent_id in layout_result.cell_rects:
+            cx, cy, cw, ch = layout_result.cell_rects[text_item.parent_id]
+
+            attach_to = getattr(project, 'label_attach_to', 'figure')
+            if attach_to == "figure":
+                cell = next((c for c in project.cells if c.id == text_item.parent_id), None)
+                if cell:
+                    cx += cell.padding_left
+                    cy += cell.padding_top
+                    cw -= cell.padding_left + cell.padding_right
+                    ch -= cell.padding_top + cell.padding_bottom
+
+            anchor = text_item.anchor or "top_left_inside"
+            ox, oy = text_item.offset_x, text_item.offset_y
+
+            if "top" in anchor:
+                y_mm = cy + oy
+            elif "bottom" in anchor:
+                y_mm = cy + ch - oy - th_mm
+            else:
+                y_mm = cy + (ch - th_mm) / 2
+
+            if "left" in anchor:
+                x_mm = cx + ox
+            elif "right" in anchor:
+                x_mm = cx + cw - ox - tw_mm
+            else:
+                x_mm = cx + (cw - tw_mm) / 2
+        else:
+            x_mm = text_item.x
+            y_mm = text_item.y
+
+        # Convert position to pixels
+        x_px = x_mm * scale
+        y_px = y_mm * scale
+        
+        # Render: scale painter so text fills the correct mm
+        render_scale = text_scale * scale
+        
+        painter.save()
+        painter.translate(x_px, y_px)
+        painter.scale(render_scale, render_scale)
+        
+        # Paint the QGraphicsTextItem directly
+        option = QStyleOptionGraphicsItem()
+        temp_item.paint(painter, option, None)
+        
+        painter.restore()
