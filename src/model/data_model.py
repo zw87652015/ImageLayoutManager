@@ -1,4 +1,5 @@
 import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
@@ -60,6 +61,7 @@ class Cell:
     
     # Layout/Style
     fit_mode: str = FitMode.CONTAIN.value
+    rotation: int = 0  # 0, 90, 180, 270 degrees
     align_h: str = "center"  # left, center, right
     align_v: str = "center"  # top, center, bottom
     padding_top: float = 2.0
@@ -69,6 +71,17 @@ class Cell:
     
     # If it is a placeholder
     is_placeholder: bool = False
+
+    # Scale bar (microscopy)
+    scale_bar_enabled: bool = False
+    scale_bar_mode: str = "rgb"  # "rgb" | "bayer"
+    scale_bar_length_um: float = 10.0
+    scale_bar_color: str = "#FFFFFF"  # white or black
+    scale_bar_show_text: bool = True
+    scale_bar_thickness_mm: float = 0.5
+    scale_bar_position: str = "bottom_right"  # bottom_left | bottom_center | bottom_right
+    scale_bar_offset_x: float = 2.0
+    scale_bar_offset_y: float = 2.0
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -77,6 +90,7 @@ class Cell:
             "col_index": self.col_index,
             "image_path": self.image_path,
             "fit_mode": self.fit_mode,
+            "rotation": self.rotation,
             "align_h": self.align_h,
             "align_v": self.align_v,
             "padding_top": self.padding_top,
@@ -84,11 +98,43 @@ class Cell:
             "padding_left": self.padding_left,
             "padding_right": self.padding_right,
             "is_placeholder": self.is_placeholder,
+            "scale_bar_enabled": self.scale_bar_enabled,
+            "scale_bar_mode": self.scale_bar_mode,
+            "scale_bar_length_um": self.scale_bar_length_um,
+            "scale_bar_color": self.scale_bar_color,
+            "scale_bar_show_text": self.scale_bar_show_text,
+            "scale_bar_thickness_mm": self.scale_bar_thickness_mm,
+            "scale_bar_position": self.scale_bar_position,
+            "scale_bar_offset_x": self.scale_bar_offset_x,
+            "scale_bar_offset_y": self.scale_bar_offset_y,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Cell':
-        return cls(**data)
+    def from_dict(cls, data: Dict[str, Any], project_dir: Optional[str] = None) -> 'Cell':
+        # Backward compatibility: older projects may not have scale bar fields
+        payload = dict(data)
+        payload.setdefault("rotation", 0)
+        payload.setdefault("scale_bar_enabled", False)
+        payload.setdefault("scale_bar_mode", "rgb")
+        payload.setdefault("scale_bar_length_um", 10.0)
+        payload.setdefault("scale_bar_color", "#FFFFFF")
+        payload.setdefault("scale_bar_show_text", True)
+        payload.setdefault("scale_bar_thickness_mm", 0.5)
+        payload.setdefault("scale_bar_position", "bottom_right")
+        payload.setdefault("scale_bar_offset_x", 2.0)
+        payload.setdefault("scale_bar_offset_y", 2.0)
+        
+        # Resolve image path: try absolute first, then relative to project file
+        if payload.get("image_path") and project_dir:
+            abs_path = payload["image_path"]
+            # If absolute path doesn't exist, try relative to project directory
+            if not os.path.isfile(abs_path):
+                filename = os.path.basename(abs_path)
+                relative_path = os.path.join(project_dir, filename)
+                if os.path.isfile(relative_path):
+                    payload["image_path"] = relative_path
+        
+        return cls(**payload)
 
 @dataclass
 class RowTemplate:
@@ -138,6 +184,7 @@ class Project:
     
     # Global Label Settings (Numbering)
     label_scheme: str = "(a)" # (a), (A), a, A
+    label_placement: str = "in_cell"
     label_font_family: str = "Arial"
     label_font_size: int = 12
     label_font_weight: str = "bold"
@@ -166,6 +213,7 @@ class Project:
             "cells": [c.to_dict() for c in self.cells],
             "text_items": [t.to_dict() for t in self.text_items],
             "label_scheme": self.label_scheme,
+            "label_placement": self.label_placement,
             "label_font_family": self.label_font_family,
             "label_font_size": self.label_font_size,
             "label_font_weight": self.label_font_weight,
@@ -179,7 +227,7 @@ class Project:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Project':
+    def from_dict(cls, data: Dict[str, Any], project_dir: Optional[str] = None) -> 'Project':
         p = cls()
         p.name = data.get("name", "Untitled Project")
         p.page_width_mm = data.get("page_width_mm", 210.0)
@@ -192,10 +240,11 @@ class Project:
         p.dpi = data.get("dpi", 600)
         
         p.rows = [RowTemplate.from_dict(r) for r in data.get("rows", [])]
-        p.cells = [Cell.from_dict(c) for c in data.get("cells", [])]
+        p.cells = [Cell.from_dict(c, project_dir) for c in data.get("cells", [])]
         p.text_items = [TextItem.from_dict(t) for t in data.get("text_items", [])]
         
         p.label_scheme = data.get("label_scheme", "(a)")
+        p.label_placement = data.get("label_placement", "in_cell")
         p.label_font_family = data.get("label_font_family", "Arial")
         p.label_font_size = data.get("label_font_size", 12)
         p.label_font_weight = data.get("label_font_weight", "bold")
@@ -225,4 +274,5 @@ class Project:
     def load_from_file(cls, filepath: str) -> 'Project':
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return cls.from_dict(data)
+        project_dir = os.path.dirname(os.path.abspath(filepath))
+        return cls.from_dict(data, project_dir)

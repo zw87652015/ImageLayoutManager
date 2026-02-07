@@ -36,13 +36,38 @@ class AutoLayout:
                         if renderer.isValid():
                             size = renderer.defaultSize()
                             if size.height() > 0:
-                                aspect_ratios[cell.id] = size.width() / size.height()
+                                ratio = size.width() / size.height()
+                                # Adjust ratio if rotated 90 or 270 degrees
+                                if getattr(cell, 'rotation', 0) in [90, 270]:
+                                    ratio = 1.0 / ratio if ratio != 0 else 0
+                                aspect_ratios[cell.id] = ratio
+                    elif ext == '.pdf':
+                        # Handle PDF format with PyMuPDF
+                        try:
+                            import fitz
+                            doc = fitz.open(cell.image_path)
+                            if doc.page_count > 0:
+                                page = doc[0]
+                                rect = page.rect
+                                if rect.height > 0:
+                                    ratio = rect.width / rect.height
+                                    # Adjust ratio if rotated 90 or 270 degrees
+                                    if getattr(cell, 'rotation', 0) in [90, 270]:
+                                        ratio = 1.0 / ratio if ratio != 0 else 0
+                                    aspect_ratios[cell.id] = ratio
+                            doc.close()
+                        except ImportError:
+                            pass
                     else:
                         # Handle raster formats with PIL
                         with Image.open(cell.image_path) as img:
                             w, h = img.size
                             if h > 0:
-                                aspect_ratios[cell.id] = w / h
+                                ratio = w / h
+                                # Adjust ratio if rotated 90 or 270 degrees
+                                if getattr(cell, 'rotation', 0) in [90, 270]:
+                                    ratio = 1.0 / ratio if ratio != 0 else 0
+                                aspect_ratios[cell.id] = ratio
                 except Exception:
                     pass
         

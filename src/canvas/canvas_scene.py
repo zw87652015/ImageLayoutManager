@@ -12,6 +12,7 @@ class CanvasScene(QGraphicsScene):
     cell_dropped = pyqtSignal(str, str) # cell_id, file_path
     cell_swapped = pyqtSignal(str, str) # cell_id_1, cell_id_2
     new_image_dropped = pyqtSignal(str, float, float) # file_path, x, y (for creating new cells)
+    project_file_dropped = pyqtSignal(str) # file_path for .figlayout files
     text_item_changed = pyqtSignal(str, dict) # text_item_id, changes_dict
     selection_changed_custom = pyqtSignal(list) # list of selected item ids
 
@@ -98,18 +99,34 @@ class CanvasScene(QGraphicsScene):
                 item.setPos(x, y)
                 
             # Content
-            item.update_data(
-                cell.image_path, 
-                cell.fit_mode, 
-                {
-                    'top': cell.padding_top, 
-                    'right': cell.padding_right, 
-                    'bottom': cell.padding_bottom, 
-                    'left': cell.padding_left
-                },
-                cell.is_placeholder,
-                getattr(cell, 'align_h', 'center'),
-                getattr(cell, 'align_v', 'center')
+                pad_top = cell.padding_top
+                if getattr(self.project, 'label_placement', 'in_cell') == 'label_row_above':
+                    if cell.id in getattr(layout_result, 'label_rects', {}):
+                        _, _, _, strip_h = layout_result.label_rects[cell.id]
+                        pad_top = pad_top + strip_h
+
+                item.update_data(
+                    cell.image_path, 
+                    cell.fit_mode, 
+                    {
+                        'top': pad_top, 
+                        'right': cell.padding_right, 
+                        'bottom': cell.padding_bottom, 
+                        'left': cell.padding_left
+                    },
+                    cell.is_placeholder,
+                    getattr(cell, 'rotation', 0),
+                    getattr(cell, 'align_h', 'center'),
+                    getattr(cell, 'align_v', 'center'),
+                    getattr(cell, 'scale_bar_enabled', False),
+                getattr(cell, 'scale_bar_mode', 'rgb'),
+                getattr(cell, 'scale_bar_length_um', 10.0),
+                getattr(cell, 'scale_bar_color', '#FFFFFF'),
+                getattr(cell, 'scale_bar_show_text', True),
+                getattr(cell, 'scale_bar_thickness_mm', 0.5),
+                getattr(cell, 'scale_bar_position', 'bottom_right'),
+                getattr(cell, 'scale_bar_offset_x', 2.0),
+                getattr(cell, 'scale_bar_offset_y', 2.0),
             )
             
         # Sync Text Items
@@ -145,18 +162,26 @@ class CanvasScene(QGraphicsScene):
                 # Find parent cell's position from layout
                 if text_model.parent_id in layout_result.cell_rects:
                     cx, cy, cw, ch = layout_result.cell_rects[text_model.parent_id]
-                    
-                    # Check attachment mode: "figure" uses content area (inside padding), "grid" uses cell boundary
-                    attach_to = getattr(self.project, 'label_attach_to', 'figure')
-                    if attach_to == "figure":
-                        # Find the cell to get padding
-                        cell = next((c for c in self.project.cells if c.id == text_model.parent_id), None)
-                        if cell:
-                            # Adjust bounds to content area (inside padding)
-                            cx = cx + cell.padding_left
-                            cy = cy + cell.padding_top
-                            cw = cw - cell.padding_left - cell.padding_right
-                            ch = ch - cell.padding_top - cell.padding_bottom
+
+                    # For numbering labels, optionally place them into the reserved label strip.
+                    if (
+                        getattr(self.project, 'label_placement', 'in_cell') == 'label_row_above'
+                        and text_model.subtype != 'corner'
+                        and text_model.parent_id in getattr(layout_result, 'label_rects', {})
+                    ):
+                        cx, cy, cw, ch = layout_result.label_rects[text_model.parent_id]
+                    else:
+                        # Check attachment mode: "figure" uses content area (inside padding), "grid" uses cell boundary
+                        attach_to = getattr(self.project, 'label_attach_to', 'figure')
+                        if attach_to == "figure":
+                            # Find the cell to get padding
+                            cell = next((c for c in self.project.cells if c.id == text_model.parent_id), None)
+                            if cell:
+                                # Adjust bounds to content area (inside padding)
+                                cx = cx + cell.padding_left
+                                cy = cy + cell.padding_top
+                                cw = cw - cell.padding_left - cell.padding_right
+                                ch = ch - cell.padding_top - cell.padding_bottom
                     
                     # Calculate position based on anchor
                     anchor = text_model.anchor or "top_left_inside"
@@ -216,6 +241,12 @@ class CanvasScene(QGraphicsScene):
                 
             local_path = urls[0].toLocalFile()
             if not local_path:
+                return
+            
+            # Check if it's a project file
+            if local_path.lower().endswith('.figlayout') or local_path.lower().endswith('.json'):
+                self.project_file_dropped.emit(local_path)
+                event.accept()
                 return
                 
             # Check if dropped on a cell

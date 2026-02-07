@@ -57,10 +57,11 @@ class PdfExporter:
             # dpi dots / inch, 1 inch = 25.4 mm
             scale = project.dpi / 25.4
             
-            # 1. Draw Images
+            # 1. Draw Images and Scale Bars
             for cell in project.cells:
                 if cell.id in layout_result.cell_rects and cell.image_path and os.path.exists(cell.image_path):
-                    x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
+                    rects = getattr(layout_result, 'figure_rects', layout_result.cell_rects)
+                    x_mm, y_mm, w_mm, h_mm = rects.get(cell.id, layout_result.cell_rects[cell.id])
                     
                     # Convert rect to dots
                     target_rect = QRectF(
@@ -79,7 +80,12 @@ class PdfExporter:
                     content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
                     
                     if content_rect.width() > 0 and content_rect.height() > 0:
-                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode)
+                        rotation = getattr(cell, 'rotation', 0)
+                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation)
+                        
+                        # Draw scale bar if enabled
+                        if getattr(cell, 'scale_bar_enabled', False):
+                            PdfExporter._draw_scale_bar(painter, cell, content_rect, scale)
                         
             # 2. Draw Text Items
             for text_item in project.text_items:
@@ -89,16 +95,18 @@ class PdfExporter:
             painter.end()
 
     @staticmethod
-    def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str):
+    def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
         ext = os.path.splitext(path)[1].lower()
         
         if ext == '.svg':
-            PdfExporter._draw_svg(painter, path, rect, fit_mode_str)
+            PdfExporter._draw_svg(painter, path, rect, fit_mode_str, rotation)
+        elif ext == '.pdf':
+            PdfExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation)
         else:
-            PdfExporter._draw_raster(painter, path, rect, fit_mode_str)
+            PdfExporter._draw_raster(painter, path, rect, fit_mode_str, rotation)
     
     @staticmethod
-    def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str):
+    def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
         """Draw SVG vector image - renders as vector in PDF for best quality."""
         try:
             renderer = QSvgRenderer(path)
@@ -115,37 +123,50 @@ class PdfExporter:
             else:
                 img_w, img_h = default_size.width(), default_size.height()
             
+            # Adjust dimensions if rotated 90 or 270 degrees
+            is_sideways = rotation in [90, 270]
+            eff_img_w = img_h if is_sideways else img_w
+            eff_img_h = img_w if is_sideways else img_h
+
             if fit_mode == FitMode.CONTAIN:
-                ratio = min(rect.width() / img_w, rect.height() / img_h)
-                new_w = img_w * ratio
-                new_h = img_h * ratio
+                ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
+                new_w = eff_img_w * ratio
+                new_h = eff_img_h * ratio
                 
                 x = rect.left() + (rect.width() - new_w) / 2
                 y = rect.top() + (rect.height() - new_h) / 2
                 
                 target_rect = QRectF(x, y, new_w, new_h)
-                renderer.render(painter, target_rect)
                 
             elif fit_mode == FitMode.COVER:
-                ratio = max(rect.width() / img_w, rect.height() / img_h)
-                new_w = img_w * ratio
-                new_h = img_h * ratio
+                ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
+                new_w = eff_img_w * ratio
+                new_h = eff_img_h * ratio
                 
                 x = rect.left() + (rect.width() - new_w) / 2
                 y = rect.top() + (rect.height() - new_h) / 2
                 
-                full_target_rect = QRectF(x, y, new_w, new_h)
-                
-                painter.save()
+                target_rect = QRectF(x, y, new_w, new_h)
+            
+            painter.save()
+            if fit_mode == FitMode.COVER:
                 painter.setClipRect(rect)
-                renderer.render(painter, full_target_rect)
-                painter.restore()
+            
+            if rotation != 0:
+                painter.translate(target_rect.center())
+                painter.rotate(rotation)
+                draw_rect = QRectF(-img_w * ratio / 2, -img_h * ratio / 2, img_w * ratio, img_h * ratio)
+                renderer.render(painter, draw_rect)
+            else:
+                renderer.render(painter, target_rect)
+            
+            painter.restore()
                 
         except Exception as e:
             print(f"Failed to export SVG {path}: {e}")
     
     @staticmethod
-    def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str):
+    def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
         """Draw raster image using PIL."""
         try:
             with Image.open(path) as img:
@@ -160,37 +181,123 @@ class PdfExporter:
                 img_w = qimage.width()
                 img_h = qimage.height()
                 
+                # Adjust dimensions if rotated 90 or 270 degrees
+                is_sideways = rotation in [90, 270]
+                eff_img_w = img_h if is_sideways else img_w
+                eff_img_h = img_w if is_sideways else img_h
+
                 if fit_mode == FitMode.CONTAIN:
-                    ratio = min(rect.width() / img_w, rect.height() / img_h)
-                    new_w = img_w * ratio
-                    new_h = img_h * ratio
+                    ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
+                    new_w = eff_img_w * ratio
+                    new_h = eff_img_h * ratio
                     
                     x = rect.left() + (rect.width() - new_w) / 2
                     y = rect.top() + (rect.height() - new_h) / 2
                     
-                    target_draw_rect = QRectF(x, y, new_w, new_h)
-                    
-                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-                    painter.drawImage(target_draw_rect, qimage)
+                    target_rect = QRectF(x, y, new_w, new_h)
                     
                 elif fit_mode == FitMode.COVER:
-                    ratio = max(rect.width() / img_w, rect.height() / img_h)
-                    new_w = img_w * ratio
-                    new_h = img_h * ratio
+                    ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
+                    new_w = eff_img_w * ratio
+                    new_h = eff_img_h * ratio
                     
                     x = rect.left() + (rect.width() - new_w) / 2
                     y = rect.top() + (rect.height() - new_h) / 2
                     
-                    full_target_rect = QRectF(x, y, new_w, new_h)
-                    
-                    painter.save()
+                    target_rect = QRectF(x, y, new_w, new_h)
+                
+                painter.save()
+                if fit_mode == FitMode.COVER:
                     painter.setClipRect(rect)
-                    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-                    painter.drawImage(full_target_rect, qimage)
-                    painter.restore()
+                
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                
+                if rotation != 0:
+                    painter.translate(target_rect.center())
+                    painter.rotate(rotation)
+                    draw_rect = QRectF(-img_w * ratio / 2, -img_h * ratio / 2, img_w * ratio, img_h * ratio)
+                    painter.drawImage(draw_rect, qimage)
+                else:
+                    painter.drawImage(target_rect, qimage)
+                
+                painter.restore()
                     
         except Exception as e:
             print(f"Failed to export image {path}: {e}")
+
+    @staticmethod
+    def _draw_pdf(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
+        """Draw PDF first page as vector by converting to SVG via PyMuPDF."""
+        try:
+            import fitz  # PyMuPDF
+            
+            doc = fitz.open(path)
+            if doc.page_count == 0:
+                doc.close()
+                return
+            
+            page = doc[0]
+            page_rect = page.rect
+            img_w, img_h = page_rect.width, page_rect.height
+            doc.close()
+            
+            # Convert PDF page to SVG for vector rendering
+            # PyMuPDF can export pages as SVG which preserves vector content
+            doc = fitz.open(path)
+            page = doc[0]
+            svg_bytes = page.get_svg_image()
+            doc.close()
+            
+            # Load SVG into Qt renderer
+            renderer = QSvgRenderer(svg_bytes.encode('utf-8') if isinstance(svg_bytes, str) else svg_bytes)
+            if not renderer.isValid():
+                print(f"Failed to create SVG renderer for PDF: {path}")
+                return
+            
+            fit_mode = FitMode(fit_mode_str)
+            
+            # Adjust dimensions if rotated 90 or 270 degrees
+            is_sideways = rotation in [90, 270]
+            eff_img_w = img_h if is_sideways else img_w
+            eff_img_h = img_w if is_sideways else img_h
+
+            if fit_mode == FitMode.CONTAIN:
+                ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
+                new_w = eff_img_w * ratio
+                new_h = eff_img_h * ratio
+                
+                x = rect.left() + (rect.width() - new_w) / 2
+                y = rect.top() + (rect.height() - new_h) / 2
+                
+                target_rect = QRectF(x, y, new_w, new_h)
+                
+            elif fit_mode == FitMode.COVER:
+                ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
+                new_w = eff_img_w * ratio
+                new_h = eff_img_h * ratio
+                
+                x = rect.left() + (rect.width() - new_w) / 2
+                y = rect.top() + (rect.height() - new_h) / 2
+                
+                target_rect = QRectF(x, y, new_w, new_h)
+            
+            painter.save()
+            if fit_mode == FitMode.COVER:
+                painter.setClipRect(rect)
+            
+            if rotation != 0:
+                painter.translate(target_rect.center())
+                painter.rotate(rotation)
+                # Drawing rect relative to center
+                draw_rect = QRectF(-img_w * ratio / 2, -img_h * ratio / 2, img_w * ratio, img_h * ratio)
+                renderer.render(painter, draw_rect)
+            else:
+                renderer.render(painter, target_rect)
+            
+            painter.restore()
+                
+        except Exception as e:
+            print(f"Failed to export PDF {path}: {e}")
 
     @staticmethod
     def _draw_text(painter: QPainter, project: Project, text_item, layout_result, scale: float):
@@ -229,14 +336,21 @@ class PdfExporter:
         if text_item.scope == "cell" and text_item.parent_id and text_item.parent_id in layout_result.cell_rects:
             cx, cy, cw, ch = layout_result.cell_rects[text_item.parent_id]
 
-            attach_to = getattr(project, 'label_attach_to', 'figure')
-            if attach_to == "figure":
-                cell = next((c for c in project.cells if c.id == text_item.parent_id), None)
-                if cell:
-                    cx += cell.padding_left
-                    cy += cell.padding_top
-                    cw -= cell.padding_left + cell.padding_right
-                    ch -= cell.padding_top + cell.padding_bottom
+            if (
+                getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
+                and getattr(text_item, 'subtype', None) != 'corner'
+                and text_item.parent_id in getattr(layout_result, 'label_rects', {})
+            ):
+                cx, cy, cw, ch = layout_result.label_rects[text_item.parent_id]
+            else:
+                attach_to = getattr(project, 'label_attach_to', 'figure')
+                if attach_to == "figure":
+                    cell = next((c for c in project.cells if c.id == text_item.parent_id), None)
+                    if cell:
+                        cx += cell.padding_left
+                        cy += cell.padding_top
+                        cw -= cell.padding_left + cell.padding_right
+                        ch -= cell.padding_top + cell.padding_bottom
 
             # Default to top_left_inside if anchor is None (for numbering labels)
             anchor = text_item.anchor or "top_left_inside"
@@ -278,3 +392,72 @@ class PdfExporter:
         temp_item.paint(painter, option, None)
         
         painter.restore()
+
+    @staticmethod
+    def _draw_scale_bar(painter: QPainter, cell, content_rect: QRectF, scale: float):
+        """Draw scale bar on the exported image."""
+        from PIL import Image
+        
+        # Get image dimensions for scale calculation
+        try:
+            with Image.open(cell.image_path) as img:
+                orig_w, orig_h = img.size
+        except Exception:
+            return
+        
+        # Adjust dimensions if rotated 90 or 270 degrees
+        rotation = getattr(cell, 'rotation', 0)
+        is_sideways = rotation in [90, 270]
+        eff_pix_w = orig_h if is_sideways else orig_w
+        eff_pix_h = orig_w if is_sideways else orig_h
+
+        # µm per pixel based on mode
+        um_per_px = 0.1301 if cell.scale_bar_mode == "rgb" else 0.2569
+        
+        # Calculate bar length in source image pixels
+        bar_length_px = cell.scale_bar_length_um / um_per_px
+        
+        # Calculate scale factor from image to content rect (in dots)
+        fit_mode = FitMode(cell.fit_mode)
+        if fit_mode == FitMode.CONTAIN:
+            scale_ratio = min(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
+        else:  # COVER
+            scale_ratio = max(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
+        
+        # Bar length in dots
+        bar_length_dots = bar_length_px * scale_ratio
+        
+        # Bar thickness in dots
+        bar_thickness_dots = cell.scale_bar_thickness_mm * scale
+        
+        # Calculate position based on scale_bar_position and offsets
+        ox = cell.scale_bar_offset_x * scale
+        oy = cell.scale_bar_offset_y * scale
+        
+        # Y position (always at bottom)
+        bar_y = content_rect.bottom() - oy - bar_thickness_dots
+        
+        # X position based on horizontal alignment
+        if cell.scale_bar_position == "bottom_left":
+            bar_x = content_rect.left() + ox
+        elif cell.scale_bar_position == "bottom_center":
+            bar_x = content_rect.left() + (content_rect.width() - bar_length_dots) / 2
+        else:  # bottom_right
+            bar_x = content_rect.right() - ox - bar_length_dots
+        
+        # Draw the bar
+        bar_rect = QRectF(bar_x, bar_y, bar_length_dots, bar_thickness_dots)
+        painter.fillRect(bar_rect, QColor(cell.scale_bar_color))
+        
+        # Draw text if enabled
+        if cell.scale_bar_show_text:
+            text = f"{cell.scale_bar_length_um:.0f} µm" if cell.scale_bar_length_um >= 1 else f"{cell.scale_bar_length_um:.2f} µm"
+            
+            font = QFont("Arial", int(8 * scale / 3))  # Scale font for PDF
+            painter.setFont(font)
+            painter.setPen(QColor(cell.scale_bar_color))
+            
+            # Text above the bar, centered
+            text_height = 4 * scale
+            text_rect = QRectF(bar_x, bar_y - text_height, bar_length_dots, text_height)
+            painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, text)

@@ -11,5 +11,11 @@ Timeline.md
 Timeline_zh.md
 *.exe
 *.spec
-\build
-\dist
+/build
+/dist
+build_exe.cmd
+__pycache__/
+*.pyc
+.env
+venv/
+.venv

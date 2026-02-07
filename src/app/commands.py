@@ -27,6 +27,39 @@ class PropertyChangeCommand(QUndoCommand):
         if self.update_callback:
             self.update_callback()
 
+class MultiPropertyChangeCommand(QUndoCommand):
+    """Apply the same property changes to multiple targets (e.g., multiple cells)."""
+    def __init__(self, targets: list, changes: dict, update_callback=None, description="Change Properties"):
+        super().__init__(description)
+        self.targets = targets
+        self.changes = changes
+        self.old_values = []  # List of dicts, one per target
+        self.update_callback = update_callback
+        
+        # Capture old values for each target
+        for target in targets:
+            old = {}
+            for k in changes.keys():
+                if hasattr(target, k):
+                    old[k] = getattr(target, k)
+            self.old_values.append(old)
+
+    def redo(self):
+        for target in self.targets:
+            for k, v in self.changes.items():
+                if hasattr(target, k):
+                    setattr(target, k, v)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for target, old in zip(self.targets, self.old_values):
+            for k, v in old.items():
+                if hasattr(target, k):
+                    setattr(target, k, v)
+        if self.update_callback:
+            self.update_callback()
+
 class SwapCellsCommand(QUndoCommand):
     def __init__(self, c1, c2, update_callback=None):
         super().__init__("Swap Cells")
@@ -45,6 +78,7 @@ class SwapCellsCommand(QUndoCommand):
         self.c1.image_path, self.c2.image_path = self.c2.image_path, self.c1.image_path
         self.c1.is_placeholder, self.c2.is_placeholder = self.c2.is_placeholder, self.c1.is_placeholder
         self.c1.fit_mode, self.c2.fit_mode = self.c2.fit_mode, self.c1.fit_mode
+        self.c1.rotation, self.c2.rotation = self.c2.rotation, self.c1.rotation
         
         # Swap padding too
         self.c1.padding_top, self.c2.padding_top = self.c2.padding_top, self.c1.padding_top

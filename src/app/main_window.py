@@ -26,7 +26,7 @@ from src.export.pdf_exporter import PdfExporter
 from src.export.image_exporter import ImageExporter
 from src.utils.auto_label import AutoLabel
 from src.app.commands import (
-    PropertyChangeCommand, SwapCellsCommand, DropImageCommand,
+    PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, DropImageCommand,
     ChangeRowCountCommand, AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLayoutCommand
 )
 from src.utils.image_proxy import get_image_proxy
@@ -147,13 +147,20 @@ class MainWindow(QMainWindow):
         open_images_grid_tb_action.triggered.connect(self._on_open_images_as_grid)
         self.toolbar.addAction(open_images_grid_tb_action)
         
+        reload_images_action = QAction("Reload Images", self)
+        reload_images_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
+        reload_images_action.setToolTip("Reload all images from disk (refresh cache)")
+        reload_images_action.setShortcut(QKeySequence("F5"))
+        reload_images_action.triggered.connect(self._on_reload_images)
+        self.toolbar.addAction(reload_images_action)
+        
         self.toolbar.addSeparator()
         
         # Toolbar Actions
         # Grid Controls
         self.toolbar.addWidget(QLabel(" Rows: "))
         self.row_spin = QSpinBox()
-        self.row_spin.setRange(1, 10)
+        self.row_spin.setRange(1, 100)
         self.row_spin.setValue(len(self.project.rows))
         self.row_spin.valueChanged.connect(self._on_row_count_changed)
         self.toolbar.addWidget(self.row_spin)
@@ -172,6 +179,13 @@ class MainWindow(QMainWindow):
         delete_text_action.setToolTip("Delete Text")
         delete_text_action.triggered.connect(self._on_delete_text)
         self.toolbar.addAction(delete_text_action)
+
+        delete_image_action = QAction("Delete Image", self)
+        delete_image_action.setShortcut(QKeySequence("Ctrl+Delete"))
+        delete_image_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+        delete_image_action.setToolTip("Delete Image from selected cell(s)")
+        delete_image_action.triggered.connect(self._on_delete_image)
+        self.toolbar.addAction(delete_image_action)
         
         auto_label_action = QAction("Auto Label", self)
         auto_label_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
@@ -237,6 +251,7 @@ class MainWindow(QMainWindow):
         self.scene.cell_dropped.connect(self._on_cell_image_dropped)
         self.scene.cell_swapped.connect(self._on_cell_swapped)
         self.scene.new_image_dropped.connect(self._on_new_image_dropped)
+        self.scene.project_file_dropped.connect(self._on_project_file_dropped)
         self.scene.text_item_changed.connect(self._on_text_item_drag_changed)
         self.scene.selectionChanged.connect(self._on_selection_changed)
         
@@ -481,15 +496,26 @@ class MainWindow(QMainWindow):
 
     def _on_cell_property_changed(self, changes):
         items = self.scene.selectedItems()
-        if not items or not hasattr(items[0], 'cell_id'):
+        if not items:
             return
-            
-        cell_id = items[0].cell_id
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
         
-        if cell:
-            cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Change Cell Property")
-            self.undo_stack.push(cmd)
+        # Collect all selected cells
+        selected_cells = []
+        for item in items:
+            if hasattr(item, 'cell_id'):
+                cell = next((c for c in self.project.cells if c.id == item.cell_id), None)
+                if cell:
+                    selected_cells.append(cell)
+        
+        if not selected_cells:
+            return
+        
+        # Apply changes to all selected cells
+        if len(selected_cells) == 1:
+            cmd = PropertyChangeCommand(selected_cells[0], changes, self._refresh_and_update, "Change Cell Property")
+        else:
+            cmd = MultiPropertyChangeCommand(selected_cells, changes, self._refresh_and_update, f"Change {len(selected_cells)} Cells")
+        self.undo_stack.push(cmd)
 
     def _on_corner_label_changed(self, payload: dict):
         """Create/update/delete a corner label (cell-scoped anchored TextItem) for the selected cell."""
@@ -718,6 +744,35 @@ class MainWindow(QMainWindow):
                     cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
                     self.undo_stack.push(cmd)
 
+    def _on_delete_image(self):
+        """Delete image from selected cell(s)"""
+        try:
+            items = self.scene.selectedItems()
+        except RuntimeError:
+            return
+
+        from src.canvas.cell_item import CellItem
+
+        selected_cells = [it for it in items if isinstance(it, CellItem)]
+        if not selected_cells:
+            return
+
+        # One command per cell (keeps undo/redo consistent with existing commands)
+        for cell_item in selected_cells:
+            cell = next((c for c in self.project.cells if c.id == cell_item.cell_id), None)
+            if not cell:
+                continue
+            if cell.is_placeholder and not cell.image_path:
+                continue
+
+            cmd = PropertyChangeCommand(
+                cell,
+                {"image_path": None, "is_placeholder": True},
+                self._refresh_and_update,
+                "Delete Image",
+            )
+            self.undo_stack.push(cmd)
+
     def _on_auto_label(self):
         cmd = AutoLabelCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
@@ -802,7 +857,7 @@ class MainWindow(QMainWindow):
     def _on_import_images(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Import Images", "", 
-            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp);;All Files (*)"
+            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf);;All Files (*)"
         )
         if paths:
             for file_path in paths:
@@ -833,7 +888,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Images as Grid",
             "",
-            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp);;All Files (*)",
+            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf);;All Files (*)",
         )
         if not paths:
             return
@@ -843,3 +898,19 @@ class MainWindow(QMainWindow):
 
         cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
+
+    def _on_reload_images(self):
+        """Clear image cache and refresh canvas to reload all images from disk."""
+        get_image_proxy().clear_cache()
+        self._refresh_and_update()
+
+    def _on_project_file_dropped(self, file_path: str):
+        """Handle drag and drop of .figlayout project files."""
+        if not self._maybe_save():
+            return
+        try:
+            project = Project.load_from_file(file_path)
+            self._set_project(project, file_path)
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", f"Failed to open project: {e}")

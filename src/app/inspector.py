@@ -81,6 +81,11 @@ class Inspector(QWidget):
             lambda t: self.project_property_changed.emit({"label_scheme": t})
         )
         self.project_layout.addRow("Label Scheme:", self.label_scheme)
+
+        self.label_placement = QComboBox()
+        self.label_placement.addItems(["In Cell", "Label Row Above"])
+        self.label_placement.currentTextChanged.connect(self._on_label_placement_changed)
+        self.project_layout.addRow("Label Placement:", self.label_placement)
         
         self.label_font = QComboBox()
         self.label_font.addItems(["Arial", "Times New Roman", "Courier New", "Verdana"])
@@ -157,6 +162,13 @@ class Inspector(QWidget):
         )
         self.cell_layout.addRow("Fit Mode:", self.fit_mode_combo)
         
+        self.rotation_combo = QComboBox()
+        self.rotation_combo.addItems(["0", "90", "180", "270"])
+        self.rotation_combo.currentTextChanged.connect(
+            lambda t: self.cell_property_changed.emit({"rotation": int(t)})
+        )
+        self.cell_layout.addRow("Rotation:", self.rotation_combo)
+        
         # Alignment
         self.align_h_combo = QComboBox()
         self.align_h_combo.addItems(["left", "center", "right"])
@@ -205,6 +217,58 @@ class Inspector(QWidget):
             lambda: self.corner_label_changed.emit({"anchor": "bottom_right_inside", "text": self.corner_label_br.text()})
         )
         self.cell_layout.addRow("Label BR:", self.corner_label_br)
+
+        # --- Scale Bar Controls ---
+        self.cell_layout.addRow(QLabel("— Scale Bar —"))
+        
+        self.scale_bar_enabled = QCheckBox("Enable Scale Bar")
+        self.scale_bar_enabled.stateChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow(self.scale_bar_enabled)
+        
+        self.scale_bar_mode = QComboBox()
+        self.scale_bar_mode.addItems(["rgb", "bayer"])
+        self.scale_bar_mode.currentTextChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Mode:", self.scale_bar_mode)
+        
+        self.scale_bar_length = QDoubleSpinBox()
+        self.scale_bar_length.setRange(0.1, 1000.0)
+        self.scale_bar_length.setSingleStep(1.0)
+        self.scale_bar_length.setSuffix(" µm")
+        self.scale_bar_length.valueChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Length:", self.scale_bar_length)
+        
+        self.scale_bar_color = QComboBox()
+        self.scale_bar_color.addItems(["White", "Black"])
+        self.scale_bar_color.currentTextChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Color:", self.scale_bar_color)
+        
+        self.scale_bar_show_text = QCheckBox("Show Text")
+        self.scale_bar_show_text.stateChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow(self.scale_bar_show_text)
+        
+        self.scale_bar_thickness = QDoubleSpinBox()
+        self.scale_bar_thickness.setRange(0.1, 5.0)
+        self.scale_bar_thickness.setSingleStep(0.1)
+        self.scale_bar_thickness.setSuffix(" mm")
+        self.scale_bar_thickness.valueChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Thickness:", self.scale_bar_thickness)
+        
+        self.scale_bar_position = QComboBox()
+        self.scale_bar_position.addItems(["bottom_left", "bottom_center", "bottom_right"])
+        self.scale_bar_position.currentTextChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Position:", self.scale_bar_position)
+        
+        self.scale_bar_offset_x = QDoubleSpinBox()
+        self.scale_bar_offset_x.setRange(0, 50)
+        self.scale_bar_offset_x.setSingleStep(0.5)
+        self.scale_bar_offset_x.valueChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Offset X (mm):", self.scale_bar_offset_x)
+        
+        self.scale_bar_offset_y = QDoubleSpinBox()
+        self.scale_bar_offset_y.setRange(0, 50)
+        self.scale_bar_offset_y.setSingleStep(0.5)
+        self.scale_bar_offset_y.valueChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Offset Y (mm):", self.scale_bar_offset_y)
         
         self.cell_group.setLayout(self.cell_layout)
         self.layout.addWidget(self.cell_group)
@@ -215,7 +279,7 @@ class Inspector(QWidget):
         self.row_layout = QFormLayout()
         
         self.row_cols = QSpinBox()
-        self.row_cols.setRange(1, 10)
+        self.row_cols.setRange(1, 100)
         self.row_cols.valueChanged.connect(
             lambda v: self.row_property_changed.emit({"column_count": v})
         )
@@ -338,6 +402,22 @@ class Inspector(QWidget):
             "padding_right": self.pad_right.value()
         })
 
+    def _emit_scale_bar(self):
+        """Emit all scale bar properties as a single cell property change."""
+        color_text = self.scale_bar_color.currentText()
+        color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
+        self.cell_property_changed.emit({
+            "scale_bar_enabled": self.scale_bar_enabled.isChecked(),
+            "scale_bar_mode": self.scale_bar_mode.currentText(),
+            "scale_bar_length_um": self.scale_bar_length.value(),
+            "scale_bar_color": color_hex,
+            "scale_bar_show_text": self.scale_bar_show_text.isChecked(),
+            "scale_bar_thickness_mm": self.scale_bar_thickness.value(),
+            "scale_bar_position": self.scale_bar_position.currentText(),
+            "scale_bar_offset_x": self.scale_bar_offset_x.value(),
+            "scale_bar_offset_y": self.scale_bar_offset_y.value(),
+        })
+
     def _emit_column_ratios(self):
         text = self.col_ratios_edit.text().strip()
         if not text:
@@ -372,6 +452,10 @@ class Inspector(QWidget):
     def _on_corner_label_color_changed(self, color_text: str):
         color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
         self.project_property_changed.emit({"corner_label_color": color_hex})
+
+    def _on_label_placement_changed(self, text: str):
+        value = "label_row_above" if text == "Label Row Above" else "in_cell"
+        self.project_property_changed.emit({"label_placement": value})
 
     def _on_text_color_changed(self, color_text: str):
         """Handle individual text item color change."""
@@ -418,6 +502,7 @@ class Inspector(QWidget):
             # Block signals to prevent feedback loop
             self.blockSignals(True)
             self.fit_mode_combo.setCurrentText(data.get("fit_mode", "contain"))
+            self.rotation_combo.setCurrentText(str(data.get("rotation", 0)))
             self.align_h_combo.setCurrentText(data.get("align_h", "center"))
             self.align_v_combo.setCurrentText(data.get("align_v", "center"))
             self.pad_top.setValue(data.get("padding_top", 0))
@@ -430,6 +515,18 @@ class Inspector(QWidget):
             self.corner_label_tr.setText(corner_labels.get("top_right_inside", ""))
             self.corner_label_bl.setText(corner_labels.get("bottom_left_inside", ""))
             self.corner_label_br.setText(corner_labels.get("bottom_right_inside", ""))
+
+            # Scale bar settings
+            self.scale_bar_enabled.setChecked(data.get("scale_bar_enabled", False))
+            self.scale_bar_mode.setCurrentText(data.get("scale_bar_mode", "rgb"))
+            self.scale_bar_length.setValue(data.get("scale_bar_length_um", 10.0))
+            sb_color = data.get("scale_bar_color", "#FFFFFF")
+            self.scale_bar_color.setCurrentText("Black" if sb_color == "#000000" else "White")
+            self.scale_bar_show_text.setChecked(data.get("scale_bar_show_text", True))
+            self.scale_bar_thickness.setValue(data.get("scale_bar_thickness_mm", 0.5))
+            self.scale_bar_position.setCurrentText(data.get("scale_bar_position", "bottom_right"))
+            self.scale_bar_offset_x.setValue(data.get("scale_bar_offset_x", 2.0))
+            self.scale_bar_offset_y.setValue(data.get("scale_bar_offset_y", 2.0))
             self.blockSignals(False)
             
         elif item_type == 'text':
@@ -490,6 +587,10 @@ class Inspector(QWidget):
                 self.m_right.setValue(effective_project_data.get("margin_right_mm", 10))
                 
                 self.label_scheme.setCurrentText(effective_project_data.get("label_scheme", "(a)"))
+                placement = effective_project_data.get("label_placement", "in_cell")
+                self.label_placement.setCurrentText(
+                    "Label Row Above" if placement == "label_row_above" else "In Cell"
+                )
                 self.label_font.setCurrentText(effective_project_data.get("label_font_family", "Arial"))
                 self.label_size.setValue(effective_project_data.get("label_font_size", 12))
                 label_color_hex = effective_project_data.get("label_color", "#000000")

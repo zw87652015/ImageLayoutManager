@@ -1,15 +1,21 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Dict, Tuple
 from .data_model import Project, Cell, RowTemplate
 
 @dataclass
 class LayoutResult:
-    # Map cell ID to (x, y, width, height) in millimeters
     cell_rects: Dict[str, Tuple[float, float, float, float]]
-    # Map row index to row height in millimeters
     row_heights: Dict[int, float]
+    figure_rects: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
+    label_rects: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
 
 class LayoutEngine:
+    @staticmethod
+    def _label_strip_height_mm(project: Project) -> float:
+        pt_to_mm = 0.3528
+        h = project.label_font_size * pt_to_mm * 1.2 + 2.0
+        return max(3.0, min(15.0, h))
+
     @staticmethod
     def calculate_layout(project: Project) -> LayoutResult:
         """
@@ -102,5 +108,16 @@ class LayoutEngine:
                 
                 col_w = col_widths[cell.col_index]
                 cell_rects[cell.id] = (x_pos, y_pos, col_w, r_h)
-                
-        return LayoutResult(cell_rects, row_heights)
+
+        figure_rects: Dict[str, Tuple[float, float, float, float]] = dict(cell_rects)
+        label_rects: Dict[str, Tuple[float, float, float, float]] = {}
+
+        if getattr(project, "label_placement", "in_cell") == "label_row_above":
+            strip_h = LayoutEngine._label_strip_height_mm(project)
+            for cid, (x, y, w, h) in cell_rects.items():
+                effective_strip_h = min(strip_h, h)
+                label_rects[cid] = (x, y, w, effective_strip_h)
+                figure_h = max(0.0, h - effective_strip_h)
+                figure_rects[cid] = (x, y + effective_strip_h, w, figure_h)
+
+        return LayoutResult(cell_rects, row_heights, figure_rects=figure_rects, label_rects=label_rects)

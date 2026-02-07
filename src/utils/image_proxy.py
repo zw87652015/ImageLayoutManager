@@ -6,7 +6,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QSize
 from PyQt6.QtSvg import QSvgRenderer
 
 # Supported vector formats
-VECTOR_EXTENSIONS = {'.svg'}
+VECTOR_EXTENSIONS = {'.svg', '.pdf'}
 # Raster formats handled by PIL
 RASTER_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.gif', '.webp'}
 
@@ -35,6 +35,9 @@ class ThumbnailWorker(QObject):
             if ext == '.svg':
                 # Handle SVG vector format
                 qimage = self._load_svg()
+            elif ext == '.pdf':
+                # Handle PDF format
+                qimage = self._load_pdf()
             else:
                 # Handle raster formats with PIL
                 qimage = self._load_raster()
@@ -73,6 +76,34 @@ class ThumbnailWorker(QObject):
         
         return qimage
     
+    def _load_pdf(self) -> QImage:
+        """Load first page of PDF and render to QImage."""
+        try:
+            import fitz  # PyMuPDF
+        except ImportError:
+            print("PyMuPDF (fitz) not installed. Install with: pip install PyMuPDF")
+            return QImage()
+        
+        doc = fitz.open(self.path)
+        if doc.page_count == 0:
+            doc.close()
+            return QImage()
+        
+        page = doc[0]  # First page
+        
+        # Calculate zoom to fit max_size while maintaining aspect ratio
+        rect = page.rect
+        zoom = min(self.max_size / rect.width, self.max_size / rect.height)
+        matrix = fitz.Matrix(zoom, zoom)
+        
+        # Render page to pixmap
+        pix = page.get_pixmap(matrix=matrix, alpha=True)
+        doc.close()
+        
+        # Convert to QImage
+        qimage = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGBA8888)
+        return qimage.copy()
+
     def _load_raster(self) -> QImage:
         """Load raster image with PIL."""
         with Image.open(self.path) as img:
@@ -111,6 +142,11 @@ class ImageProxy(QObject):
             except Exception:
                 pass
         self._workers.clear()
+        self._loading.clear()
+
+    def clear_cache(self):
+        """Clear all cached thumbnails to force reload from disk."""
+        self._cache.clear()
         self._loading.clear()
 
     def get_pixmap(self, path: str) -> QPixmap:
