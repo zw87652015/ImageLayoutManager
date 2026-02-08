@@ -12,10 +12,13 @@ class LayoutResult:
 class LayoutEngine:
     @staticmethod
     def _label_row_height_mm(project: Project) -> float:
-        """Height of a label row based on label font settings."""
-        pt_to_mm = 0.3528
-        h = project.label_font_size * pt_to_mm * 1.2 + 2.0
-        return max(3.0, min(15.0, h))
+        """Height of a label row based on label font settings.
+        
+        QGraphicsTextItem uses 72 DPI internally, so 1pt = 1 scene unit (mm).
+        The row height should accommodate the font at this scale.
+        """
+        h = project.label_font_size * 1.2 + 2.0
+        return max(5.0, min(50.0, h))
 
     @staticmethod
     def _compute_col_widths(r_temp: RowTemplate, content_width: float, gap_mm: float) -> List[float]:

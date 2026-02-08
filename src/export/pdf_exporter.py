@@ -60,34 +60,38 @@ class PdfExporter:
             label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
             label_rects = getattr(layout_result, 'label_rects', {})
 
-            # 1. Draw Images and Scale Bars
+            # 1. Draw Images, Scale Bars, and Nested Layouts
             for cell in project.cells:
-                if cell.id in layout_result.cell_rects and cell.image_path and os.path.exists(cell.image_path):
-                    x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
-                    
-                    # Convert rect to dots
-                    target_rect = QRectF(
-                        x_mm * scale, 
-                        y_mm * scale, 
-                        w_mm * scale, 
-                        h_mm * scale
-                    )
-                    
-                    # Apply Padding
-                    p_top = cell.padding_top * scale
-                    p_right = cell.padding_right * scale
-                    p_bottom = cell.padding_bottom * scale
-                    p_left = cell.padding_left * scale
-                    
-                    content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
-                    
-                    if content_rect.width() > 0 and content_rect.height() > 0:
-                        rotation = getattr(cell, 'rotation', 0)
-                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation)
-                        
-                        # Draw scale bar if enabled
-                        if getattr(cell, 'scale_bar_enabled', False):
-                            PdfExporter._draw_scale_bar(painter, cell, content_rect, scale)
+                if cell.id not in layout_result.cell_rects:
+                    continue
+                x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
+
+                # Convert rect to dots
+                target_rect = QRectF(
+                    x_mm * scale, y_mm * scale, w_mm * scale, h_mm * scale
+                )
+
+                # Apply Padding
+                p_top = cell.padding_top * scale
+                p_right = cell.padding_right * scale
+                p_bottom = cell.padding_bottom * scale
+                p_left = cell.padding_left * scale
+                content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
+
+                if content_rect.width() <= 0 or content_rect.height() <= 0:
+                    continue
+
+                # Nested layout: vector render the sub-project into this cell
+                nested_path = getattr(cell, 'nested_layout_path', None)
+                if nested_path and os.path.exists(nested_path):
+                    PdfExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
+                elif cell.image_path and os.path.exists(cell.image_path):
+                    rotation = getattr(cell, 'rotation', 0)
+                    PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation)
+
+                    # Draw scale bar if enabled
+                    if getattr(cell, 'scale_bar_enabled', False):
+                        PdfExporter._draw_scale_bar(painter, cell, content_rect, scale)
 
             # 1b. Draw Label Cells (label rows above picture rows)
             if label_row_above:
@@ -107,6 +111,99 @@ class PdfExporter:
                 
         finally:
             painter.end()
+
+    @staticmethod
+    def _draw_nested_layout(painter: QPainter, figlayout_path: str, content_rect: QRectF, parent_dpi: int):
+        """Render a nested .figlayout as vector graphics into the given content_rect.
+        
+        The sub-project is loaded, laid out, and all its elements (images, text,
+        labels) are drawn using the same vector pipeline, translated and scaled
+        to fit inside content_rect while preserving aspect ratio.
+        """
+        try:
+            from src.model.data_model import Project as SubProject
+            sub_project = SubProject.load_from_file(figlayout_path)
+        except Exception as e:
+            print(f"Failed to load nested layout {figlayout_path}: {e}")
+            return
+
+        sub_layout = LayoutEngine.calculate_layout(sub_project)
+
+        # Sub-project page dimensions in mm
+        sub_w_mm = sub_project.page_width_mm
+        sub_h_mm = sub_project.page_height_mm
+        if sub_w_mm <= 0 or sub_h_mm <= 0:
+            return
+
+        # content_rect is in dots (parent_dpi). Convert to mm for ratio calc.
+        parent_scale = parent_dpi / 25.4
+        cr_w_mm = content_rect.width() / parent_scale
+        cr_h_mm = content_rect.height() / parent_scale
+
+        # Fit sub-project page into content_rect (contain mode)
+        fit_ratio = min(cr_w_mm / sub_w_mm, cr_h_mm / sub_h_mm)
+
+        # Centered offset in mm
+        fitted_w_mm = sub_w_mm * fit_ratio
+        fitted_h_mm = sub_h_mm * fit_ratio
+        offset_x_mm = (cr_w_mm - fitted_w_mm) / 2.0
+        offset_y_mm = (cr_h_mm - fitted_h_mm) / 2.0
+
+        # The sub-project's internal scale: mm -> dots for the sub-project
+        # We need to map sub-project mm coordinates into parent dots.
+        # sub_mm * fit_ratio * parent_scale = parent_dots
+        sub_scale = fit_ratio * parent_scale
+
+        painter.save()
+        painter.translate(
+            content_rect.left() + offset_x_mm * parent_scale,
+            content_rect.top() + offset_y_mm * parent_scale,
+        )
+
+        # Draw sub-project images
+        for cell in sub_project.cells:
+            if cell.id not in sub_layout.cell_rects:
+                continue
+            sx, sy, sw, sh = sub_layout.cell_rects[cell.id]
+            sub_target = QRectF(sx * sub_scale, sy * sub_scale, sw * sub_scale, sh * sub_scale)
+
+            sp_top = cell.padding_top * sub_scale
+            sp_right = cell.padding_right * sub_scale
+            sp_bottom = cell.padding_bottom * sub_scale
+            sp_left = cell.padding_left * sub_scale
+            sub_content = sub_target.adjusted(sp_left, sp_top, -sp_right, -sp_bottom)
+
+            if sub_content.width() <= 0 or sub_content.height() <= 0:
+                continue
+
+            # Recurse for nested-in-nested
+            nested = getattr(cell, 'nested_layout_path', None)
+            if nested and os.path.exists(nested):
+                PdfExporter._draw_nested_layout(painter, nested, sub_content, parent_dpi)
+            elif cell.image_path and os.path.exists(cell.image_path):
+                rotation = getattr(cell, 'rotation', 0)
+                PdfExporter._draw_image(painter, cell.image_path, sub_content, cell.fit_mode, rotation)
+                if getattr(cell, 'scale_bar_enabled', False):
+                    PdfExporter._draw_scale_bar(painter, cell, sub_content, sub_scale)
+
+        # Draw sub-project label cells
+        sub_label_above = getattr(sub_project, 'label_placement', 'in_cell') == 'label_row_above'
+        sub_label_rects = getattr(sub_layout, 'label_rects', {})
+        if sub_label_above:
+            PdfExporter._draw_label_cells(painter, sub_project, sub_layout, sub_scale)
+
+        # Draw sub-project text items
+        for text_item in sub_project.text_items:
+            if (
+                sub_label_above
+                and text_item.scope == 'cell'
+                and getattr(text_item, 'subtype', None) != 'corner'
+                and text_item.parent_id in sub_label_rects
+            ):
+                continue
+            PdfExporter._draw_text(painter, sub_project, text_item, sub_layout, sub_scale)
+
+        painter.restore()
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
@@ -402,7 +499,11 @@ class PdfExporter:
 
     @staticmethod
     def _draw_label_cells(painter: QPainter, project, layout_result, scale: float):
-        """Draw label cells (label rows above picture rows) with centered text."""
+        """Draw label cells (label rows above picture rows) with centered text.
+        
+        Uses the same QGraphicsTextItem rendering approach as _draw_text to
+        ensure font size matches the canvas exactly.
+        """
         label_rects = getattr(layout_result, 'label_rects', {})
         if not label_rects:
             return
@@ -413,37 +514,60 @@ class PdfExporter:
             if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
                 numbering_texts[t.parent_id] = t.text
 
-        font_size_dots = project.label_font_size * 0.3528 * scale
-        # QPdfWriter physical DPI can differ from logical DPI (set via setResolution).
-        # setPixelSize is interpreted in physical pixels, so compensate for the ratio.
-        device = painter.device()
-        dpi_ratio = device.physicalDpiY() / device.logicalDpiY() if device.logicalDpiY() > 0 else 1.0
-        font_size_device = max(8, int(font_size_dots * dpi_ratio))
-        font = QFont(project.label_font_family)
-        font.setPixelSize(font_size_device)
+        # Use same base_pt / text_scale approach as _draw_text and TextGraphicsItem
+        base_pt = 24
+        font_size_pt = project.label_font_size
+        text_scale = font_size_pt / base_pt
+
+        font = QFont(project.label_font_family, base_pt)
         if project.label_font_weight == "bold":
             font.setBold(True)
 
         align = getattr(project, 'label_align', 'center')
-        h_align = Qt.AlignmentFlag.AlignHCenter
-        if align == 'left':
-            h_align = Qt.AlignmentFlag.AlignLeft
-        elif align == 'right':
-            h_align = Qt.AlignmentFlag.AlignRight
-        flags = h_align | Qt.AlignmentFlag.AlignVCenter
-
-        ox = getattr(project, 'label_offset_x', 0.0) * scale
-        oy = getattr(project, 'label_offset_y', 0.0) * scale
+        ox_mm = getattr(project, 'label_offset_x', 0.0)
+        oy_mm = getattr(project, 'label_offset_y', 0.0)
 
         for cell_id, (lx, ly, lw, lh) in label_rects.items():
             text = numbering_texts.get(cell_id, "")
             if not text:
                 continue
-            rect = QRectF(lx * scale, ly * scale, lw * scale, lh * scale)
-            text_rect = rect.adjusted(ox, oy, ox, oy)
-            painter.setFont(font)
-            painter.setPen(QColor(project.label_color))
-            painter.drawText(text_rect, flags, text)
+
+            # Create a temporary QGraphicsTextItem to measure and render
+            temp_item = QGraphicsTextItem()
+            temp_item.setPlainText(text)
+            temp_item.setFont(font)
+            temp_item.setDefaultTextColor(QColor(project.label_color))
+
+            base_rect = temp_item.boundingRect()
+            tw_mm = base_rect.width() * text_scale
+            th_mm = base_rect.height() * text_scale
+
+            # Position within label cell (mm), applying alignment and offsets
+            cell_x_mm = lx + ox_mm
+            cell_y_mm = ly + oy_mm
+            cell_w_mm = lw
+            cell_h_mm = lh
+
+            # Vertical: center in label cell
+            y_mm = cell_y_mm + (cell_h_mm - th_mm) / 2.0
+
+            # Horizontal: align within label cell
+            if align == 'left':
+                x_mm = cell_x_mm
+            elif align == 'right':
+                x_mm = cell_x_mm + cell_w_mm - tw_mm
+            else:
+                x_mm = cell_x_mm + (cell_w_mm - tw_mm) / 2.0
+
+            # Render using painter.scale — same approach as _draw_text
+            render_scale = text_scale * scale
+            painter.save()
+            painter.translate(x_mm * scale, y_mm * scale)
+            painter.scale(render_scale, render_scale)
+
+            option = QStyleOptionGraphicsItem()
+            temp_item.paint(painter, option, None)
+            painter.restore()
 
     @staticmethod
     def _draw_scale_bar(painter: QPainter, cell, content_rect: QRectF, scale: float):

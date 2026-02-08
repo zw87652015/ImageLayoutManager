@@ -18,6 +18,10 @@ class CellItem(QGraphicsRectItem):
         self.rotation = 0
         self.is_placeholder = False
         
+        # Nested layout
+        self.nested_layout_path = None
+        self._nested_pixmap = None  # cached thumbnail of nested layout
+
         # Label cell mode
         self.is_label_cell = False
         self.label_text = ""
@@ -66,6 +70,15 @@ class CellItem(QGraphicsRectItem):
         self.is_hovered = False
         self._drag_start_pos = None
 
+    def mouseDoubleClickEvent(self, event):
+        if self.nested_layout_path and not self.is_label_cell:
+            scene = self.scene()
+            if scene and hasattr(scene, 'nested_layout_open_requested'):
+                scene.nested_layout_open_requested.emit(self.cell_id, self.nested_layout_path)
+                event.accept()
+                return
+        super().mouseDoubleClickEvent(event)
+
     def mousePressEvent(self, event):
         if self.is_label_cell:
             super().mousePressEvent(event)
@@ -85,6 +98,14 @@ class CellItem(QGraphicsRectItem):
                 self._drag_start_pos = None
                 return
         super().mouseMoveEvent(event)
+
+    def contextMenuEvent(self, event):
+        scene = self.scene()
+        if scene and hasattr(scene, 'cell_context_menu'):
+            scene.cell_context_menu.emit(self.cell_id, self.is_label_cell, event.screenPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def mouseReleaseEvent(self, event):
         self._drag_start_pos = None
@@ -164,9 +185,11 @@ class CellItem(QGraphicsRectItem):
         if self.is_hovered:
             painter.fillRect(rect, self.hover_brush)
             
-        # Draw Image
+        # Draw nested layout or image
         import os
-        if self.image_path and not os.path.exists(self.image_path) and not self.is_placeholder:
+        if self.nested_layout_path:
+            self._draw_nested_layout(painter, rect)
+        elif self.image_path and not os.path.exists(self.image_path) and not self.is_placeholder:
              self._draw_missing_file_icon(painter, rect)
         elif self._pixmap and not self._pixmap.isNull():
             self._draw_image(painter, rect)
@@ -192,12 +215,12 @@ class CellItem(QGraphicsRectItem):
         painter.drawRect(rect)
         
         if self.label_text:
-            # The painter has a transform that maps scene-mm to device pixels.
-            # To get zoom-independent text, we reset the transform, draw in
-            # device-pixel space, then restore.
-            font_size_mm = self.label_font_size * 0.3528
+            # QGraphicsTextItem uses 72 DPI internally, so 1pt = 1 scene unit.
+            # To match TextGraphicsItem rendering, use font_size_pt directly
+            # as the scene-coordinate size (not pt-to-mm converted).
+            font_size_scene = self.label_font_size  # 1pt = 1 scene unit
             transform = painter.transform()
-            m11 = transform.m11()  # device pixels per scene-mm (includes zoom)
+            m11 = transform.m11()  # device pixels per scene unit (includes zoom)
 
             # Map rect and offsets to device pixels
             dev_rect = transform.mapRect(rect)
@@ -205,7 +228,7 @@ class CellItem(QGraphicsRectItem):
             dev_oy = self.label_offset_y * abs(transform.m22())
             dev_text_rect = dev_rect.adjusted(dev_ox, dev_oy, dev_ox, dev_oy)
 
-            device_font_size = max(1, int(font_size_mm * m11))
+            device_font_size = max(1, int(font_size_scene * m11))
             font = QFont(self.label_font_family)
             font.setPixelSize(device_font_size)
             if self.label_font_weight == "bold":
@@ -223,6 +246,94 @@ class CellItem(QGraphicsRectItem):
             painter.drawText(dev_text_rect, h_align | Qt.AlignmentFlag.AlignVCenter, self.label_text)
             painter.restore()
             
+    def set_nested_layout(self, path):
+        """Set the nested layout path and generate a thumbnail."""
+        if path == self.nested_layout_path and self._nested_pixmap is not None:
+            return
+        self.nested_layout_path = path
+        self._nested_pixmap = None
+        if path:
+            self._generate_nested_thumbnail()
+        self.update()
+
+    def _generate_nested_thumbnail(self):
+        """Render the nested layout to a QPixmap thumbnail for canvas display."""
+        import os
+        if not self.nested_layout_path or not os.path.exists(self.nested_layout_path):
+            self._nested_pixmap = None
+            return
+        try:
+            from src.model.data_model import Project
+            from src.model.layout_engine import LayoutEngine
+            from src.export.image_exporter import ImageExporter
+
+            sub_project = Project.load_from_file(self.nested_layout_path)
+            # Render at a moderate resolution for preview (screen DPI)
+            preview_dpi = 150
+            orig_dpi = sub_project.dpi
+            sub_project.dpi = preview_dpi
+            qimage = ImageExporter.render_to_qimage(sub_project)
+            sub_project.dpi = orig_dpi
+            if qimage and not qimage.isNull():
+                self._nested_pixmap = QPixmap.fromImage(qimage)
+            else:
+                self._nested_pixmap = None
+        except Exception as e:
+            print(f"Failed to generate nested layout thumbnail: {e}")
+            self._nested_pixmap = None
+
+    def _draw_nested_layout(self, painter: QPainter, rect: QRectF):
+        """Draw the nested layout thumbnail inside the cell."""
+        content_rect = rect.adjusted(
+            self.padding[3], self.padding[0],
+            -self.padding[1], -self.padding[2]
+        )
+        if content_rect.width() <= 0 or content_rect.height() <= 0:
+            return
+
+        if self._nested_pixmap and not self._nested_pixmap.isNull():
+            pix_w = self._nested_pixmap.width()
+            pix_h = self._nested_pixmap.height()
+            ratio = min(content_rect.width() / pix_w, content_rect.height() / pix_h)
+            new_w = pix_w * ratio
+            new_h = pix_h * ratio
+            x = content_rect.left() + (content_rect.width() - new_w) / 2
+            y = content_rect.top() + (content_rect.height() - new_h) / 2
+            target = QRectF(x, y, new_w, new_h)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(target.toRect(), self._nested_pixmap)
+        else:
+            # Fallback: draw a badge indicating nested layout
+            painter.setPen(QPen(QColor("#888888")))
+            painter.drawText(content_rect, Qt.AlignmentFlag.AlignCenter, "Nested Layout\n(not found)")
+
+        # Draw a small badge in the top-right corner
+        import os
+        badge_text = os.path.basename(self.nested_layout_path) if self.nested_layout_path else ""
+        if badge_text:
+            transform = painter.transform()
+            m11 = transform.m11()
+            badge_font = QFont("Arial")
+            badge_font.setPixelSize(max(1, int(2.5 * m11)))
+            dev_rect = transform.mapRect(rect)
+
+            painter.save()
+            painter.resetTransform()
+            painter.setFont(badge_font)
+
+            fm = painter.fontMetrics()
+            text_w = fm.horizontalAdvance(badge_text) + 6
+            text_h = fm.height() + 2
+            badge_rect = QRectF(
+                dev_rect.right() - text_w - 2,
+                dev_rect.top() + 2,
+                text_w, text_h
+            )
+            painter.fillRect(badge_rect, QColor(0, 0, 0, 140))
+            painter.setPen(QPen(QColor("#FFFFFF")))
+            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
+            painter.restore()
+
     def _draw_missing_file_icon(self, painter: QPainter, rect: QRectF):
         # Draw red cross or "Missing" text
         painter.setPen(QPen(QColor("#FF4444"), 2))

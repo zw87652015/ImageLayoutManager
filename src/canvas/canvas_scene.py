@@ -15,6 +15,8 @@ class CanvasScene(QGraphicsScene):
     project_file_dropped = pyqtSignal(str) # file_path for .figlayout files
     text_item_changed = pyqtSignal(str, dict) # text_item_id, changes_dict
     selection_changed_custom = pyqtSignal(list) # list of selected item ids
+    cell_context_menu = pyqtSignal(str, bool, object) # cell_id, is_label_cell, QPointF(screen_pos)
+    nested_layout_open_requested = pyqtSignal(str, str) # cell_id, figlayout_path
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -123,6 +125,8 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'scale_bar_offset_x', 2.0),
                     getattr(cell, 'scale_bar_offset_y', 2.0),
                 )
+                # Nested layout
+                item.set_nested_layout(getattr(cell, 'nested_layout_path', None))
 
         # Sync Label Cell Items (label rows above picture rows)
         label_rects = getattr(layout_result, 'label_rects', {})

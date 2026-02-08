@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QToolBar, QPushButton, QSplitter, QFileDialog,
     QMessageBox, QSpinBox, QLabel, QComboBox,
-    QLabel, QStyle
+    QLabel, QStyle, QMenu
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack
@@ -75,155 +75,149 @@ class MainWindow(QMainWindow):
         
         # Toolbar
         self.toolbar = QToolBar()
-        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.toolbar.setIconSize(QSize(18, 18))
+        self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toolbar.setIconSize(QSize(16, 16))
+        self.toolbar.setMovable(False)
         self.addToolBar(self.toolbar)
 
-        # Menu
+        # ── Menu Bar ──
         file_menu = self.menuBar().addMenu("File")
-
-        # Help menu
+        edit_menu = self.menuBar().addMenu("Edit")
         help_menu = self.menuBar().addMenu("Help")
+
         about_action = QAction("About", self)
         about_action.triggered.connect(self._on_show_about)
         help_menu.addAction(about_action)
 
-        # Undo/Redo Actions
+        # ── Undo / Redo ──
         undo_action = self.undo_stack.createUndoAction(self, "Undo")
         undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         undo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
-        undo_action.setToolTip("Undo")
         redo_action = self.undo_stack.createRedoAction(self, "Redo")
         redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         redo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
-        redo_action.setToolTip("Redo")
-        
+
+        edit_menu.addAction(undo_action)
+        edit_menu.addAction(redo_action)
+        edit_menu.addSeparator()
+
         self.toolbar.addAction(undo_action)
         self.toolbar.addAction(redo_action)
         self.toolbar.addSeparator()
-        
-        # File Actions
+
+        # ── File Actions ──
         new_action = QAction("New", self)
         new_action.setShortcut(QKeySequence.StandardKey.New)
         new_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
-        new_action.setToolTip("New")
         new_action.triggered.connect(self._on_new_project)
-        self.toolbar.addAction(new_action)
 
-        file_menu.addAction(new_action)
-        
         open_action = QAction("Open", self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
-        open_action.setToolTip("Open")
         open_action.triggered.connect(self._on_open_project)
-        self.toolbar.addAction(open_action)
 
-        file_menu.addAction(open_action)
-        
         save_action = QAction("Save", self)
         save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
-        save_action.setToolTip("Save")
         save_action.triggered.connect(self._on_save_project)
-        self.toolbar.addAction(save_action)
-
-        file_menu.addAction(save_action)
 
         save_as_action = QAction("Save As...", self)
         save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
-        save_as_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         save_as_action.triggered.connect(self._on_save_project_as)
+
+        file_menu.addAction(new_action)
+        file_menu.addAction(open_action)
+        file_menu.addAction(save_action)
         file_menu.addAction(save_as_action)
+        file_menu.addSeparator()
+
+        # File menu — image operations
+        import_action = QAction("Import Images...", self)
+        import_action.triggered.connect(self._on_import_images)
+        file_menu.addAction(import_action)
 
         open_images_grid_action = QAction("Open Images as Grid...", self)
-        open_images_grid_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView))
         open_images_grid_action.triggered.connect(self._on_open_images_as_grid)
         file_menu.addAction(open_images_grid_action)
-        
-        self.toolbar.addSeparator()
-        
-        import_action = QAction("Import Images", self)
-        import_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
-        import_action.setToolTip("Import Images")
-        import_action.triggered.connect(self._on_import_images)
-        self.toolbar.addAction(import_action)
 
-        open_images_grid_tb_action = QAction("Open Images as Grid", self)
-        open_images_grid_tb_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView))
-        open_images_grid_tb_action.setToolTip("Open Images as Grid")
-        open_images_grid_tb_action.triggered.connect(self._on_open_images_as_grid)
-        self.toolbar.addAction(open_images_grid_tb_action)
-        
         reload_images_action = QAction("Reload Images", self)
-        reload_images_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        reload_images_action.setToolTip("Reload all images from disk (refresh cache)")
         reload_images_action.setShortcut(QKeySequence("F5"))
         reload_images_action.triggered.connect(self._on_reload_images)
-        self.toolbar.addAction(reload_images_action)
-        
+        file_menu.addAction(reload_images_action)
+
+        file_menu.addSeparator()
+
+        # File menu — export
+        export_pdf_action = QAction("Export PDF...", self)
+        export_pdf_action.triggered.connect(self._on_export_pdf)
+        file_menu.addAction(export_pdf_action)
+
+        export_tiff_action = QAction("Export TIFF...", self)
+        export_tiff_action.triggered.connect(self._on_export_tiff)
+        file_menu.addAction(export_tiff_action)
+
+        export_jpg_action = QAction("Export JPG...", self)
+        export_jpg_action.triggered.connect(self._on_export_jpg)
+        file_menu.addAction(export_jpg_action)
+
+        # Toolbar — file group (New, Open, Save only)
+        self.toolbar.addAction(new_action)
+        self.toolbar.addAction(open_action)
+        self.toolbar.addAction(save_action)
         self.toolbar.addSeparator()
-        
-        # Toolbar Actions
-        # Grid Controls
+
+        # ── Edit menu — text/image/label actions ──
+        add_text_action = QAction("Add Text", self)
+        add_text_action.triggered.connect(self._on_add_text)
+        edit_menu.addAction(add_text_action)
+
+        delete_text_action = QAction("Delete Selected", self)
+        delete_text_action.setShortcut(QKeySequence.StandardKey.Delete)
+        delete_text_action.triggered.connect(self._on_delete_text)
+        edit_menu.addAction(delete_text_action)
+
+        delete_image_action = QAction("Delete Image", self)
+        delete_image_action.setShortcut(QKeySequence("Ctrl+Delete"))
+        delete_image_action.triggered.connect(self._on_delete_image)
+        edit_menu.addAction(delete_image_action)
+
+        edit_menu.addSeparator()
+
+        auto_label_action = QAction("Auto Label", self)
+        auto_label_action.triggered.connect(self._on_auto_label)
+        edit_menu.addAction(auto_label_action)
+
+        auto_layout_action = QAction("Auto Layout", self)
+        auto_layout_action.triggered.connect(self._on_auto_layout)
+        edit_menu.addAction(auto_layout_action)
+
+        # ── Toolbar — grid rows ──
         self.toolbar.addWidget(QLabel(" Rows: "))
         self.row_spin = QSpinBox()
         self.row_spin.setRange(1, 100)
         self.row_spin.setValue(len(self.project.rows))
         self.row_spin.valueChanged.connect(self._on_row_count_changed)
         self.toolbar.addWidget(self.row_spin)
-        
         self.toolbar.addSeparator()
-        
-        add_text_action = QAction("Add Text", self)
-        add_text_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
-        add_text_action.setToolTip("Add Text")
-        add_text_action.triggered.connect(self._on_add_text)
-        self.toolbar.addAction(add_text_action)
-        
-        delete_text_action = QAction("Delete Text", self)
-        delete_text_action.setShortcut(QKeySequence.StandardKey.Delete)
-        delete_text_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-        delete_text_action.setToolTip("Delete Text")
-        delete_text_action.triggered.connect(self._on_delete_text)
-        self.toolbar.addAction(delete_text_action)
 
-        delete_image_action = QAction("Delete Image", self)
-        delete_image_action.setShortcut(QKeySequence("Ctrl+Delete"))
-        delete_image_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-        delete_image_action.setToolTip("Delete Image from selected cell(s)")
-        delete_image_action.triggered.connect(self._on_delete_image)
-        self.toolbar.addAction(delete_image_action)
-        
-        auto_label_action = QAction("Auto Label", self)
-        auto_label_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogApplyButton))
-        auto_label_action.setToolTip("Auto Label")
-        auto_label_action.triggered.connect(self._on_auto_label)
+        # ── Toolbar — quick actions ──
         self.toolbar.addAction(auto_label_action)
-        
-        auto_layout_action = QAction("Auto Layout", self)
-        auto_layout_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_BrowserReload))
-        auto_layout_action.setToolTip("Auto Layout")
-        auto_layout_action.triggered.connect(self._on_auto_layout)
         self.toolbar.addAction(auto_layout_action)
-        
         self.toolbar.addSeparator()
-        
-        export_action = QAction("Export PDF", self)
-        export_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DriveFDIcon))
-        export_action.setToolTip("Export PDF")
-        export_action.triggered.connect(self._on_export_pdf)
-        self.toolbar.addAction(export_action)
-        
-        export_tiff_action = QAction("Export TIFF", self)
-        export_tiff_action.setToolTip("Export as TIFF image")
-        export_tiff_action.triggered.connect(self._on_export_tiff)
-        self.toolbar.addAction(export_tiff_action)
-        
-        export_jpg_action = QAction("Export JPG", self)
-        export_jpg_action.setToolTip("Export as JPG image")
-        export_jpg_action.triggered.connect(self._on_export_jpg)
-        self.toolbar.addAction(export_jpg_action)
+
+        # ── Toolbar — Export dropdown button ──
+        from PyQt6.QtWidgets import QToolButton
+        export_button = QToolButton(self)
+        export_button.setText("Export")
+        export_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        export_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        export_menu = QMenu(self)
+        export_menu.addAction(export_pdf_action)
+        export_menu.addAction(export_tiff_action)
+        export_menu.addAction(export_jpg_action)
+        export_button.setMenu(export_menu)
+        export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.toolbar.addWidget(export_button)
 
         # Splitter for Content | Inspector
         splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -262,6 +256,8 @@ class MainWindow(QMainWindow):
         self.scene.project_file_dropped.connect(self._on_project_file_dropped)
         self.scene.text_item_changed.connect(self._on_text_item_drag_changed)
         self.scene.selectionChanged.connect(self._on_selection_changed)
+        self.scene.cell_context_menu.connect(self._on_cell_context_menu)
+        self.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
         
         # View signals
         self.view.zoom_changed.connect(self._on_zoom_changed)
@@ -477,6 +473,23 @@ class MainWindow(QMainWindow):
         item = items[0]
         
         if hasattr(item, 'cell_id'):
+            # Check if it's a label cell (id starts with "label_")
+            if hasattr(item, 'is_label_cell') and item.is_label_cell:
+                label_data = {
+                    "label_scheme": self.project.label_scheme,
+                    "label_font_family": self.project.label_font_family,
+                    "label_font_size": self.project.label_font_size,
+                    "label_font_weight": self.project.label_font_weight,
+                    "label_color": self.project.label_color,
+                    "label_align": self.project.label_align,
+                    "label_offset_x": self.project.label_offset_x,
+                    "label_offset_y": self.project.label_offset_y,
+                    "label_row_height": getattr(self.project, 'label_row_height', 0.0),
+                    "label_attach_to": self.project.label_attach_to,
+                }
+                self.inspector.set_selection('label_cell', label_data)
+                return
+
             cell = next((c for c in self.project.cells if c.id == item.cell_id), None)
             if cell:
                 # Find Row Data
@@ -794,6 +807,283 @@ class MainWindow(QMainWindow):
             )
             self.undo_stack.push(cmd)
 
+    def _on_cell_context_menu(self, cell_id: str, is_label_cell: bool, screen_pos):
+        """Build and show context menu for a cell or label cell."""
+        from PyQt6.QtCore import QPoint
+
+        menu = QMenu(self)
+
+        if is_label_cell:
+            # Label cell context menu
+            parent_cell_id = cell_id.removeprefix("label_")
+            text_obj = next(
+                (t for t in self.project.text_items
+                 if t.scope == "cell" and t.subtype != "corner" and t.parent_id == parent_cell_id),
+                None
+            )
+            if text_obj:
+                delete_label_action = menu.addAction("Delete Label")
+                delete_label_action.triggered.connect(
+                    lambda: self._ctx_delete_numbering_label(parent_cell_id)
+                )
+            menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+            return
+
+        # Regular cell context menu
+        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        if not cell:
+            return
+
+        has_image = cell.image_path and not cell.is_placeholder
+
+        # --- Import / Delete Image ---
+        has_nested = bool(cell.nested_layout_path)
+
+        import_action = menu.addAction("Import Image...")
+        import_action.triggered.connect(lambda: self._ctx_import_image(cell_id))
+
+        if has_image:
+            delete_img_action = menu.addAction("Delete Image")
+            delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
+
+        menu.addSeparator()
+
+        # --- Nested Layout ---
+        import_layout_action = menu.addAction("Import Layout...")
+        import_layout_action.triggered.connect(lambda: self._ctx_import_layout(cell_id))
+
+        if has_nested:
+            delete_layout_action = menu.addAction("Delete Layout")
+            delete_layout_action.triggered.connect(lambda: self._ctx_delete_layout(cell_id))
+
+        menu.addSeparator()
+
+        # --- Label submenu ---
+        label_menu = menu.addMenu("Labels")
+
+        # Numbering label
+        has_numbering = any(
+            t for t in self.project.text_items
+            if t.scope == "cell" and t.subtype != "corner" and t.parent_id == cell_id
+        )
+        if has_numbering:
+            del_num_action = label_menu.addAction("Delete Label Cell")
+            del_num_action.triggered.connect(lambda: self._ctx_delete_numbering_label(cell_id))
+        else:
+            add_num_action = label_menu.addAction("Add Label Cell")
+            add_num_action.triggered.connect(lambda: self._ctx_add_numbering_label(cell_id))
+
+        label_menu.addSeparator()
+
+        # Corner labels
+        corner_anchors = [
+            ("top_left_inside", "Top Left"),
+            ("top_right_inside", "Top Right"),
+            ("bottom_left_inside", "Bottom Left"),
+            ("bottom_right_inside", "Bottom Right"),
+        ]
+        for anchor, display_name in corner_anchors:
+            existing = next(
+                (t for t in self.project.text_items
+                 if t.scope == "cell" and getattr(t, 'subtype', None) == 'corner'
+                 and t.anchor == anchor and t.parent_id == cell_id),
+                None
+            )
+            if existing:
+                action = label_menu.addAction(f"Delete {display_name} Label")
+                action.triggered.connect(
+                    lambda checked=False, a=anchor: self._ctx_delete_corner_label(cell_id, a)
+                )
+            else:
+                action = label_menu.addAction(f"Add {display_name} Label")
+                action.triggered.connect(
+                    lambda checked=False, a=anchor: self._ctx_add_corner_label(cell_id, a)
+                )
+
+        # --- Image operations (only if has image) ---
+        if has_image:
+            menu.addSeparator()
+
+            # Fit Mode submenu
+            fit_menu = menu.addMenu("Fit Mode")
+            for mode in ["contain", "cover"]:
+                action = fit_menu.addAction(mode.capitalize())
+                action.setCheckable(True)
+                action.setChecked(cell.fit_mode == mode)
+                action.triggered.connect(
+                    lambda checked=False, m=mode: self._ctx_set_cell_prop(cell_id, {"fit_mode": m})
+                )
+
+            # Rotation submenu
+            rot_menu = menu.addMenu("Rotation")
+            for deg in [0, 90, 180, 270]:
+                action = rot_menu.addAction(f"{deg}°")
+                action.setCheckable(True)
+                action.setChecked(cell.rotation == deg)
+                action.triggered.connect(
+                    lambda checked=False, d=deg: self._ctx_set_cell_prop(cell_id, {"rotation": d})
+                )
+
+            # Scale Bar toggle
+            menu.addSeparator()
+            sb_action = menu.addAction("Enable Scale Bar" if not cell.scale_bar_enabled else "Disable Scale Bar")
+            sb_action.triggered.connect(
+                lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
+            )
+
+        menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+
+    def _ctx_import_image(self, cell_id: str):
+        """Context menu: import image into cell."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Image", "",
+            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf *.eps);;All Files (*)"
+        )
+        if path:
+            cell = next((c for c in self.project.cells if c.id == cell_id), None)
+            if cell:
+                cmd = DropImageCommand(cell, path, self._refresh_and_update)
+                self.undo_stack.push(cmd)
+
+    def _ctx_delete_image(self, cell_id: str):
+        """Context menu: delete image from cell."""
+        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        if cell and (cell.image_path or not cell.is_placeholder):
+            cmd = PropertyChangeCommand(
+                cell, {"image_path": None, "is_placeholder": True},
+                self._refresh_and_update, "Delete Image"
+            )
+            self.undo_stack.push(cmd)
+
+    def _ctx_import_layout(self, cell_id: str):
+        """Context menu: import a .figlayout file into a cell as a nested layout."""
+        from src.model.nested_layout_utils import detect_circular_reference
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Layout", "",
+            "Figure Layout (*.figlayout);;All Files (*)"
+        )
+        if not path:
+            return
+
+        # Circular reference check
+        parent_path = self._current_project_path
+        if parent_path and detect_circular_reference(parent_path, path):
+            QMessageBox.warning(
+                self, "Circular Reference",
+                "Cannot import this layout: it would create a circular reference "
+                "(the selected file already references this project directly or indirectly)."
+            )
+            return
+
+        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        if cell:
+            cmd = PropertyChangeCommand(
+                cell, {"nested_layout_path": path},
+                self._refresh_and_update, "Import Layout"
+            )
+            self.undo_stack.push(cmd)
+
+    def _ctx_delete_layout(self, cell_id: str):
+        """Context menu: remove the nested layout from a cell."""
+        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        if cell and cell.nested_layout_path:
+            cmd = PropertyChangeCommand(
+                cell, {"nested_layout_path": None},
+                self._refresh_and_update, "Delete Layout"
+            )
+            self.undo_stack.push(cmd)
+
+    def _ctx_add_numbering_label(self, cell_id: str):
+        """Context menu: add a numbering label for a cell."""
+        # Ensure label_placement is 'label_row_above' so the label cell row appears
+        if self.project.label_placement != "label_row_above":
+            cmd = PropertyChangeCommand(
+                self.project, {"label_placement": "label_row_above"},
+                self._refresh_and_update, "Switch to Label Row"
+            )
+            self.undo_stack.push(cmd)
+
+        # Determine the next label text based on scheme and existing labels
+        scheme = self.project.label_scheme
+        existing_labels = [
+            t for t in self.project.text_items
+            if t.scope == "cell" and t.subtype != "corner" and t.parent_id
+        ]
+        idx = len(existing_labels)
+        if scheme in ["(a)", "a"]:
+            letter = chr(ord('a') + idx % 26)
+            text = f"({letter})" if scheme == "(a)" else letter
+        else:
+            letter = chr(ord('A') + idx % 26)
+            text = f"({letter})" if scheme == "(A)" else letter
+
+        item = TextItem(
+            text=text,
+            font_family=self.project.label_font_family,
+            font_size_pt=self.project.label_font_size,
+            font_weight=self.project.label_font_weight,
+            color=self.project.label_color,
+            scope="cell",
+            parent_id=cell_id,
+            anchor="top_left_inside",
+            offset_x=2.0,
+            offset_y=2.0,
+        )
+        cmd = AddTextCommand(self.project, item, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _ctx_delete_numbering_label(self, cell_id: str):
+        """Context menu: delete the numbering label for a cell."""
+        text_obj = next(
+            (t for t in self.project.text_items
+             if t.scope == "cell" and t.subtype != "corner" and t.parent_id == cell_id),
+            None
+        )
+        if text_obj:
+            cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _ctx_add_corner_label(self, cell_id: str, anchor: str):
+        """Context menu: add a corner label at the given anchor."""
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "Corner Label", f"Label text for {anchor}:")
+        if ok and text.strip():
+            item = TextItem(
+                text=text.strip(),
+                font_family=self.project.corner_label_font_family,
+                font_size_pt=self.project.corner_label_font_size,
+                font_weight=self.project.corner_label_font_weight,
+                color=self.project.corner_label_color,
+                scope="cell",
+                subtype="corner",
+                parent_id=cell_id,
+                anchor=anchor,
+                offset_x=2.0,
+                offset_y=2.0,
+            )
+            cmd = AddTextCommand(self.project, item, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _ctx_delete_corner_label(self, cell_id: str, anchor: str):
+        """Context menu: delete the corner label at the given anchor."""
+        text_obj = next(
+            (t for t in self.project.text_items
+             if t.scope == "cell" and getattr(t, 'subtype', None) == 'corner'
+             and t.anchor == anchor and t.parent_id == cell_id),
+            None
+        )
+        if text_obj:
+            cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _ctx_set_cell_prop(self, cell_id: str, changes: dict):
+        """Context menu: set properties on a cell."""
+        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        if cell:
+            cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Change Cell Property")
+            self.undo_stack.push(cmd)
+
     def _on_auto_label(self):
         cmd = AutoLabelCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
@@ -829,6 +1119,33 @@ class MainWindow(QMainWindow):
             f"<p><b>Version:</b> {self._app_version}</p>"
             f"<p>A tool for creating academic figure layouts with precise control.</p>"
         )
+
+    def _on_open_nested_layout(self, cell_id: str, figlayout_path: str):
+        """Open a nested layout in a separate editor window."""
+        import os
+        if not os.path.exists(figlayout_path):
+            QMessageBox.warning(self, "Error", f"Layout file not found:\n{figlayout_path}")
+            return
+        try:
+            project = Project.load_from_file(figlayout_path)
+            child_window = MainWindow()
+            child_window._set_project(project, figlayout_path)
+            child_window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+            # When child saves, refresh the parent cell's thumbnail
+            child_window._parent_cell_id = cell_id
+            child_window._parent_window = self
+            original_save = child_window._save_project_to_path
+
+            def _save_and_refresh(path):
+                result = original_save(path)
+                if result:
+                    self._refresh_and_update()
+                return result
+
+            child_window._save_project_to_path = _save_and_refresh
+            child_window.show()
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open nested layout: {e}")
 
     def closeEvent(self, event):
         if not self._maybe_save():
@@ -875,6 +1192,7 @@ class MainWindow(QMainWindow):
 
     def _save_project_to_path(self, path: str) -> bool:
         try:
+            self.project.name = os.path.splitext(os.path.basename(path))[0]
             self.project.save_to_file(path)
             self._current_project_path = path
             self.undo_stack.setClean()

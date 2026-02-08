@@ -73,6 +73,9 @@ class Cell:
     # If it is a placeholder
     is_placeholder: bool = False
 
+    # Nested layout (sub-figure from another .figlayout file)
+    nested_layout_path: Optional[str] = None  # absolute path to .figlayout file
+
     # Scale bar (microscopy)
     scale_bar_enabled: bool = False
     scale_bar_mode: str = "rgb"  # "rgb" | "bayer"
@@ -108,6 +111,7 @@ class Cell:
             "scale_bar_position": self.scale_bar_position,
             "scale_bar_offset_x": self.scale_bar_offset_x,
             "scale_bar_offset_y": self.scale_bar_offset_y,
+            "nested_layout_path": self.nested_layout_path,
         }
 
     @classmethod
@@ -124,6 +128,7 @@ class Cell:
         payload.setdefault("scale_bar_position", "bottom_right")
         payload.setdefault("scale_bar_offset_x", 2.0)
         payload.setdefault("scale_bar_offset_y", 2.0)
+        payload.setdefault("nested_layout_path", None)
         
         # Resolve image path: try absolute first, then relative to project file
         if payload.get("image_path") and project_dir:
@@ -290,5 +295,7 @@ class Project:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
         data = migrate_project_data(data)
+        # Always derive the project name from the filename
+        data["name"] = os.path.splitext(os.path.basename(filepath))[0]
         project_dir = os.path.dirname(os.path.abspath(filepath))
         return cls.from_dict(data, project_dir)
