@@ -174,7 +174,28 @@ class AutoLayout:
         num_rows = len(new_row_settings)
         if num_rows > 1:
             total_natural_height += (num_rows - 1) * gap_mm
-        
+
+        # Account for label rows if label_placement is 'label_row_above'
+        label_row_above = getattr(project, "label_placement", "in_cell") == "label_row_above"
+        if label_row_above:
+            from src.model.layout_engine import LayoutEngine
+            custom_h = getattr(project, 'label_row_height', 0.0)
+            label_row_h = custom_h if custom_h > 0 else LayoutEngine._label_row_height_mm(project)
+
+            # Find which row indices have numbering labels
+            labeled_cell_ids = set()
+            for t in project.text_items:
+                if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
+                    labeled_cell_ids.add(t.parent_id)
+            rows_with_labels = set()
+            for c in project.cells:
+                if c.id in labeled_cell_ids:
+                    rows_with_labels.add(c.row_index)
+
+            num_label_rows = len(rows_with_labels)
+            if num_label_rows > 0:
+                total_natural_height += num_label_rows * (label_row_h + gap_mm)
+
         # Add margins
         optimal_page_height = total_natural_height + project.margin_top_mm + project.margin_bottom_mm
         
