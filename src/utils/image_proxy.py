@@ -6,7 +6,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QSize
 from PyQt6.QtSvg import QSvgRenderer
 
 # Supported vector formats
-VECTOR_EXTENSIONS = {'.svg', '.pdf'}
+VECTOR_EXTENSIONS = {'.svg', '.pdf', '.eps'}
 # Raster formats handled by PIL
 RASTER_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.gif', '.webp'}
 
@@ -35,8 +35,8 @@ class ThumbnailWorker(QObject):
             if ext == '.svg':
                 # Handle SVG vector format
                 qimage = self._load_svg()
-            elif ext == '.pdf':
-                # Handle PDF format
+            elif ext in ('.pdf', '.eps'):
+                # Handle PDF/EPS format via PyMuPDF
                 qimage = self._load_pdf()
             else:
                 # Handle raster formats with PIL

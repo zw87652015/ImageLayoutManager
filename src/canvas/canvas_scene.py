@@ -20,6 +20,7 @@ class CanvasScene(QGraphicsScene):
         super().__init__(parent)
         self.project = None
         self.cell_items = {} # id -> CellItem
+        self.label_cell_items = {} # "label_{cell_id}" -> CellItem (label-only cells)
         self.text_items = {} # id -> TextGraphicsItem
         
         # Background
@@ -99,17 +100,11 @@ class CanvasScene(QGraphicsScene):
                 item.setPos(x, y)
                 
             # Content
-                pad_top = cell.padding_top
-                if getattr(self.project, 'label_placement', 'in_cell') == 'label_row_above':
-                    if cell.id in getattr(layout_result, 'label_rects', {}):
-                        _, _, _, strip_h = layout_result.label_rects[cell.id]
-                        pad_top = pad_top + strip_h
-
                 item.update_data(
                     cell.image_path, 
                     cell.fit_mode, 
                     {
-                        'top': pad_top, 
+                        'top': cell.padding_top, 
                         'right': cell.padding_right, 
                         'bottom': cell.padding_bottom, 
                         'left': cell.padding_left
@@ -119,15 +114,62 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'align_h', 'center'),
                     getattr(cell, 'align_v', 'center'),
                     getattr(cell, 'scale_bar_enabled', False),
-                getattr(cell, 'scale_bar_mode', 'rgb'),
-                getattr(cell, 'scale_bar_length_um', 10.0),
-                getattr(cell, 'scale_bar_color', '#FFFFFF'),
-                getattr(cell, 'scale_bar_show_text', True),
-                getattr(cell, 'scale_bar_thickness_mm', 0.5),
-                getattr(cell, 'scale_bar_position', 'bottom_right'),
-                getattr(cell, 'scale_bar_offset_x', 2.0),
-                getattr(cell, 'scale_bar_offset_y', 2.0),
-            )
+                    getattr(cell, 'scale_bar_mode', 'rgb'),
+                    getattr(cell, 'scale_bar_length_um', 10.0),
+                    getattr(cell, 'scale_bar_color', '#FFFFFF'),
+                    getattr(cell, 'scale_bar_show_text', True),
+                    getattr(cell, 'scale_bar_thickness_mm', 0.5),
+                    getattr(cell, 'scale_bar_position', 'bottom_right'),
+                    getattr(cell, 'scale_bar_offset_x', 2.0),
+                    getattr(cell, 'scale_bar_offset_y', 2.0),
+                )
+
+        # Sync Label Cell Items (label rows above picture rows)
+        label_rects = getattr(layout_result, 'label_rects', {})
+        label_row_above = getattr(self.project, 'label_placement', 'in_cell') == 'label_row_above'
+
+        # Build a map of cell_id -> numbering label text from existing TextItems
+        numbering_texts = {}
+        if label_row_above:
+            for t in self.project.text_items:
+                if t.scope == 'cell' and t.subtype != 'corner' and t.parent_id:
+                    numbering_texts[t.parent_id] = t.text
+
+        # Determine which label cell IDs should exist
+        expected_label_ids = set()
+        if label_row_above:
+            for cell_id in label_rects:
+                expected_label_ids.add(f"label_{cell_id}")
+
+        # Remove stale label cells
+        stale = set(self.label_cell_items.keys()) - expected_label_ids
+        for lid in stale:
+            self.removeItem(self.label_cell_items[lid])
+            del self.label_cell_items[lid]
+
+        # Add/Update label cells
+        for cell_id, (lx, ly, lw, lh) in label_rects.items():
+            lid = f"label_{cell_id}"
+            if lid not in self.label_cell_items:
+                litem = CellItem(lid)
+                litem.is_label_cell = True
+                litem.setFlag(CellItem.GraphicsItemFlag.ItemIsSelectable, True)
+                litem.setAcceptDrops(False)
+                self.addItem(litem)
+                self.label_cell_items[lid] = litem
+
+            litem = self.label_cell_items[lid]
+            litem.setRect(0, 0, lw, lh)
+            litem.setPos(lx, ly)
+            litem.label_text = numbering_texts.get(cell_id, "")
+            litem.label_font_family = self.project.label_font_family
+            litem.label_font_size = self.project.label_font_size
+            litem.label_font_weight = self.project.label_font_weight
+            litem.label_color = self.project.label_color
+            litem.label_align = getattr(self.project, 'label_align', 'center')
+            litem.label_offset_x = getattr(self.project, 'label_offset_x', 0.0)
+            litem.label_offset_y = getattr(self.project, 'label_offset_y', 0.0)
+            litem.update()
             
         # Sync Text Items
         existing_text_ids = set(self.text_items.keys())
@@ -159,29 +201,33 @@ class CanvasScene(QGraphicsScene):
             
             # Position logic: cell-scoped labels follow their parent cell
             if text_model.scope == "cell" and text_model.parent_id:
+                # In label_row_above mode, numbering labels are rendered by label cells directly
+                # so hide the TextItem to avoid duplicate rendering
+                if (
+                    label_row_above
+                    and text_model.subtype != 'corner'
+                    and text_model.parent_id in label_rects
+                ):
+                    t_item.setVisible(False)
+                    continue
+                else:
+                    t_item.setVisible(True)
+
                 # Find parent cell's position from layout
                 if text_model.parent_id in layout_result.cell_rects:
                     cx, cy, cw, ch = layout_result.cell_rects[text_model.parent_id]
 
-                    # For numbering labels, optionally place them into the reserved label strip.
-                    if (
-                        getattr(self.project, 'label_placement', 'in_cell') == 'label_row_above'
-                        and text_model.subtype != 'corner'
-                        and text_model.parent_id in getattr(layout_result, 'label_rects', {})
-                    ):
-                        cx, cy, cw, ch = layout_result.label_rects[text_model.parent_id]
-                    else:
-                        # Check attachment mode: "figure" uses content area (inside padding), "grid" uses cell boundary
-                        attach_to = getattr(self.project, 'label_attach_to', 'figure')
-                        if attach_to == "figure":
-                            # Find the cell to get padding
-                            cell = next((c for c in self.project.cells if c.id == text_model.parent_id), None)
-                            if cell:
-                                # Adjust bounds to content area (inside padding)
-                                cx = cx + cell.padding_left
-                                cy = cy + cell.padding_top
-                                cw = cw - cell.padding_left - cell.padding_right
-                                ch = ch - cell.padding_top - cell.padding_bottom
+                    # Check attachment mode: "figure" uses content area (inside padding), "grid" uses cell boundary
+                    attach_to = getattr(self.project, 'label_attach_to', 'figure')
+                    if attach_to == "figure":
+                        # Find the cell to get padding
+                        cell = next((c for c in self.project.cells if c.id == text_model.parent_id), None)
+                        if cell:
+                            # Adjust bounds to content area (inside padding)
+                            cx = cx + cell.padding_left
+                            cy = cy + cell.padding_top
+                            cw = cw - cell.padding_left - cell.padding_right
+                            ch = ch - cell.padding_top - cell.padding_bottom
                     
                     # Calculate position based on anchor
                     anchor = text_model.anchor or "top_left_inside"
@@ -255,7 +301,7 @@ class CanvasScene(QGraphicsScene):
             target_cell = None
             
             for item in items:
-                if isinstance(item, CellItem):
+                if isinstance(item, CellItem) and not item.is_label_cell:
                     target_cell = item
                     break
             
@@ -277,7 +323,7 @@ class CanvasScene(QGraphicsScene):
             target_cell_id = None
             
             for item in items:
-                if isinstance(item, CellItem):
+                if isinstance(item, CellItem) and not item.is_label_cell:
                     target_cell_id = item.cell_id
                     break
             

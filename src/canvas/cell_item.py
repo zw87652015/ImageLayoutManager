@@ -18,6 +18,17 @@ class CellItem(QGraphicsRectItem):
         self.rotation = 0
         self.is_placeholder = False
         
+        # Label cell mode
+        self.is_label_cell = False
+        self.label_text = ""
+        self.label_font_family = "Arial"
+        self.label_font_size = 12
+        self.label_font_weight = "bold"
+        self.label_color = "#000000"
+        self.label_align = "center"  # "left", "center", "right"
+        self.label_offset_x = 0.0  # mm
+        self.label_offset_y = 0.0  # mm
+        
         # Scale bar properties
         self.scale_bar_enabled = False
         self.scale_bar_mode = "rgb"
@@ -56,11 +67,17 @@ class CellItem(QGraphicsRectItem):
         self._drag_start_pos = None
 
     def mousePressEvent(self, event):
+        if self.is_label_cell:
+            super().mousePressEvent(event)
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start_pos = event.screenPos()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self.is_label_cell:
+            event.ignore()
+            return
         if self._drag_start_pos:
             dist = (event.screenPos() - self._drag_start_pos).manhattanLength()
             if dist > 10: # Drag threshold
@@ -135,6 +152,10 @@ class CellItem(QGraphicsRectItem):
         # Draw background
         rect = self.rect()
         
+        if self.is_label_cell:
+            self._draw_label_cell(painter, rect)
+            return
+        
         if self.is_placeholder:
             painter.fillRect(rect, self.placeholder_brush)
         else:
@@ -163,6 +184,44 @@ class CellItem(QGraphicsRectItem):
         else:
             painter.setPen(self.border_pen)
             painter.drawRect(rect)
+
+    def _draw_label_cell(self, painter: QPainter, rect: QRectF):
+        """Draw a label-only cell with centered text."""
+        painter.fillRect(rect, self.normal_brush)
+        painter.setPen(self.border_pen)
+        painter.drawRect(rect)
+        
+        if self.label_text:
+            # The painter has a transform that maps scene-mm to device pixels.
+            # To get zoom-independent text, we reset the transform, draw in
+            # device-pixel space, then restore.
+            font_size_mm = self.label_font_size * 0.3528
+            transform = painter.transform()
+            m11 = transform.m11()  # device pixels per scene-mm (includes zoom)
+
+            # Map rect and offsets to device pixels
+            dev_rect = transform.mapRect(rect)
+            dev_ox = self.label_offset_x * m11
+            dev_oy = self.label_offset_y * abs(transform.m22())
+            dev_text_rect = dev_rect.adjusted(dev_ox, dev_oy, dev_ox, dev_oy)
+
+            device_font_size = max(1, int(font_size_mm * m11))
+            font = QFont(self.label_font_family)
+            font.setPixelSize(device_font_size)
+            if self.label_font_weight == "bold":
+                font.setBold(True)
+
+            painter.save()
+            painter.resetTransform()
+            painter.setFont(font)
+            painter.setPen(QPen(QColor(self.label_color)))
+            h_align = Qt.AlignmentFlag.AlignHCenter
+            if self.label_align == "left":
+                h_align = Qt.AlignmentFlag.AlignLeft
+            elif self.label_align == "right":
+                h_align = Qt.AlignmentFlag.AlignRight
+            painter.drawText(dev_text_rect, h_align | Qt.AlignmentFlag.AlignVCenter, self.label_text)
+            painter.restore()
             
     def _draw_missing_file_icon(self, painter: QPainter, rect: QRectF):
         # Draw red cross or "Missing" text
@@ -343,13 +402,29 @@ class CellItem(QGraphicsRectItem):
         if self.scale_bar_show_text:
             text = f"{self.scale_bar_length_um:.0f} µm" if self.scale_bar_length_um >= 1 else f"{self.scale_bar_length_um:.2f} µm"
             
-            font = QFont("Arial", 8)
+            font_size_mm = 2.0
+            transform = painter.transform()
+            m11 = transform.m11()
+            m22 = abs(transform.m22())
+
+            device_font_size = max(1, int(font_size_mm * m11))
+            font = QFont("Arial")
+            font.setPixelSize(device_font_size)
+            
+            # Use a wide text rect centered on the bar to avoid clipping
+            text_rect_w = max(bar_length_mm, content_rect.width())
+            text_rect_x = bar_x + bar_length_mm / 2 - text_rect_w / 2
+            text_height = font_size_mm * 3
+            text_rect = QRectF(text_rect_x, bar_y - text_height, text_rect_w, text_height)
+
+            # Draw in device-pixel space for zoom-independent sizing
+            dev_text_rect = transform.mapRect(text_rect)
+            painter.save()
+            painter.resetTransform()
             painter.setFont(font)
             painter.setPen(QPen(QColor(self.scale_bar_color)))
-            
-            # Text above the bar, centered
-            text_rect = QRectF(bar_x, bar_y - 4, bar_length_mm, 4)
-            painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, text)
+            painter.drawText(dev_text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, text)
+            painter.restore()
 
     def hoverEnterEvent(self, event):
         self.is_hovered = True

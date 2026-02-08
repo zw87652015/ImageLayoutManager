@@ -59,11 +59,13 @@ class ImageExporter:
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         
         try:
+            label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
+            label_rects = getattr(layout_result, 'label_rects', {})
+
             # 1. Draw Images and Scale Bars
             for cell in project.cells:
                 if cell.id in layout_result.cell_rects and cell.image_path and os.path.exists(cell.image_path):
-                    rects = getattr(layout_result, 'figure_rects', layout_result.cell_rects)
-                    x_mm, y_mm, w_mm, h_mm = rects.get(cell.id, layout_result.cell_rects[cell.id])
+                    x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
                     
                     # Convert rect to pixels
                     target_rect = QRectF(
@@ -88,9 +90,21 @@ class ImageExporter:
                         # Draw scale bar if enabled
                         if getattr(cell, 'scale_bar_enabled', False):
                             ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
+
+            # 1b. Draw Label Cells (label rows above picture rows)
+            if label_row_above:
+                ImageExporter._draw_label_cells(painter, project, layout_result, scale)
                         
             # 2. Draw Text Items
             for text_item in project.text_items:
+                # Skip numbering labels rendered by label cells
+                if (
+                    label_row_above
+                    and text_item.scope == 'cell'
+                    and getattr(text_item, 'subtype', None) != 'corner'
+                    and text_item.parent_id in label_rects
+                ):
+                    continue
                 ImageExporter._draw_text(painter, project, text_item, layout_result, scale)
                 
         finally:
@@ -137,7 +151,7 @@ class ImageExporter:
         
         if ext == '.svg':
             ImageExporter._draw_svg(painter, path, rect, fit_mode_str, rotation)
-        elif ext == '.pdf':
+        elif ext in ('.pdf', '.eps'):
             ImageExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation)
         else:
             ImageExporter._draw_raster(painter, path, rect, fit_mode_str, rotation)
@@ -360,21 +374,14 @@ class ImageExporter:
         if text_item.scope == "cell" and text_item.parent_id and text_item.parent_id in layout_result.cell_rects:
             cx, cy, cw, ch = layout_result.cell_rects[text_item.parent_id]
 
-            if (
-                getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
-                and getattr(text_item, 'subtype', None) != 'corner'
-                and text_item.parent_id in getattr(layout_result, 'label_rects', {})
-            ):
-                cx, cy, cw, ch = layout_result.label_rects[text_item.parent_id]
-            else:
-                attach_to = getattr(project, 'label_attach_to', 'figure')
-                if attach_to == "figure":
-                    cell = next((c for c in project.cells if c.id == text_item.parent_id), None)
-                    if cell:
-                        cx += cell.padding_left
-                        cy += cell.padding_top
-                        cw -= cell.padding_left + cell.padding_right
-                        ch -= cell.padding_top + cell.padding_bottom
+            attach_to = getattr(project, 'label_attach_to', 'figure')
+            if attach_to == "figure":
+                cell = next((c for c in project.cells if c.id == text_item.parent_id), None)
+                if cell:
+                    cx += cell.padding_left
+                    cy += cell.padding_top
+                    cw -= cell.padding_left + cell.padding_right
+                    ch -= cell.padding_top + cell.padding_bottom
 
             anchor = text_item.anchor or "top_left_inside"
             ox, oy = text_item.offset_x, text_item.offset_y
@@ -412,6 +419,46 @@ class ImageExporter:
         temp_item.paint(painter, option, None)
         
         painter.restore()
+
+    @staticmethod
+    def _draw_label_cells(painter: QPainter, project, layout_result, scale: float):
+        """Draw label cells (label rows above picture rows) with centered text."""
+        label_rects = getattr(layout_result, 'label_rects', {})
+        if not label_rects:
+            return
+
+        # Build numbering text map from TextItems
+        numbering_texts = {}
+        for t in project.text_items:
+            if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
+                numbering_texts[t.parent_id] = t.text
+
+        font_size_px = max(8, int(project.label_font_size * 0.3528 * scale))
+        font = QFont(project.label_font_family)
+        font.setPixelSize(font_size_px)
+        if project.label_font_weight == "bold":
+            font.setBold(True)
+
+        align = getattr(project, 'label_align', 'center')
+        h_align = Qt.AlignmentFlag.AlignHCenter
+        if align == 'left':
+            h_align = Qt.AlignmentFlag.AlignLeft
+        elif align == 'right':
+            h_align = Qt.AlignmentFlag.AlignRight
+        flags = h_align | Qt.AlignmentFlag.AlignVCenter
+
+        ox = getattr(project, 'label_offset_x', 0.0) * scale
+        oy = getattr(project, 'label_offset_y', 0.0) * scale
+
+        for cell_id, (lx, ly, lw, lh) in label_rects.items():
+            text = numbering_texts.get(cell_id, "")
+            if not text:
+                continue
+            rect = QRectF(lx * scale, ly * scale, lw * scale, lh * scale)
+            text_rect = rect.adjusted(ox, oy, ox, oy)
+            painter.setFont(font)
+            painter.setPen(QColor(project.label_color))
+            painter.drawText(text_rect, flags, text)
 
     @staticmethod
     def _draw_scale_bar(painter: QPainter, cell, content_rect: QRectF, scale: float):
@@ -474,11 +521,15 @@ class ImageExporter:
         if cell.scale_bar_show_text:
             text = f"{cell.scale_bar_length_um:.0f} µm" if cell.scale_bar_length_um >= 1 else f"{cell.scale_bar_length_um:.2f} µm"
             
-            font = QFont("Arial", int(8 * scale / 3))  # Scale font for output
+            font_size_px = max(8, int(2.0 * scale))
+            font = QFont("Arial")
+            font.setPixelSize(font_size_px)
             painter.setFont(font)
             painter.setPen(QColor(cell.scale_bar_color))
             
-            # Text above the bar, centered
-            text_height = 4 * scale
-            text_rect = QRectF(bar_x, bar_y - text_height, bar_length_out, text_height)
+            # Use a wide text rect centered on the bar to avoid clipping
+            text_rect_w = max(bar_length_out, content_rect.width())
+            text_rect_x = bar_x + bar_length_out / 2 - text_rect_w / 2
+            text_height = font_size_px * 3
+            text_rect = QRectF(text_rect_x, bar_y - text_height, text_rect_w, text_height)
             painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, text)

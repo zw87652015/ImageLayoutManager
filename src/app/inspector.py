@@ -86,7 +86,46 @@ class Inspector(QWidget):
         self.label_placement.addItems(["In Cell", "Label Row Above"])
         self.label_placement.currentTextChanged.connect(self._on_label_placement_changed)
         self.project_layout.addRow("Label Placement:", self.label_placement)
-        
+
+        self.label_align = QComboBox()
+        self.label_align.addItems(["Left", "Center", "Right"])
+        self.label_align.currentTextChanged.connect(self._on_label_align_preset_changed)
+        self.project_layout.addRow("Label Align:", self.label_align)
+
+        self.label_offset_x = QDoubleSpinBox()
+        self.label_offset_x.setRange(-100.0, 100.0)
+        self.label_offset_x.setSingleStep(0.5)
+        self.label_offset_x.setDecimals(1)
+        self.label_offset_x.setSuffix(" mm")
+        self.label_offset_x.setValue(0.0)
+        self.label_offset_x.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"label_offset_x": v})
+        )
+        self.project_layout.addRow("Label Offset X:", self.label_offset_x)
+
+        self.label_offset_y = QDoubleSpinBox()
+        self.label_offset_y.setRange(-100.0, 100.0)
+        self.label_offset_y.setSingleStep(0.5)
+        self.label_offset_y.setDecimals(1)
+        self.label_offset_y.setSuffix(" mm")
+        self.label_offset_y.setValue(0.0)
+        self.label_offset_y.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"label_offset_y": v})
+        )
+        self.project_layout.addRow("Label Offset Y:", self.label_offset_y)
+
+        self.label_row_height = QDoubleSpinBox()
+        self.label_row_height.setRange(0.0, 50.0)
+        self.label_row_height.setSingleStep(0.5)
+        self.label_row_height.setDecimals(1)
+        self.label_row_height.setSuffix(" mm")
+        self.label_row_height.setSpecialValueText("Auto")
+        self.label_row_height.setValue(0.0)
+        self.label_row_height.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"label_row_height": v})
+        )
+        self.project_layout.addRow("Label Row Height:", self.label_row_height)
+
         self.label_font = QComboBox()
         self.label_font.addItems(["Arial", "Times New Roman", "Courier New", "Verdana"])
         self.label_font.currentTextChanged.connect(
@@ -453,6 +492,21 @@ class Inspector(QWidget):
         color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
         self.project_property_changed.emit({"corner_label_color": color_hex})
 
+    def _on_label_align_preset_changed(self, text: str):
+        align = text.lower()
+        # Reset offsets to 0 when a preset is selected
+        self.label_offset_x.blockSignals(True)
+        self.label_offset_y.blockSignals(True)
+        self.label_offset_x.setValue(0.0)
+        self.label_offset_y.setValue(0.0)
+        self.label_offset_x.blockSignals(False)
+        self.label_offset_y.blockSignals(False)
+        self.project_property_changed.emit({
+            "label_align": align,
+            "label_offset_x": 0.0,
+            "label_offset_y": 0.0,
+        })
+
     def _on_label_placement_changed(self, text: str):
         value = "label_row_above" if text == "Label Row Above" else "in_cell"
         self.project_property_changed.emit({"label_placement": value})
@@ -597,6 +651,11 @@ class Inspector(QWidget):
                 self.label_color.setCurrentText("White" if label_color_hex == "#FFFFFF" else "Black")
                 label_attach = effective_project_data.get("label_attach_to", "figure")
                 self.label_attach.setCurrentText(label_attach.capitalize())
+                label_align = effective_project_data.get("label_align", "center")
+                self.label_align.setCurrentText(label_align.capitalize())
+                self.label_offset_x.setValue(effective_project_data.get("label_offset_x", 0.0))
+                self.label_offset_y.setValue(effective_project_data.get("label_offset_y", 0.0))
+                self.label_row_height.setValue(effective_project_data.get("label_row_height", 0.0))
                 
                 # Corner Labels
                 self.corner_label_font.setCurrentText(effective_project_data.get("corner_label_font_family", "Arial"))

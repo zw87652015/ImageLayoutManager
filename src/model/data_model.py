@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from .enums import FitMode, LabelPosition, PageSizePreset
+from src.version import APP_VERSION
 
 @dataclass
 class TextItem:
@@ -191,6 +192,10 @@ class Project:
     label_color: str = "#000000" # black or white (#FFFFFF)
     label_anchor: str = LabelPosition.TOP_LEFT.value
     label_attach_to: str = "figure" # "grid" (cell boundary) or "figure" (image content area)
+    label_align: str = "center" # "left", "center", "right" — preset for label position in label cells
+    label_offset_x: float = 0.0  # mm, horizontal offset for fine-tuning label position
+    label_offset_y: float = 0.0  # mm, vertical offset for fine-tuning label position
+    label_row_height: float = 0.0  # mm, 0 = auto (computed from font size)
 
     # Global Corner Label Settings
     corner_label_font_family: str = "Arial"
@@ -200,6 +205,7 @@ class Project:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "file_version": APP_VERSION,
             "name": self.name,
             "page_width_mm": self.page_width_mm,
             "page_height_mm": self.page_height_mm,
@@ -220,6 +226,10 @@ class Project:
             "label_color": self.label_color,
             "label_anchor": self.label_anchor,
             "label_attach_to": self.label_attach_to,
+            "label_align": self.label_align,
+            "label_offset_x": self.label_offset_x,
+            "label_offset_y": self.label_offset_y,
+            "label_row_height": self.label_row_height,
             "corner_label_font_family": self.corner_label_font_family,
             "corner_label_font_size": self.corner_label_font_size,
             "corner_label_font_weight": self.corner_label_font_weight,
@@ -251,6 +261,10 @@ class Project:
         p.label_color = data.get("label_color", "#000000")
         p.label_anchor = data.get("label_anchor", LabelPosition.TOP_LEFT.value)
         p.label_attach_to = data.get("label_attach_to", "figure")
+        p.label_align = data.get("label_align", "center")
+        p.label_offset_x = data.get("label_offset_x", 0.0)
+        p.label_offset_y = data.get("label_offset_y", 0.0)
+        p.label_row_height = data.get("label_row_height", 0.0)
         
         p.corner_label_font_family = data.get("corner_label_font_family", "Arial")
         p.corner_label_font_size = data.get("corner_label_font_size", 12)
@@ -272,7 +286,9 @@ class Project:
 
     @classmethod
     def load_from_file(cls, filepath: str) -> 'Project':
+        from src.model.migrations import migrate_project_data
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
+        data = migrate_project_data(data)
         project_dir = os.path.dirname(os.path.abspath(filepath))
         return cls.from_dict(data, project_dir)

@@ -36,7 +36,9 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self._current_project_path = None
-        self.setWindowTitle("Academic Figure Layout[*]")
+        from src.version import APP_VERSION
+        self._app_version = APP_VERSION
+        self.setWindowTitle(f"Academic Figure Layout v{APP_VERSION}[*]")
         self.resize(1200, 800)
         
         # Undo Stack
@@ -79,7 +81,13 @@ class MainWindow(QMainWindow):
 
         # Menu
         file_menu = self.menuBar().addMenu("File")
-        
+
+        # Help menu
+        help_menu = self.menuBar().addMenu("Help")
+        about_action = QAction("About", self)
+        about_action.triggered.connect(self._on_show_about)
+        help_menu.addAction(about_action)
+
         # Undo/Redo Actions
         undo_action = self.undo_stack.createUndoAction(self, "Undo")
         undo_action.setShortcut(QKeySequence.StandardKey.Undo)
@@ -312,7 +320,7 @@ class MainWindow(QMainWindow):
             name = os.path.basename(self._current_project_path)
         else:
             name = "Untitled"
-        self.setWindowTitle(f"Academic Figure Layout - {name}[*]")
+        self.setWindowTitle(f"Academic Figure Layout v{self._app_version} - {name}[*]")
 
     def _mark_dirty(self):
         if self.undo_stack.isClean():
@@ -731,15 +739,28 @@ class MainWindow(QMainWindow):
         self.undo_stack.push(cmd)
 
     def _on_delete_text(self):
-        """Delete selected text item(s)"""
+        """Delete selected text item(s) or label cell numbering labels"""
         try:
             items = self.scene.selectedItems()
         except RuntimeError:
             return
         
+        from src.canvas.cell_item import CellItem
+
         for item in items:
             if hasattr(item, 'text_item_id'):
                 text_obj = next((t for t in self.project.text_items if t.id == item.text_item_id), None)
+                if text_obj:
+                    cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
+                    self.undo_stack.push(cmd)
+            elif isinstance(item, CellItem) and item.is_label_cell:
+                # Label cell ID is "label_{cell_id}" — extract the parent cell_id
+                parent_cell_id = item.cell_id.removeprefix("label_")
+                text_obj = next(
+                    (t for t in self.project.text_items
+                     if t.scope == "cell" and t.subtype != "corner" and t.parent_id == parent_cell_id),
+                    None
+                )
                 if text_obj:
                     cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
                     self.undo_stack.push(cmd)
@@ -799,6 +820,16 @@ class MainWindow(QMainWindow):
             ImageExporter.export(self.project, path, "JPG")
             QMessageBox.information(self, "Export", f"Exported to {path}")
 
+    def _on_show_about(self):
+        """Show About dialog with version information."""
+        QMessageBox.about(
+            self,
+            "About Academic Figure Layout",
+            f"<h2>Academic Figure Layout</h2>"
+            f"<p><b>Version:</b> {self._app_version}</p>"
+            f"<p>A tool for creating academic figure layouts with precise control.</p>"
+        )
+
     def closeEvent(self, event):
         if not self._maybe_save():
             event.ignore()
@@ -857,7 +888,7 @@ class MainWindow(QMainWindow):
     def _on_import_images(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Import Images", "", 
-            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf);;All Files (*)"
+            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf *.eps);;All Files (*)"
         )
         if paths:
             for file_path in paths:
@@ -888,7 +919,7 @@ class MainWindow(QMainWindow):
             self,
             "Open Images as Grid",
             "",
-            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf);;All Files (*)",
+            "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf *.eps);;All Files (*)",
         )
         if not paths:
             return
