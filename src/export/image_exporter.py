@@ -63,7 +63,7 @@ class ImageExporter:
             label_rects = getattr(layout_result, 'label_rects', {})
 
             # 1. Draw Images, Scale Bars, and Nested Layouts
-            for cell in project.cells:
+            for cell in project.get_all_leaf_cells():
                 if cell.id not in layout_result.cell_rects:
                     continue
                 x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
@@ -150,7 +150,7 @@ class ImageExporter:
             label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
             label_rects = getattr(layout_result, 'label_rects', {})
 
-            for cell in project.cells:
+            for cell in project.get_all_leaf_cells():
                 if cell.id not in layout_result.cell_rects:
                     continue
                 x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
@@ -476,7 +476,7 @@ class ImageExporter:
 
             attach_to = getattr(project, 'label_attach_to', 'figure')
             if attach_to == "figure":
-                cell = next((c for c in project.cells if c.id == text_item.parent_id), None)
+                cell = project.find_cell_by_id(text_item.parent_id)
                 if cell:
                     cx += cell.padding_left
                     cy += cell.padding_top

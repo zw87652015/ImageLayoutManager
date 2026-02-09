@@ -26,7 +26,7 @@ class AutoLayout:
         # 1. Gather image aspect ratios
         aspect_ratios = {} # cell_id -> float (w/h)
         
-        for cell in project.cells:
+        for cell in project.get_all_leaf_cells():
             if cell.image_path and os.path.exists(cell.image_path) and not cell.is_placeholder:
                 try:
                     ext = os.path.splitext(cell.image_path)[1].lower()

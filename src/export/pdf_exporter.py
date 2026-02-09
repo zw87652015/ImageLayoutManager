@@ -61,7 +61,7 @@ class PdfExporter:
             label_rects = getattr(layout_result, 'label_rects', {})
 
             # 1. Draw Images, Scale Bars, and Nested Layouts
-            for cell in project.cells:
+            for cell in project.get_all_leaf_cells():
                 if cell.id not in layout_result.cell_rects:
                     continue
                 x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
@@ -161,7 +161,7 @@ class PdfExporter:
         )
 
         # Draw sub-project images
-        for cell in sub_project.cells:
+        for cell in sub_project.get_all_leaf_cells():
             if cell.id not in sub_layout.cell_rects:
                 continue
             sx, sy, sw, sh = sub_layout.cell_rects[cell.id]
@@ -348,24 +348,25 @@ class PdfExporter:
                 return
             
             page = doc[0]
-            page_rect = page.rect
-            img_w, img_h = page_rect.width, page_rect.height
-            doc.close()
-            
-            # Convert PDF page to SVG for vector rendering
-            # PyMuPDF can export pages as SVG which preserves vector content
-            doc = fitz.open(path)
-            page = doc[0]
             svg_bytes = page.get_svg_image()
             doc.close()
             
             # Load SVG into Qt renderer
-            renderer = QSvgRenderer(svg_bytes.encode('utf-8') if isinstance(svg_bytes, str) else svg_bytes)
+            svg_data = svg_bytes.encode('utf-8') if isinstance(svg_bytes, str) else svg_bytes
+            renderer = QSvgRenderer(svg_data)
             if not renderer.isValid():
                 print(f"Failed to create SVG renderer for PDF: {path}")
                 return
             
             fit_mode = FitMode(fit_mode_str)
+            
+            # Use the SVG renderer's default size for aspect ratio calculation
+            # This is in the same coordinate space as the renderer output
+            default_size = renderer.defaultSize()
+            if default_size.isEmpty():
+                img_w, img_h = rect.width(), rect.height()
+            else:
+                img_w, img_h = default_size.width(), default_size.height()
             
             # Adjust dimensions if rotated 90 or 270 degrees
             is_sideways = rotation in [90, 270]
@@ -399,7 +400,6 @@ class PdfExporter:
             if rotation != 0:
                 painter.translate(target_rect.center())
                 painter.rotate(rotation)
-                # Drawing rect relative to center
                 draw_rect = QRectF(-img_w * ratio / 2, -img_h * ratio / 2, img_w * ratio, img_h * ratio)
                 renderer.render(painter, draw_rect)
             else:
@@ -449,7 +449,7 @@ class PdfExporter:
 
             attach_to = getattr(project, 'label_attach_to', 'figure')
             if attach_to == "figure":
-                cell = next((c for c in project.cells if c.id == text_item.parent_id), None)
+                cell = project.find_cell_by_id(text_item.parent_id)
                 if cell:
                     cx += cell.padding_left
                     cy += cell.padding_top

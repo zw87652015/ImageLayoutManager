@@ -26,8 +26,12 @@ from src.export.pdf_exporter import PdfExporter
 from src.export.image_exporter import ImageExporter
 from src.utils.auto_label import AutoLabel
 from src.app.commands import (
-    PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, DropImageCommand,
-    ChangeRowCountCommand, AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLayoutCommand
+    PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, MultiSwapCellsCommand,
+    DropImageCommand, ChangeRowCountCommand, InsertRowCommand, InsertCellCommand,
+    DeleteRowCommand, DeleteCellCommand,
+    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLayoutCommand,
+    SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
+    ChangeSubCellRatioCommand
 )
 from src.utils.image_proxy import get_image_proxy
 
@@ -184,21 +188,14 @@ class MainWindow(QMainWindow):
         edit_menu.addSeparator()
 
         auto_label_action = QAction("Auto Label", self)
+        auto_label_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
         auto_label_action.triggered.connect(self._on_auto_label)
         edit_menu.addAction(auto_label_action)
 
         auto_layout_action = QAction("Auto Layout", self)
+        auto_layout_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
         auto_layout_action.triggered.connect(self._on_auto_layout)
         edit_menu.addAction(auto_layout_action)
-
-        # ── Toolbar — grid rows ──
-        self.toolbar.addWidget(QLabel(" Rows: "))
-        self.row_spin = QSpinBox()
-        self.row_spin.setRange(1, 100)
-        self.row_spin.setValue(len(self.project.rows))
-        self.row_spin.valueChanged.connect(self._on_row_count_changed)
-        self.toolbar.addWidget(self.row_spin)
-        self.toolbar.addSeparator()
 
         # ── Toolbar — quick actions ──
         self.toolbar.addAction(auto_label_action)
@@ -238,13 +235,19 @@ class MainWindow(QMainWindow):
         self.inspector = Inspector()
         splitter.addWidget(self.inspector)
         
-        # Set initial sizes
+        # Set initial sizes and stretch factors
         splitter.setSizes([900, 300])
+        splitter.setStretchFactor(0, 1)   # Canvas stretches
+        splitter.setStretchFactor(1, 0)   # Inspector keeps its size
         
         # Status Bar
         self.statusbar = self.statusBar()
-        self.zoom_label = QLabel("Zoom: 100%")
+        self.mouse_pos_label = QLabel("")
+        self.selection_info_label = QLabel("")
         self.canvas_size_label = QLabel("Canvas: -")
+        self.zoom_label = QLabel("Zoom: 100%")
+        self.statusbar.addWidget(self.mouse_pos_label)
+        self.statusbar.addWidget(self.selection_info_label)
         self.statusbar.addPermanentWidget(self.canvas_size_label)
         self.statusbar.addPermanentWidget(self.zoom_label)
 
@@ -252,15 +255,21 @@ class MainWindow(QMainWindow):
         # Scene signals
         self.scene.cell_dropped.connect(self._on_cell_image_dropped)
         self.scene.cell_swapped.connect(self._on_cell_swapped)
+        self.scene.multi_cells_swapped.connect(self._on_multi_cells_swapped)
         self.scene.new_image_dropped.connect(self._on_new_image_dropped)
         self.scene.project_file_dropped.connect(self._on_project_file_dropped)
         self.scene.text_item_changed.connect(self._on_text_item_drag_changed)
         self.scene.selectionChanged.connect(self._on_selection_changed)
         self.scene.cell_context_menu.connect(self._on_cell_context_menu)
         self.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
+        self.scene.insert_row_requested.connect(self._on_insert_row)
+        self.scene.insert_cell_requested.connect(self._on_insert_cell)
         
         # View signals
         self.view.zoom_changed.connect(self._on_zoom_changed)
+        self.view.mouse_scene_pos_changed.connect(self._on_mouse_pos_changed)
+        self.view.navigate_cell.connect(self._on_navigate_cell)
+        self.view.swap_cell.connect(self._on_swap_cell_direction)
         
         # Inspector signals
         self.inspector.cell_property_changed.connect(self._on_cell_property_changed)
@@ -269,11 +278,123 @@ class MainWindow(QMainWindow):
         self.inspector.project_property_changed.connect(self._on_project_property_changed)
         self.inspector.corner_label_changed.connect(self._on_corner_label_changed)
         self.inspector.apply_color_to_group.connect(self._on_apply_color_to_group)
+        self.inspector.label_text_changed.connect(self._on_label_text_changed)
+        self.inspector.subcell_ratio_changed.connect(self._on_subcell_ratio_changed)
 
         self.undo_stack.cleanChanged.connect(self._on_undo_clean_changed)
 
     def _on_zoom_changed(self, zoom_level):
         self.zoom_label.setText(f"Zoom: {int(zoom_level * 100)}%")
+
+    def _on_mouse_pos_changed(self, x_mm, y_mm):
+        self.mouse_pos_label.setText(f"  X: {x_mm:.1f} mm  Y: {y_mm:.1f} mm")
+
+    # ------------------------------------------------------------------
+    # Cell navigation helpers
+    # ------------------------------------------------------------------
+
+    def _cell_path_label(self, cell) -> str:
+        """Build a compact hierarchical path label for the status bar.
+        
+        Top-level cell:          "R0C1"
+        Sub-cell (depth 1):      "R0C1 › V1"   (vertical split, child index 1)
+        Sub-cell (depth 2):      "R0C1 › V1 › H0"
+        """
+        # Walk up to build path segments from leaf to root
+        segments = []
+        current = cell
+        parent = self.project.find_parent_of(current.id)
+        while parent:
+            idx = next((i for i, c in enumerate(parent.children) if c.id == current.id), 0)
+            direction_char = "V" if parent.split_direction == "vertical" else "H"
+            segments.append(f"{direction_char}{idx + 1}")
+            current = parent
+            parent = self.project.find_parent_of(current.id)
+        # current is now the top-level cell
+        root_label = f"R{current.row_index + 1}C{current.col_index + 1}"
+        segments.reverse()
+        if segments:
+            return root_label + " › " + " › ".join(segments)
+        return root_label
+
+    def _get_selected_cell(self):
+        """Return (cell_model, cell_item) for the single selected cell, or (None, None)."""
+        items = self.scene.selectedItems()
+        if len(items) != 1:
+            return None, None
+        item = items[0]
+        if not hasattr(item, 'cell_id') or getattr(item, 'is_label_cell', False):
+            return None, None
+        cell = self.project.find_cell_by_id(item.cell_id)
+        return cell, item
+
+    def _find_neighbor_cell(self, cell, direction):
+        """Find the neighboring cell in the given direction."""
+        row_templates = sorted(self.project.rows, key=lambda r: r.index)
+        if direction == "left":
+            target_row, target_col = cell.row_index, cell.col_index - 1
+        elif direction == "right":
+            r = next((r for r in row_templates if r.index == cell.row_index), None)
+            max_col = (r.column_count - 1) if r else 0
+            target_row = cell.row_index
+            target_col = min(cell.col_index + 1, max_col)
+        elif direction == "up":
+            target_row, target_col = cell.row_index - 1, cell.col_index
+        elif direction == "down":
+            target_row, target_col = cell.row_index + 1, cell.col_index
+        elif direction == "next":
+            r = next((r for r in row_templates if r.index == cell.row_index), None)
+            max_col = (r.column_count - 1) if r else 0
+            if cell.col_index < max_col:
+                target_row, target_col = cell.row_index, cell.col_index + 1
+            else:
+                target_row, target_col = cell.row_index + 1, 0
+        elif direction == "prev":
+            if cell.col_index > 0:
+                target_row, target_col = cell.row_index, cell.col_index - 1
+            else:
+                prev_row = cell.row_index - 1
+                r = next((r for r in row_templates if r.index == prev_row), None)
+                if r:
+                    target_row, target_col = prev_row, r.column_count - 1
+                else:
+                    return None
+        else:
+            return None
+
+        return next((c for c in self.project.cells
+                     if c.row_index == target_row and c.col_index == target_col), None)
+
+    def _select_cell_by_id(self, cell_id):
+        """Select a cell on the canvas by its ID."""
+        self.scene.clearSelection()
+        item = self.scene.cell_items.get(cell_id)
+        if item:
+            item.setSelected(True)
+            self.view.centerOn(item)
+
+    def _on_navigate_cell(self, direction):
+        cell, _ = self._get_selected_cell()
+        if not cell:
+            # If nothing selected, select the first cell
+            if self.project.cells:
+                first = sorted(self.project.cells, key=lambda c: (c.row_index, c.col_index))[0]
+                self._select_cell_by_id(first.id)
+            return
+        neighbor = self._find_neighbor_cell(cell, direction)
+        if neighbor:
+            self._select_cell_by_id(neighbor.id)
+
+    def _on_swap_cell_direction(self, direction):
+        cell, _ = self._get_selected_cell()
+        if not cell:
+            return
+        neighbor = self._find_neighbor_cell(cell, direction)
+        if neighbor and neighbor.id != cell.id:
+            cmd = SwapCellsCommand(cell, neighbor, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+            # Keep the moved cell selected
+            self._select_cell_by_id(cell.id)
 
     def _ensure_cells_exist(self):
         # Simple logic: ensure every slot in defined rows has a cell
@@ -343,7 +464,7 @@ class MainWindow(QMainWindow):
         self.project = project
         self._ensure_cells_exist()
         self.scene.set_project(self.project)
-        self.row_spin.setValue(len(self.project.rows))
+        
         self.undo_stack.clear()
         self._current_project_path = path
         self.setWindowModified(False)
@@ -434,7 +555,7 @@ class MainWindow(QMainWindow):
         self.undo_stack.push(cmd)
 
     def _on_cell_image_dropped(self, cell_id, file_path):
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         if cell:
             cmd = DropImageCommand(cell, file_path, self._refresh_and_update)
             self.undo_stack.push(cmd)
@@ -442,7 +563,7 @@ class MainWindow(QMainWindow):
     def _on_new_image_dropped(self, file_path, x, y):
         # Find first placeholder
         target_cell = None
-        for cell in self.project.cells:
+        for cell in self.project.get_all_leaf_cells():
             if cell.is_placeholder:
                 target_cell = cell
                 break
@@ -454,12 +575,45 @@ class MainWindow(QMainWindow):
             print("No placeholder available for new image")
 
     def _on_cell_swapped(self, id1, id2):
-        c1 = next((c for c in self.project.cells if c.id == id1), None)
-        c2 = next((c for c in self.project.cells if c.id == id2), None)
+        c1 = self.project.find_cell_by_id(id1)
+        c2 = self.project.find_cell_by_id(id2)
         
         if c1 and c2:
             cmd = SwapCellsCommand(c1, c2, self._refresh_and_update)
             self.undo_stack.push(cmd)
+
+    def _on_multi_cells_swapped(self, source_ids, target_ids):
+        sources = [self.project.find_cell_by_id(sid) for sid in source_ids]
+        targets = [self.project.find_cell_by_id(tid) for tid in target_ids]
+        if all(sources) and all(targets) and len(sources) == len(targets):
+            cmd = MultiSwapCellsCommand(sources, targets, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _on_insert_row(self, insert_index):
+        # Default to 2 columns for new rows (matching ChangeRowCountCommand default)
+        cmd = InsertRowCommand(self.project, insert_index, column_count=2,
+                               update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_insert_cell(self, row_index, insert_col):
+        cmd = InsertCellCommand(self.project, row_index, insert_col,
+                                update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_delete_row(self, row_index):
+        if len(self.project.rows) <= 1:
+            return
+        cmd = DeleteRowCommand(self.project, row_index,
+                               update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_delete_cell(self, row_index, col_index):
+        row = next((r for r in self.project.rows if r.index == row_index), None)
+        if not row or row.column_count <= 1:
+            return
+        cmd = DeleteCellCommand(self.project, row_index, col_index,
+                                update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
 
     def _on_selection_changed(self):
         try:
@@ -467,15 +621,58 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             return  # Scene was deleted
         if not items:
+            self.selection_info_label.setText("")
             self.inspector.set_selection(None, self.project.to_dict())
             return
-            
+
+        # Status bar: selection info
+        cell_items = [i for i in items if hasattr(i, 'cell_id') and not getattr(i, 'is_label_cell', False)]
+        if len(cell_items) > 1:
+            self.selection_info_label.setText(f"  {len(cell_items)} cells selected")
+        elif len(cell_items) == 1:
+            ci = cell_items[0]
+            cell = self.project.find_cell_by_id(ci.cell_id)
+            if cell:
+                info = f"  {self._cell_path_label(cell)}"
+                if cell.image_path and not cell.is_placeholder:
+                    info += f"  |  {os.path.basename(cell.image_path)}"
+                self.selection_info_label.setText(info)
+            else:
+                self.selection_info_label.setText("")
+        else:
+            self.selection_info_label.setText("")
+
+        # Multi-cell selection
+        if len(cell_items) > 1:
+            first_cell = self.project.find_cell_by_id(cell_items[0].cell_id)
+            multi_data = {"count": len(cell_items)}
+            if first_cell:
+                multi_data.update({
+                    "fit_mode": first_cell.fit_mode,
+                    "rotation": getattr(first_cell, 'rotation', 0),
+                    "padding_top": first_cell.padding_top,
+                    "padding_bottom": first_cell.padding_bottom,
+                    "padding_left": first_cell.padding_left,
+                    "padding_right": first_cell.padding_right,
+                })
+            self.inspector.set_selection('multi_cell', multi_data)
+            return
+
         item = items[0]
         
         if hasattr(item, 'cell_id'):
             # Check if it's a label cell (id starts with "label_")
             if hasattr(item, 'is_label_cell') and item.is_label_cell:
+                # Find the corresponding text item for this label cell
+                parent_cell_id = item.cell_id.removeprefix("label_")
+                text_obj = next(
+                    (t for t in self.project.text_items
+                     if t.scope == "cell" and t.subtype != "corner" and t.parent_id == parent_cell_id),
+                    None
+                )
                 label_data = {
+                    "text_item_id": text_obj.id if text_obj else None,
+                    "label_text": text_obj.text if text_obj else "",
                     "label_scheme": self.project.label_scheme,
                     "label_font_family": self.project.label_font_family,
                     "label_font_size": self.project.label_font_size,
@@ -490,10 +687,17 @@ class MainWindow(QMainWindow):
                 self.inspector.set_selection('label_cell', label_data)
                 return
 
-            cell = next((c for c in self.project.cells if c.id == item.cell_id), None)
+            cell = self.project.find_cell_by_id(item.cell_id)
             if cell:
-                # Find Row Data
-                row = next((r for r in self.project.rows if r.index == cell.row_index), None)
+                # Find the top-level cell to get row data
+                top_cell = cell
+                parent = self.project.find_parent_of(cell.id)
+                while parent:
+                    top_cell = parent
+                    parent = self.project.find_parent_of(parent.id)
+
+                # Find Row Data from top-level cell
+                row = next((r for r in self.project.rows if r.index == top_cell.row_index), None)
                 row_data = row.to_dict() if row else None
 
                 # Populate corner label fields from existing cell-scoped text items
@@ -503,6 +707,21 @@ class MainWindow(QMainWindow):
                     if t.scope == "cell" and t.parent_id == cell.id and t.anchor:
                         corner_labels[t.anchor] = t.text
                 cell_dict["corner_labels"] = corner_labels
+
+                # Sub-cell info: if this cell has a parent split container, provide ratio data
+                cell_parent = self.project.find_parent_of(cell.id)
+                if cell_parent and cell_parent.split_direction != "none":
+                    idx = next((i for i, c in enumerate(cell_parent.children) if c.id == cell.id), 0)
+                    ratios = cell_parent.split_ratios if cell_parent.split_ratios else [1.0] * len(cell_parent.children)
+                    while len(ratios) < len(cell_parent.children):
+                        ratios.append(1.0)
+                    cell_dict["_subcell"] = {
+                        "cell_id": cell.id,
+                        "direction": cell_parent.split_direction,
+                        "sibling_count": len(cell_parent.children),
+                        "sibling_index": idx,
+                        "ratio": ratios[idx] if idx < len(ratios) else 1.0,
+                    }
 
                 self.inspector.set_selection('cell', cell_dict, row_data)
                 return
@@ -524,7 +743,7 @@ class MainWindow(QMainWindow):
         selected_cells = []
         for item in items:
             if hasattr(item, 'cell_id'):
-                cell = next((c for c in self.project.cells if c.id == item.cell_id), None)
+                cell = self.project.find_cell_by_id(item.cell_id)
                 if cell:
                     selected_cells.append(cell)
         
@@ -545,7 +764,7 @@ class MainWindow(QMainWindow):
             return
 
         cell_id = items[0].cell_id
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         if not cell:
             return
 
@@ -590,6 +809,14 @@ class MainWindow(QMainWindow):
             )
             cmd = AddTextCommand(self.project, item, self._refresh_and_update)
             self.undo_stack.push(cmd)
+
+    def _on_label_text_changed(self, text_item_id: str, new_text: str):
+        """Handle label text edit from the Label Cell Settings panel."""
+        text_obj = next((t for t in self.project.text_items if t.id == text_item_id), None)
+        if not text_obj:
+            return
+        cmd = PropertyChangeCommand(text_obj, {"text": new_text}, self._refresh_and_update, "Edit Label Text")
+        self.undo_stack.push(cmd)
 
     def _on_text_property_changed(self, changes):
         items = self.scene.selectedItems()
@@ -653,7 +880,7 @@ class MainWindow(QMainWindow):
             return
             
         cell_id = items[0].cell_id
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         
         if cell:
             row = next((r for r in self.project.rows if r.index == cell.row_index), None)
@@ -793,7 +1020,7 @@ class MainWindow(QMainWindow):
 
         # One command per cell (keeps undo/redo consistent with existing commands)
         for cell_item in selected_cells:
-            cell = next((c for c in self.project.cells if c.id == cell_item.cell_id), None)
+            cell = self.project.find_cell_by_id(cell_item.cell_id)
             if not cell:
                 continue
             if cell.is_placeholder and not cell.image_path:
@@ -830,7 +1057,7 @@ class MainWindow(QMainWindow):
             return
 
         # Regular cell context menu
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         if not cell:
             return
 
@@ -931,6 +1158,76 @@ class MainWindow(QMainWindow):
                 lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
             )
 
+        # --- Insert Row / Cell ---
+        menu.addSeparator()
+        insert_menu = menu.addMenu("Insert")
+
+        # Find top-level cell info for row/column operations
+        top_cell = cell
+        parent = self.project.find_parent_of(cell_id)
+        while parent:
+            top_cell = parent
+            parent = self.project.find_parent_of(parent.id)
+        ri = top_cell.row_index
+        ci = top_cell.col_index
+        row_temp = next((r for r in self.project.rows if r.index == ri), None)
+        col_count = row_temp.column_count if row_temp else 1
+
+        act_row_above = insert_menu.addAction("Row Above")
+        act_row_above.triggered.connect(lambda: self._on_insert_row(ri))
+
+        act_row_below = insert_menu.addAction("Row Below")
+        act_row_below.triggered.connect(lambda: self._on_insert_row(ri + 1))
+
+        insert_menu.addSeparator()
+
+        act_cell_left = insert_menu.addAction("Column Left")
+        act_cell_left.triggered.connect(lambda: self._on_insert_cell(ri, ci))
+
+        act_cell_right = insert_menu.addAction("Column Right")
+        act_cell_right.triggered.connect(lambda: self._on_insert_cell(ri, ci + 1))
+
+        # --- Sub-cell operations ---
+        # WrapAndInsertCommand handles both cases:
+        #   - If parent already splits in the requested direction → insert sibling
+        #   - Otherwise → wrap this cell in a new split container
+        insert_menu.addSeparator()
+        sub_menu = insert_menu.addMenu("Split / Sub-Cell")
+        act_sub_above = sub_menu.addAction("Cell Above")
+        act_sub_above.triggered.connect(
+            lambda: self._ctx_wrap_and_insert(cell_id, "vertical", "before"))
+        act_sub_below = sub_menu.addAction("Cell Below")
+        act_sub_below.triggered.connect(
+            lambda: self._ctx_wrap_and_insert(cell_id, "vertical", "after"))
+        act_sub_left = sub_menu.addAction("Cell Left")
+        act_sub_left.triggered.connect(
+            lambda: self._ctx_wrap_and_insert(cell_id, "horizontal", "before"))
+        act_sub_right = sub_menu.addAction("Cell Right")
+        act_sub_right.triggered.connect(
+            lambda: self._ctx_wrap_and_insert(cell_id, "horizontal", "after"))
+
+        cell_parent = self.project.find_parent_of(cell_id)
+
+        # --- Delete Row / Cell ---
+        delete_menu = menu.addMenu("Delete")
+
+        act_del_row = delete_menu.addAction("This Row")
+        if len(self.project.rows) <= 1:
+            act_del_row.setEnabled(False)
+            act_del_row.setToolTip("Cannot delete the last row")
+        act_del_row.triggered.connect(lambda: self._on_delete_row(ri))
+
+        act_del_cell = delete_menu.addAction("This Column")
+        if col_count <= 1:
+            act_del_cell.setEnabled(False)
+            act_del_cell.setToolTip("Cannot delete the last cell in a row")
+        act_del_cell.triggered.connect(lambda: self._on_delete_cell(ri, ci))
+
+        if cell_parent and len(cell_parent.children) > 1:
+            act_del_sub = delete_menu.addAction("This Sub-Cell")
+            act_del_sub.triggered.connect(
+                lambda: self._ctx_delete_subcell(cell_id))
+
         menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
 
     def _ctx_import_image(self, cell_id: str):
@@ -940,14 +1237,14 @@ class MainWindow(QMainWindow):
             "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf *.eps);;All Files (*)"
         )
         if path:
-            cell = next((c for c in self.project.cells if c.id == cell_id), None)
+            cell = self.project.find_cell_by_id(cell_id)
             if cell:
                 cmd = DropImageCommand(cell, path, self._refresh_and_update)
                 self.undo_stack.push(cmd)
 
     def _ctx_delete_image(self, cell_id: str):
         """Context menu: delete image from cell."""
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         if cell and (cell.image_path or not cell.is_placeholder):
             cmd = PropertyChangeCommand(
                 cell, {"image_path": None, "is_placeholder": True},
@@ -976,7 +1273,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         if cell:
             cmd = PropertyChangeCommand(
                 cell, {"nested_layout_path": path},
@@ -986,7 +1283,7 @@ class MainWindow(QMainWindow):
 
     def _ctx_delete_layout(self, cell_id: str):
         """Context menu: remove the nested layout from a cell."""
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         if cell and cell.nested_layout_path:
             cmd = PropertyChangeCommand(
                 cell, {"nested_layout_path": None},
@@ -1077,9 +1374,33 @@ class MainWindow(QMainWindow):
             cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
             self.undo_stack.push(cmd)
 
+    def _on_subcell_ratio_changed(self, cell_id: str, new_ratio: float):
+        """Inspector: change the size ratio of a sub-cell."""
+        cmd = ChangeSubCellRatioCommand(self.project, cell_id, new_ratio,
+                                         update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _ctx_wrap_and_insert(self, cell_id: str, direction: str, position: str):
+        """Context menu: wrap cell in a split and insert a new sibling."""
+        cmd = WrapAndInsertCommand(self.project, cell_id, direction, position,
+                                    update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _ctx_insert_subcell(self, cell_id: str, position: str):
+        """Context menu: insert a sibling sub-cell at the same nesting level."""
+        cmd = InsertSubCellCommand(self.project, cell_id, position,
+                                    update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _ctx_delete_subcell(self, cell_id: str):
+        """Context menu: delete a sub-cell."""
+        cmd = DeleteSubCellCommand(self.project, cell_id,
+                                    update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
     def _ctx_set_cell_prop(self, cell_id: str, changes: dict):
         """Context menu: set properties on a cell."""
-        cell = next((c for c in self.project.cells if c.id == cell_id), None)
+        cell = self.project.find_cell_by_id(cell_id)
         if cell:
             cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Change Cell Property")
             self.undo_stack.push(cmd)
@@ -1212,7 +1533,7 @@ class MainWindow(QMainWindow):
             for file_path in paths:
                 # Find first placeholder
                 target_cell = None
-                for cell in self.project.cells:
+                for cell in self.project.get_all_leaf_cells():
                     if cell.is_placeholder:
                         target_cell = cell
                         break

@@ -76,6 +76,11 @@ class Cell:
     # Nested layout (sub-figure from another .figlayout file)
     nested_layout_path: Optional[str] = None  # absolute path to .figlayout file
 
+    # Sub-cell hierarchy
+    children: List['Cell'] = field(default_factory=list)
+    split_direction: str = "none"  # "none" | "horizontal" | "vertical"
+    split_ratios: List[float] = field(default_factory=list)
+
     # Scale bar (microscopy)
     scale_bar_enabled: bool = False
     scale_bar_mode: str = "rgb"  # "rgb" | "bayer"
@@ -87,6 +92,18 @@ class Cell:
     scale_bar_offset_x: float = 2.0
     scale_bar_offset_y: float = 2.0
     
+    @property
+    def is_leaf(self) -> bool:
+        return len(self.children) == 0
+
+    def get_all_leaves(self) -> List['Cell']:
+        if self.is_leaf:
+            return [self]
+        result = []
+        for child in self.children:
+            result.extend(child.get_all_leaves())
+        return result
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -112,6 +129,9 @@ class Cell:
             "scale_bar_offset_x": self.scale_bar_offset_x,
             "scale_bar_offset_y": self.scale_bar_offset_y,
             "nested_layout_path": self.nested_layout_path,
+            "children": [c.to_dict() for c in self.children],
+            "split_direction": self.split_direction,
+            "split_ratios": self.split_ratios,
         }
 
     @classmethod
@@ -129,6 +149,11 @@ class Cell:
         payload.setdefault("scale_bar_offset_x", 2.0)
         payload.setdefault("scale_bar_offset_y", 2.0)
         payload.setdefault("nested_layout_path", None)
+        payload.setdefault("split_direction", "none")
+        payload.setdefault("split_ratios", [])
+        
+        # Handle children separately (recursive deserialization)
+        children_data = payload.pop("children", [])
         
         # Resolve image path: try absolute first, then relative to project file
         if payload.get("image_path") and project_dir:
@@ -140,7 +165,9 @@ class Cell:
                 if os.path.isfile(relative_path):
                     payload["image_path"] = relative_path
         
-        return cls(**payload)
+        cell = cls(**payload)
+        cell.children = [Cell.from_dict(c, project_dir) for c in children_data]
+        return cell
 
 @dataclass
 class RowTemplate:
@@ -207,6 +234,44 @@ class Project:
     corner_label_font_size: int = 12
     corner_label_font_weight: str = "bold"
     corner_label_color: str = "#000000"
+
+    def get_all_leaf_cells(self) -> List[Cell]:
+        result = []
+        for cell in self.cells:
+            result.extend(cell.get_all_leaves())
+        return result
+
+    def find_cell_by_id(self, cell_id: str) -> Optional[Cell]:
+        def _search(cell):
+            if cell.id == cell_id:
+                return cell
+            for child in cell.children:
+                found = _search(child)
+                if found:
+                    return found
+            return None
+        for cell in self.cells:
+            found = _search(cell)
+            if found:
+                return found
+        return None
+
+    def find_parent_of(self, cell_id: str) -> Optional[Cell]:
+        def _search(parent, target_id):
+            for child in parent.children:
+                if child.id == target_id:
+                    return parent
+                found = _search(child, target_id)
+                if found:
+                    return found
+            return None
+        for cell in self.cells:
+            if cell.id == cell_id:
+                return None  # Top-level cell has no parent
+            found = _search(cell, cell_id)
+            if found:
+                return found
+        return None
 
     def to_dict(self) -> Dict[str, Any]:
         return {

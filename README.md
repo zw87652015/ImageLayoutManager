@@ -17,6 +17,8 @@ ImageLayoutManager is a PyQt6 desktop tool for producing consistent, publication
 
 Additional highlights:
 
+- **Hierarchical cell splitting**
+  Split cells infinitely in vertical or horizontal stacks with proportional sizing. Label cells can be added above sub-cell groups without disrupting the layout.
 - **WYSIWYG export**
   PDF and raster exports are designed to match the on-canvas layout and label placement.
 - **Vector image import (SVG)**
@@ -55,15 +57,16 @@ python main.py
 Typical workflow:
 
 1. **Create a new layout**
-2. **Add images**
-3. **Adjust spacing/alignment**
-4. **Save the layout** (so it can be reproduced)
-5. **Export** to the target format
+2. **Add images** to cells
+3. **Split cells** into sub-cells via right-click menu (vertical/horizontal stacks with adjustable ratios)
+4. **Adjust spacing/alignment** and sub-cell size ratios in the inspector
+5. **Save the layout** (so it can be reproduced)
+6. **Export** to the target format
 
 ## File types
 
 - Layout files are stored as `*.figlayout` (ignored by default in `.gitignore` in this repo).
-- Supported image imports include common raster formats (PNG/JPG/TIFF/...) and **SVG**.
+- Supported image imports include common raster formats (PNG/JPG/TIFF/...) and SVG.
 - Exports include:
   - `*.pdf`
   - `*.tif` / `*.tiff`
@@ -73,11 +76,6 @@ Notes:
 
 - **DPI** mainly affects raster exports (TIFF/JPG) by controlling output pixel dimensions.
 - PDF export is page-size based; DPI affects internal rendering resolution but not the intended physical layout size.
-
-## Contributing
-
-- Keep changes minimal and reproducible.
-- Prefer deterministic layout outputs.
 
 ## License
 

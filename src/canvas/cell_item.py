@@ -84,8 +84,43 @@ class CellItem(QGraphicsRectItem):
             super().mousePressEvent(event)
             return
         if event.button() == Qt.MouseButton.LeftButton:
+            # Shift+Click: range select between last selected and this cell
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                scene = self.scene()
+                if scene and hasattr(scene, 'cell_items'):
+                    self._do_shift_select(scene)
+                    event.accept()
+                    return
             self._drag_start_pos = event.screenPos()
         super().mousePressEvent(event)
+
+    def _do_shift_select(self, scene):
+        """Select all cells between the last selected cell and this cell in row-major order."""
+        from src.canvas.cell_item import CellItem
+        # Get currently selected cell items (non-label)
+        selected = [i for i in scene.selectedItems()
+                    if isinstance(i, CellItem) and not i.is_label_cell]
+        if not selected:
+            self.setSelected(True)
+            return
+
+        # Build sorted list of all cell items by (row, col) from their cell_id
+        all_items = sorted(
+            [i for i in scene.cell_items.values() if not i.is_label_cell],
+            key=lambda i: (i.pos().y(), i.pos().x())
+        )
+        id_to_idx = {i.cell_id: idx for idx, i in enumerate(all_items)}
+
+        # Find the anchor (first selected) and this cell in the sorted order
+        anchor_idx = id_to_idx.get(selected[0].cell_id, 0)
+        this_idx = id_to_idx.get(self.cell_id, 0)
+
+        lo, hi = min(anchor_idx, this_idx), max(anchor_idx, this_idx)
+
+        # Select the range
+        scene.clearSelection()
+        for idx in range(lo, hi + 1):
+            all_items[idx].setSelected(True)
 
     def mouseMoveEvent(self, event):
         if self.is_label_cell:
@@ -522,8 +557,37 @@ class CellItem(QGraphicsRectItem):
             painter.drawText(dev_text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, text)
             painter.restore()
 
+    def _update_tooltip(self):
+        """Build tooltip from image metadata."""
+        import os
+        if self.is_label_cell:
+            self.setToolTip(f"Label: {self.label_text}" if self.label_text else "Label Cell")
+            return
+        if self.nested_layout_path:
+            name = os.path.basename(self.nested_layout_path) if self.nested_layout_path else ""
+            self.setToolTip(f"Nested Layout: {name}")
+            return
+        if not self.image_path or self.is_placeholder:
+            self.setToolTip("")
+            return
+        try:
+            name = os.path.basename(self.image_path)
+            parts = [name]
+            if self._pixmap and not self._pixmap.isNull():
+                parts.append(f"{self._pixmap.width()}×{self._pixmap.height()} px")
+            if os.path.exists(self.image_path):
+                size_bytes = os.path.getsize(self.image_path)
+                if size_bytes >= 1_048_576:
+                    parts.append(f"{size_bytes / 1_048_576:.1f} MB")
+                else:
+                    parts.append(f"{size_bytes / 1024:.0f} KB")
+            self.setToolTip("\n".join(parts))
+        except Exception:
+            self.setToolTip("")
+
     def hoverEnterEvent(self, event):
         self.is_hovered = True
+        self._update_tooltip()
         self.update()
         super().hoverEnterEvent(event)
 

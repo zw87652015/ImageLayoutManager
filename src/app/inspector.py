@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QFormLayout, QHBoxLayout,
     QLabel, QSpinBox, QDoubleSpinBox, QComboBox, 
-    QLineEdit, QPushButton, QCheckBox
+    QLineEdit, QPushButton, QCheckBox, QScrollArea
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from src.model.enums import FitMode
@@ -14,11 +14,27 @@ class Inspector(QWidget):
     project_property_changed = pyqtSignal(dict) # {property: value}
     corner_label_changed = pyqtSignal(dict) # {"anchor": str, "text": str}
     apply_color_to_group = pyqtSignal(str, str) # (subtype, color_hex) - apply color to all labels in group
+    label_text_changed = pyqtSignal(str, str) # (text_item_id, new_text)
+    subcell_ratio_changed = pyqtSignal(str, float) # (cell_id, new_ratio) - change a sub-cell's size ratio
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        outer.addWidget(scroll)
+
+        container = QWidget()
+        self.layout = QVBoxLayout(container)
         self.layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(container)
+
+        self.setMinimumWidth(220)
         
         # --- Project Settings Group (Default View) ---
         self.project_group = QGroupBox("Project Settings")
@@ -238,6 +254,12 @@ class Inspector(QWidget):
         self.label_cell_group = QGroupBox("Label Cell Settings")
         self.label_cell_layout = QFormLayout()
 
+        self._current_label_text_id = None  # Track which text item is being edited
+        self.label_text_edit = QLineEdit()
+        self.label_text_edit.setPlaceholderText("Label text")
+        self.label_text_edit.editingFinished.connect(self._on_label_text_edited)
+        self.label_cell_layout.addRow("Text:", self.label_text_edit)
+
         self.label_scheme = QComboBox()
         self.label_scheme.addItems(["(a)", "(A)", "a", "A"])
         self.label_scheme.currentTextChanged.connect(
@@ -326,13 +348,6 @@ class Inspector(QWidget):
         self.row_group = QGroupBox("Row Settings")
         self.row_layout = QFormLayout()
         
-        self.row_cols = QSpinBox()
-        self.row_cols.setRange(1, 100)
-        self.row_cols.valueChanged.connect(
-            lambda v: self.row_property_changed.emit({"column_count": v})
-        )
-        self.row_layout.addRow("Columns:", self.row_cols)
-        
         self.row_height = QDoubleSpinBox()
         self.row_height.setRange(0.1, 10.0)
         self.row_height.setSingleStep(0.1)
@@ -351,6 +366,26 @@ class Inspector(QWidget):
         self.layout.addWidget(self.row_group)
         self.row_group.hide()
         
+        # --- Sub-Cell Settings Group ---
+        self.subcell_group = QGroupBox("Sub-Cell Settings")
+        self.subcell_layout = QFormLayout()
+
+        self._subcell_id = None  # Track which sub-cell is selected
+
+        self.subcell_info_label = QLabel("")
+        self.subcell_layout.addRow(self.subcell_info_label)
+
+        self.subcell_ratio = QDoubleSpinBox()
+        self.subcell_ratio.setRange(0.1, 20.0)
+        self.subcell_ratio.setSingleStep(0.1)
+        self.subcell_ratio.setDecimals(2)
+        self.subcell_ratio.valueChanged.connect(self._emit_subcell_ratio)
+        self.subcell_layout.addRow("Size Ratio:", self.subcell_ratio)
+
+        self.subcell_group.setLayout(self.subcell_layout)
+        self.layout.addWidget(self.subcell_group)
+        self.subcell_group.hide()
+
         # --- Text Properties Group ---
         self.text_group = QGroupBox("Selected Text")
         self.text_layout = QFormLayout()
@@ -428,6 +463,17 @@ class Inspector(QWidget):
         self.no_selection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(self.no_selection_label)
 
+        # --- Multi-selection info ---
+        self.multi_label = QLabel("")
+        self.multi_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.multi_label.hide()
+        self.layout.addWidget(self.multi_label)
+
+        # Make main groups collapsible
+        self._make_collapsible(self.project_group)
+        self._make_collapsible(self.cell_group)
+        self._make_collapsible(self.row_group)
+
     def _emit_project_margins(self):
         self.project_property_changed.emit({
             "margin_top_mm": self.m_top.value(),
@@ -441,6 +487,26 @@ class Inspector(QWidget):
         sb.setRange(min_val, max_val)
         sb.valueChanged.connect(callback)
         return sb
+
+    @staticmethod
+    def _make_collapsible(group_box: QGroupBox):
+        """Make a QGroupBox collapsible via its checkbox."""
+        group_box.setCheckable(True)
+        group_box.setChecked(True)
+        def _toggle(checked):
+            layout = group_box.layout()
+            if not layout:
+                return
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                if item.widget():
+                    item.widget().setVisible(checked)
+                elif item.layout():
+                    for j in range(item.layout().count()):
+                        sub = item.layout().itemAt(j)
+                        if sub and sub.widget():
+                            sub.widget().setVisible(checked)
+        group_box.toggled.connect(_toggle)
 
     def _emit_padding(self):
         self.cell_property_changed.emit({
@@ -465,6 +531,10 @@ class Inspector(QWidget):
             "scale_bar_offset_x": self.scale_bar_offset_x.value(),
             "scale_bar_offset_y": self.scale_bar_offset_y.value(),
         })
+
+    def _emit_subcell_ratio(self, value):
+        if self._subcell_id:
+            self.subcell_ratio_changed.emit(self._subcell_id, value)
 
     def _emit_column_ratios(self):
         text = self.col_ratios_edit.text().strip()
@@ -529,6 +599,11 @@ class Inspector(QWidget):
         # subtype is None for numbering labels, "corner" for corner labels
         self.apply_color_to_group.emit(self._current_text_subtype or "numbering", color_hex)
 
+    def _on_label_text_edited(self):
+        """Handle label text edit in the Label Cell Settings panel."""
+        if self._current_label_text_id:
+            self.label_text_changed.emit(self._current_label_text_id, self.label_text_edit.text())
+
     def set_selection(self, item_type, data=None, row_data=None, project_data=None):
         """
         item_type: 'cell' | 'label_cell' | 'text' | None
@@ -536,16 +611,44 @@ class Inspector(QWidget):
         row_data: dict of row values (only if item_type is 'cell')
         project_data: dict of project values (always passed or only when item_type is None)
         """
+        self.multi_label.hide()
+
+        if item_type == 'multi_cell':
+            self.no_selection_label.hide()
+            self.project_group.hide()
+            self.text_group.hide()
+            self.label_cell_group.hide()
+            self.row_group.hide()
+            self.subcell_group.hide()
+            count = data.get('count', 0) if data else 0
+            self.multi_label.setText(f"<b>{count} cells selected</b>\nChanges apply to all selected cells.")
+            self.multi_label.show()
+            # Show cell group for bulk editing
+            self.cell_group.show()
+            if data:
+                self.blockSignals(True)
+                self.fit_mode_combo.setCurrentText(data.get("fit_mode", "contain"))
+                self.rotation_combo.setCurrentText(str(data.get("rotation", 0)))
+                self.pad_top.setValue(data.get("padding_top", 0))
+                self.pad_bottom.setValue(data.get("padding_bottom", 0))
+                self.pad_left.setValue(data.get("padding_left", 0))
+                self.pad_right.setValue(data.get("padding_right", 0))
+                self.blockSignals(False)
+            return
+
         if item_type == 'label_cell':
             self.no_selection_label.hide()
             self.project_group.hide()
             self.cell_group.hide()
             self.row_group.hide()
             self.text_group.hide()
+            self.subcell_group.hide()
             self.label_cell_group.show()
 
             if data:
                 self.blockSignals(True)
+                self._current_label_text_id = data.get("text_item_id")
+                self.label_text_edit.setText(data.get("label_text", ""))
                 self.label_scheme.setCurrentText(data.get("label_scheme", "(a)"))
                 self.label_font.setCurrentText(data.get("label_font_family", "Arial"))
                 self.label_size.setValue(data.get("label_font_size", 12))
@@ -573,7 +676,6 @@ class Inspector(QWidget):
             if row_data:
                 self.row_group.show()
                 self.blockSignals(True)
-                self.row_cols.setValue(row_data.get("column_count", 1))
                 self.row_height.setValue(row_data.get("height_ratio", 1.0))
                 # Column ratios
                 col_ratios = row_data.get("column_ratios", [])
@@ -584,6 +686,28 @@ class Inspector(QWidget):
                 self.blockSignals(False)
             else:
                 self.row_group.hide()
+
+            # Show sub-cell settings if this cell is inside a split parent
+            subcell_data = data.get("_subcell") if data else None
+            if subcell_data:
+                self.subcell_group.show()
+                self.blockSignals(True)
+                self._subcell_id = subcell_data.get("cell_id")
+                direction = subcell_data.get("direction", "")
+                sibling_count = subcell_data.get("sibling_count", 0)
+                sibling_index = subcell_data.get("sibling_index", 0)
+                dim = "Height" if direction == "vertical" else "Width"
+                self.subcell_info_label.setText(
+                    f"Split: {direction}  |  {sibling_index + 1} of {sibling_count}")
+                self.subcell_ratio.setValue(subcell_data.get("ratio", 1.0))
+                # Update label to reflect dimension
+                label = self.subcell_layout.labelForField(self.subcell_ratio)
+                if label:
+                    label.setText(f"{dim} Ratio:")
+                self.blockSignals(False)
+            else:
+                self.subcell_group.hide()
+                self._subcell_id = None
             
             # Block signals to prevent feedback loop
             self.blockSignals(True)
@@ -621,6 +745,7 @@ class Inspector(QWidget):
             self.cell_group.hide()
             self.row_group.hide()
             self.label_cell_group.hide()
+            self.subcell_group.hide()
             self.text_group.show()
             
             self.blockSignals(True)
@@ -657,6 +782,7 @@ class Inspector(QWidget):
         else:
             self.cell_group.hide()
             self.row_group.hide()
+            self.subcell_group.hide()
             self.text_group.hide()
             self.label_cell_group.hide()
             self.no_selection_label.hide() # We show project settings instead

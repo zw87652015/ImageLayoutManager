@@ -8,6 +8,7 @@ class LayoutResult:
     row_heights: Dict[int, float]
     figure_rects: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
     label_rects: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
+    row_rects: Dict[int, Tuple[float, float, float, float]] = field(default_factory=dict)  # row_index -> (x, y, w, h)
 
 class LayoutEngine:
     @staticmethod
@@ -142,10 +143,105 @@ class LayoutEngine:
                 col_w = col_widths[cell.col_index]
                 cell_rects[cell.id] = (x_pos, pic_y, col_w, pic_h)
 
-                # Label cell rect: only for cells that have a numbering label
-                if label_row_above and lbl_y is not None and cell.id in labeled_cell_ids:
+                # Label cell rect: only for top-level leaf cells that have a numbering label
+                if label_row_above and lbl_y is not None and cell.id in labeled_cell_ids and cell.is_leaf:
                     label_rects[cell.id] = (x_pos, lbl_y, col_w, lbl_h)
+
+                # Recursively layout sub-cells
+                if not cell.is_leaf:
+                    LayoutEngine._layout_subcells(
+                        cell, (x_pos, pic_y, col_w, pic_h),
+                        gap_mm, cell_rects, label_rects,
+                        labeled_cell_ids, label_row_above, label_row_h
+                    )
 
         figure_rects: Dict[str, Tuple[float, float, float, float]] = dict(cell_rects)
 
-        return LayoutResult(cell_rects, row_heights, figure_rects=figure_rects, label_rects=label_rects)
+        # Compute row bounding rects
+        row_rects: Dict[int, Tuple[float, float, float, float]] = {}
+        for _lbl_y, _lbl_h, pic_y, pic_h, r_temp in calculated_row_geometries:
+            row_rects[r_temp.index] = (project.margin_left_mm, pic_y, content_width, pic_h)
+
+        return LayoutResult(cell_rects, row_heights, figure_rects=figure_rects, label_rects=label_rects, row_rects=row_rects)
+
+    @staticmethod
+    def _layout_subcells(
+        parent_cell: 'Cell',
+        parent_rect: Tuple[float, float, float, float],
+        gap_mm: float,
+        cell_rects: Dict[str, Tuple[float, float, float, float]],
+        label_rects: Dict[str, Tuple[float, float, float, float]],
+        labeled_cell_ids: set,
+        label_row_above: bool,
+        label_row_h: float,
+    ):
+        """Recursively compute geometry for sub-cells within a parent cell."""
+        children = parent_cell.children
+        if not children:
+            return
+
+        px, py, pw, ph = parent_rect
+        n = len(children)
+        ratios = list(parent_cell.split_ratios) if parent_cell.split_ratios else [1.0] * n
+        while len(ratios) < n:
+            ratios.append(1.0)
+        ratios = ratios[:n]
+        total_ratio = sum(ratios)
+        if total_ratio <= 0:
+            total_ratio = float(n)
+
+        total_gap = (n - 1) * gap_mm if n > 1 else 0.0
+
+        if parent_cell.split_direction == "vertical":
+            # --- Vertical stacking: divide height ---
+            # Account for label rows above leaf children
+            label_space = 0.0
+            if label_row_above:
+                for child in children:
+                    if child.is_leaf and child.id in labeled_cell_ids:
+                        label_space += label_row_h + gap_mm
+
+            available = ph - total_gap - label_space
+            if available < 0:
+                available = 0
+            current_y = py
+            for i, child in enumerate(children):
+                # Label rect for this child (above it)
+                if label_row_above and child.is_leaf and child.id in labeled_cell_ids:
+                    label_rects[child.id] = (px, current_y, pw, label_row_h)
+                    current_y += label_row_h + gap_mm
+
+                child_h = (ratios[i] / total_ratio) * available
+                child_rect = (px, current_y, pw, child_h)
+                cell_rects[child.id] = child_rect
+
+                if not child.is_leaf:
+                    LayoutEngine._layout_subcells(
+                        child, child_rect, gap_mm, cell_rects,
+                        label_rects, labeled_cell_ids, label_row_above, label_row_h
+                    )
+                current_y += child_h + gap_mm
+
+        elif parent_cell.split_direction == "horizontal":
+            # --- Horizontal stacking: divide width ---
+            available = pw - total_gap
+            if available < 0:
+                available = 0
+            current_x = px
+            for i, child in enumerate(children):
+                child_w = (ratios[i] / total_ratio) * available
+                child_rect = (current_x, py, child_w, ph)
+                cell_rects[child.id] = child_rect
+
+                # Label rect for leaf children in horizontal split
+                if label_row_above and child.is_leaf and child.id in labeled_cell_ids:
+                    # For horizontal children, labels go above the parent rect area
+                    # We cannot add extra height here, so labels share the parent's label row if any
+                    pass  # Labels for horizontal sub-cells handled at parent level
+
+                if not child.is_leaf:
+                    LayoutEngine._layout_subcells(
+                        child, child_rect, gap_mm, cell_rects,
+                        label_rects, labeled_cell_ids, label_row_above, label_row_h
+                    )
+                current_x += child_w + gap_mm

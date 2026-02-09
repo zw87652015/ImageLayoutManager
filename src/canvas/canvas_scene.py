@@ -7,17 +7,21 @@ from src.canvas.cell_item import CellItem
 from src.canvas.text_graphics_item import TextGraphicsItem
 from src.model.layout_engine import LayoutEngine
 from src.canvas.drag_manager import DragManager
+from src.canvas.add_button_item import AddButtonItem
 
 class CanvasScene(QGraphicsScene):
     # Signals
     cell_dropped = pyqtSignal(str, str) # cell_id, file_path
     cell_swapped = pyqtSignal(str, str) # cell_id_1, cell_id_2
+    multi_cells_swapped = pyqtSignal(list, list) # source_ids, target_ids
     new_image_dropped = pyqtSignal(str, float, float) # file_path, x, y (for creating new cells)
     project_file_dropped = pyqtSignal(str) # file_path for .figlayout files
     text_item_changed = pyqtSignal(str, dict) # text_item_id, changes_dict
     selection_changed_custom = pyqtSignal(list) # list of selected item ids
     cell_context_menu = pyqtSignal(str, bool, object) # cell_id, is_label_cell, QPointF(screen_pos)
     nested_layout_open_requested = pyqtSignal(str, str) # cell_id, figlayout_path
+    insert_row_requested = pyqtSignal(int)   # insert at row_index
+    insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -25,10 +29,12 @@ class CanvasScene(QGraphicsScene):
         self.cell_items = {} # id -> CellItem
         self.label_cell_items = {} # "label_{cell_id}" -> CellItem (label-only cells)
         self.text_items = {} # id -> TextGraphicsItem
+        self._add_buttons = [] # list of AddButtonItem
         
         # Drag manager (animated cell swap)
         self.drag_manager = DragManager(self)
         self.drag_manager.swap_requested.connect(self.cell_swapped.emit)
+        self.drag_manager.multi_swap_requested.connect(self.multi_cells_swapped.emit)
 
         # Background
         self.setBackgroundBrush(QBrush(QColor("#E0E0E0"))) # Grey workspace background
@@ -80,11 +86,13 @@ class CanvasScene(QGraphicsScene):
         self.margin_item.setRect(m_rect)
             
         layout_result = LayoutEngine.calculate_layout(self.project)
+        self._last_layout_result = layout_result
         
-        # Sync Cell Items
+        # Sync Cell Items (only leaf cells are rendered on canvas)
+        all_leaf_cells = self.project.get_all_leaf_cells()
         # 1. Remove cells not in project
         existing_ids = set(self.cell_items.keys())
-        project_ids = set(c.id for c in self.project.cells)
+        project_ids = set(c.id for c in all_leaf_cells)
         
         to_remove = existing_ids - project_ids
         for cid in to_remove:
@@ -92,7 +100,7 @@ class CanvasScene(QGraphicsScene):
             del self.cell_items[cid]
             
         # 2. Add/Update cells
-        for cell in self.project.cells:
+        for cell in all_leaf_cells:
             if cell.id not in self.cell_items:
                 item = CellItem(cell.id)
                 self.addItem(item)
@@ -230,7 +238,7 @@ class CanvasScene(QGraphicsScene):
                     attach_to = getattr(self.project, 'label_attach_to', 'figure')
                     if attach_to == "figure":
                         # Find the cell to get padding
-                        cell = next((c for c in self.project.cells if c.id == text_model.parent_id), None)
+                        cell = self.project.find_cell_by_id(text_model.parent_id)
                         if cell:
                             # Adjust bounds to content area (inside padding)
                             cx = cx + cell.padding_left
@@ -274,6 +282,9 @@ class CanvasScene(QGraphicsScene):
                 # Global text: use absolute x,y
                 t_item.setPos(text_model.x, text_model.y)
                 t_item.scope = "global"
+
+        # Place add-row / add-cell buttons around the layout
+        self._refresh_add_buttons(layout_result)
 
     def dragEnterEvent(self, event: QGraphicsSceneDragDropEvent):
         if event.mimeData().hasUrls():
@@ -324,6 +335,78 @@ class CanvasScene(QGraphicsScene):
             event.accept()
         else:
             super().dropEvent(event)
+
+    def _refresh_add_buttons(self, layout_result):
+        """Create / reposition the '+' buttons around the layout."""
+        # Remove old buttons
+        for btn in self._add_buttons:
+            self.removeItem(btn)
+        self._add_buttons.clear()
+
+        if not self.project or not layout_result.row_rects:
+            return
+
+        T = AddButtonItem.THICKNESS
+        GAP = 1.5  # spacing between layout edge and button (mm)
+
+        sorted_rows = sorted(layout_result.row_rects.items(), key=lambda kv: kv[0])
+        content_width = self.project.page_width_mm - self.project.margin_left_mm - self.project.margin_right_mm
+        margin_left = self.project.margin_left_mm
+
+        # Row buttons: wide horizontal bars spanning content width
+        row_btn_w = content_width
+        row_btn_h = T
+
+        # --- Add Row Above (above first row) ---
+        if sorted_rows:
+            first_y = sorted_rows[0][1][1]
+            btn = AddButtonItem("row_above", width=row_btn_w, height=row_btn_h,
+                                row_index=sorted_rows[0][0])
+            btn.setPos(margin_left, first_y - row_btn_h - GAP)
+            self.addItem(btn)
+            self._add_buttons.append(btn)
+
+        # --- Add Row Below (below last row) ---
+        if sorted_rows:
+            last_idx, (_, last_y, _, last_h) = sorted_rows[-1]
+            btn = AddButtonItem("row_below", width=row_btn_w, height=row_btn_h,
+                                row_index=last_idx)
+            btn.setPos(margin_left, last_y + last_h + GAP)
+            self.addItem(btn)
+            self._add_buttons.append(btn)
+
+        # --- Per-row: Add Cell Left / Right (tall vertical bars spanning row height) ---
+        for row_idx, (rx, ry, rw, rh) in sorted_rows:
+            row_temp = next((r for r in self.project.rows if r.index == row_idx), None)
+            col_count = row_temp.column_count if row_temp else 1
+
+            cell_btn_w = T
+            cell_btn_h = rh
+
+            # Left button
+            btn_l = AddButtonItem("cell_left", width=cell_btn_w, height=cell_btn_h,
+                                  row_index=row_idx, col_index=0)
+            btn_l.setPos(rx - cell_btn_w - GAP, ry)
+            self.addItem(btn_l)
+            self._add_buttons.append(btn_l)
+
+            # Right button
+            btn_r = AddButtonItem("cell_right", width=cell_btn_w, height=cell_btn_h,
+                                  row_index=row_idx, col_index=col_count)
+            btn_r.setPos(rx + rw + GAP, ry)
+            self.addItem(btn_r)
+            self._add_buttons.append(btn_r)
+
+    def _on_add_button_clicked(self, action: str, row_index: int, col_index: int):
+        """Called by AddButtonItem when clicked."""
+        if action == "row_above":
+            self.insert_row_requested.emit(row_index)
+        elif action == "row_below":
+            self.insert_row_requested.emit(row_index + 1)
+        elif action == "cell_left":
+            self.insert_cell_requested.emit(row_index, col_index)
+        elif action == "cell_right":
+            self.insert_cell_requested.emit(row_index, col_index)
 
     def _on_text_item_changed(self, text_item_id: str, changes: dict):
         """Forward text item changes to MainWindow via signal"""

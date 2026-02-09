@@ -12,8 +12,8 @@ class AutoLabel:
         # 1. Calculate Layout to know where cells are
         layout = LayoutEngine.calculate_layout(project)
         
-        # 2. Sort cells by row, then col
-        sorted_cells = sorted(project.cells, key=lambda c: (c.row_index, c.col_index))
+        # 2. Sort leaf cells by row, then col (includes sub-cells)
+        sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: (c.row_index, c.col_index))
         
         # 3. Generate labels
         start_char = 'a'
