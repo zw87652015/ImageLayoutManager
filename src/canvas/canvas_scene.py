@@ -1,11 +1,12 @@
 from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent
 from PyQt6.QtGui import QColor, QPen, QBrush, QPainter
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QMimeData, QUrl
+from PyQt6.QtCore import Qt, pyqtSignal, QRectF
 
 from src.model.data_model import Project, Cell
 from src.canvas.cell_item import CellItem
 from src.canvas.text_graphics_item import TextGraphicsItem
 from src.model.layout_engine import LayoutEngine
+from src.canvas.drag_manager import DragManager
 
 class CanvasScene(QGraphicsScene):
     # Signals
@@ -25,6 +26,10 @@ class CanvasScene(QGraphicsScene):
         self.label_cell_items = {} # "label_{cell_id}" -> CellItem (label-only cells)
         self.text_items = {} # id -> TextGraphicsItem
         
+        # Drag manager (animated cell swap)
+        self.drag_manager = DragManager(self)
+        self.drag_manager.swap_requested.connect(self.cell_swapped.emit)
+
         # Background
         self.setBackgroundBrush(QBrush(QColor("#E0E0E0"))) # Grey workspace background
         
@@ -271,19 +276,19 @@ class CanvasScene(QGraphicsScene):
                 t_item.scope = "global"
 
     def dragEnterEvent(self, event: QGraphicsSceneDragDropEvent):
-        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-cell-id"):
+        if event.mimeData().hasUrls():
             event.accept()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event: QGraphicsSceneDragDropEvent):
-        if event.mimeData().hasUrls() or event.mimeData().hasFormat("application/x-cell-id"):
+        if event.mimeData().hasUrls():
             event.accept()
         else:
             event.ignore()
 
     def dropEvent(self, event: QGraphicsSceneDragDropEvent):
-        # Handle File Drop (External)
+        # Handle File Drop (External only — internal cell swap is handled by DragManager)
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if not urls:
@@ -317,25 +322,6 @@ class CanvasScene(QGraphicsScene):
                 self.new_image_dropped.emit(local_path, pos.x(), pos.y())
                 
             event.accept()
-            
-        # Handle Cell Swap (Internal)
-        elif event.mimeData().hasFormat("application/x-cell-id"):
-            source_id = event.mimeData().data("application/x-cell-id").data().decode('utf-8')
-            
-            pos = event.scenePos()
-            items = self.items(pos)
-            target_cell_id = None
-            
-            for item in items:
-                if isinstance(item, CellItem) and not item.is_label_cell:
-                    target_cell_id = item.cell_id
-                    break
-            
-            if target_cell_id and target_cell_id != source_id:
-                self.cell_swapped.emit(source_id, target_cell_id)
-                event.accept()
-            else:
-                event.ignore()
         else:
             super().dropEvent(event)
 

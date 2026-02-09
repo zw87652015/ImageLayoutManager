@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphicsItem
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QDrag, QFont
-from PyQt6.QtCore import Qt, QRectF, QMimeData, QPointF
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont
+from PyQt6.QtCore import Qt, QRectF, QPointF
 
 from src.model.enums import FitMode
 from src.utils.image_proxy import get_image_proxy
@@ -94,7 +94,9 @@ class CellItem(QGraphicsRectItem):
         if self._drag_start_pos:
             dist = (event.screenPos() - self._drag_start_pos).manhattanLength()
             if dist > 10: # Drag threshold
-                self._start_drag()
+                scene = self.scene()
+                if scene and hasattr(scene, 'drag_manager'):
+                    scene.drag_manager.start_drag(self, event.scenePos())
                 self._drag_start_pos = None
                 return
         super().mouseMoveEvent(event)
@@ -110,23 +112,6 @@ class CellItem(QGraphicsRectItem):
     def mouseReleaseEvent(self, event):
         self._drag_start_pos = None
         super().mouseReleaseEvent(event)
-
-    def _start_drag(self):
-        drag = QDrag(self.scene().views()[0])
-        mime_data = QMimeData()
-        mime_data.setText(self.cell_id) # Transfer cell ID
-        mime_data.setData("application/x-cell-id", self.cell_id.encode('utf-8'))
-        drag.setMimeData(mime_data)
-        
-        # Create a small pixmap for drag
-        pixmap = self._pixmap.scaled(100, 100, Qt.AspectRatioMode.KeepAspectRatio) if (self._pixmap and not self._pixmap.isNull()) else QPixmap(50, 50)
-        if pixmap.isNull():
-            pixmap.fill(QColor("#CCCCCC"))
-        
-        drag.setPixmap(pixmap)
-        drag.setHotSpot(pixmap.rect().center())
-        
-        drag.exec(Qt.DropAction.MoveAction)
 
     def update_data(self, image_path, fit_mode, padding, is_placeholder, rotation=0, align_h="center", align_v="center",
                      scale_bar_enabled=False, scale_bar_mode="rgb", scale_bar_length_um=10.0,
