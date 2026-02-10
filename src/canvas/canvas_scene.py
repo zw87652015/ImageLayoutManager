@@ -234,13 +234,13 @@ class CanvasScene(QGraphicsScene):
                 if text_model.parent_id in layout_result.cell_rects:
                     cx, cy, cw, ch = layout_result.cell_rects[text_model.parent_id]
 
-                    # Check attachment mode: "figure" uses content area (inside padding), "grid" uses cell boundary
+                    # Corner labels always anchor to cell boundary (ignore padding).
+                    # Other labels respect the attach_to setting.
+                    is_corner = getattr(text_model, 'subtype', None) == 'corner'
                     attach_to = getattr(self.project, 'label_attach_to', 'figure')
-                    if attach_to == "figure":
-                        # Find the cell to get padding
+                    if attach_to == "figure" and not is_corner:
                         cell = self.project.find_cell_by_id(text_model.parent_id)
                         if cell:
-                            # Adjust bounds to content area (inside padding)
                             cx = cx + cell.padding_left
                             cy = cy + cell.padding_top
                             cw = cw - cell.padding_left - cell.padding_right

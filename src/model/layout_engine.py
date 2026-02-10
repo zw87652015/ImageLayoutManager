@@ -157,10 +157,16 @@ class LayoutEngine:
 
         figure_rects: Dict[str, Tuple[float, float, float, float]] = dict(cell_rects)
 
-        # Compute row bounding rects
+        # Compute row bounding rects (include label row above if present)
         row_rects: Dict[int, Tuple[float, float, float, float]] = {}
         for _lbl_y, _lbl_h, pic_y, pic_h, r_temp in calculated_row_geometries:
-            row_rects[r_temp.index] = (project.margin_left_mm, pic_y, content_width, pic_h)
+            if _lbl_y is not None:
+                # Label row sits above picture row; include both in the bounding rect
+                top_y = _lbl_y
+                total_h = (pic_y - _lbl_y) + pic_h
+                row_rects[r_temp.index] = (project.margin_left_mm, top_y, content_width, total_h)
+            else:
+                row_rects[r_temp.index] = (project.margin_left_mm, pic_y, content_width, pic_h)
 
         return LayoutResult(cell_rects, row_heights, figure_rects=figure_rects, label_rects=label_rects, row_rects=row_rects)
 

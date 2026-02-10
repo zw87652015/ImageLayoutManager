@@ -19,3 +19,4 @@ __pycache__/
 .env
 venv/
 .venv
+/dist_nuitka
