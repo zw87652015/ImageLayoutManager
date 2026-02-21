@@ -541,6 +541,7 @@ class WrapAndInsertCommand(QUndoCommand):
         self.update_callback = update_callback
         import copy
         self.old_cells = copy.deepcopy(project.cells)
+        self.old_text_items = copy.deepcopy(project.text_items)
 
     def redo(self):
         from src.model.data_model import Cell
@@ -563,8 +564,10 @@ class WrapAndInsertCommand(QUndoCommand):
         else:
             # Need to wrap: replace this cell in-place with a split container
             # Save current cell state into a clone
-            import copy
+            import copy, uuid
+            old_id = cell.id
             clone = copy.deepcopy(cell)
+            clone.id = str(uuid.uuid4())  # New ID to avoid collision with container
             new_cell = Cell(is_placeholder=True)
 
             if self.position == "before":
@@ -581,12 +584,18 @@ class WrapAndInsertCommand(QUndoCommand):
             cell.nested_layout_path = None
             cell.scale_bar_enabled = False
 
+            # Re-point text items that referenced the original cell to the clone
+            for t in self.project.text_items:
+                if t.parent_id == old_id and t.scope == "cell":
+                    t.parent_id = clone.id
+
         if self.update_callback:
             self.update_callback()
 
     def undo(self):
         import copy
         self.project.cells[:] = copy.deepcopy(self.old_cells)
+        self.project.text_items[:] = copy.deepcopy(self.old_text_items)
         if self.update_callback:
             self.update_callback()
 
@@ -649,14 +658,15 @@ class AutoLayoutCommand(QUndoCommand):
         self.project = project
         self.update_callback = update_callback
         
-        # Snapshot rows settings and page height
+        # Snapshot rows settings, page height, and cells (split_ratios are mutated)
         import copy
         self.old_rows = copy.deepcopy(project.rows)
         self.old_page_height = project.page_height_mm
+        self.old_cells = copy.deepcopy(project.cells)
 
     def redo(self):
         from src.utils.auto_layout import AutoLayout
-        # Calculate new layout settings
+        # Calculate new layout settings (also mutates cell.split_ratios)
         new_settings = AutoLayout.optimize_layout(self.project)
         
         # Apply changes to project rows
@@ -676,6 +686,7 @@ class AutoLayoutCommand(QUndoCommand):
     def undo(self):
         import copy
         self.project.rows[:] = copy.deepcopy(self.old_rows)
+        self.project.cells[:] = copy.deepcopy(self.old_cells)
         self.project.page_height_mm = self.old_page_height
         if self.update_callback:
             self.update_callback()

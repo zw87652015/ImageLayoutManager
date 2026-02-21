@@ -60,18 +60,31 @@ def main() -> int:
 
         # PyMuPDF (fitz) is imported lazily; make sure it's bundled
         "--include-module=fitz",
+    ]
 
-        # ── Data files ───────────────────────────────────────────────
-        # Include any non-Python assets if needed in the future:
-        # f"--include-data-dir={project_root / 'assets'}=assets",
+    # ── Windows icon (requires ICO format) ──
+    icon_path = project_root / "assets" / "icon.ico"
+    if icon_path.exists():
+        cmd.extend([f"--windows-icon-from-ico={icon_path}"])
+    else:
+        # Fallback: try PNG if ICO not available
+        png_icon = project_root / "assets" / "icon.png"
+        if png_icon.exists():
+            cmd.extend([f"--windows-icon-from-ico={png_icon}"])
 
-        # ── Optimisation ─────────────────────────────────────────────
+    # ── Data files ───────────────────────────────────────────────
+    # Include assets folder for runtime access
+    assets_path = project_root / "assets"
+    if assets_path.exists():
+        cmd.append(f"--include-data-dir={assets_path}=assets")
+
+    # ── Optimisation ─────────────────────────────────────────────
+    cmd.extend([
         "--assume-yes-for-downloads",       # auto-download MinGW if needed
         "--remove-output",                  # clean previous build artifacts
         "--jobs=4",                         # parallel C compilation
-
         str(entry),
-    ]
+    ])
 
     print("Running Nuitka with command:")
     print(" ".join(cmd))

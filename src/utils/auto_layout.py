@@ -71,6 +71,56 @@ class AutoLayout:
                 except Exception:
                     pass
         
+        # 1b. Recursively optimise split_ratios for every container cell
+        #     and compute composite aspect ratios bottom-up.
+        def _optimise_and_composite(cell):
+            """Optimise split_ratios for *cell* based on children's images,
+            then return the effective w/h aspect ratio of the whole sub-tree.
+
+            Horizontal split (children side by side, shared height):
+                optimal split_ratio_i = a_i  (wider images get more width)
+                composite_a = sum(a_i)
+            Vertical split (children stacked, shared width):
+                optimal split_ratio_i = 1/a_i  (taller images get more height)
+                composite_a = 1 / sum(1/a_i)
+            """
+            if cell.is_leaf:
+                return aspect_ratios.get(cell.id, None)
+
+            # Recurse into children first (bottom-up)
+            child_aspects = [_optimise_and_composite(c) for c in cell.children]
+
+            if cell.split_direction == "horizontal":
+                # Optimal: give each child width proportional to its aspect ratio
+                new_ratios = []
+                for a in child_aspects:
+                    new_ratios.append(a if (a is not None and a > 0) else 1.0)
+                cell.split_ratios = new_ratios
+                # Composite: sum of child aspects (all share same height)
+                valid = [a for a in child_aspects if a is not None and a > 0]
+                composite = sum(valid) if valid else None
+
+            elif cell.split_direction == "vertical":
+                # Optimal: give each child height proportional to 1/aspect
+                new_ratios = []
+                for a in child_aspects:
+                    new_ratios.append(1.0 / a if (a is not None and a > 0) else 1.0)
+                cell.split_ratios = new_ratios
+                # Composite: harmonic combination (all share same width)
+                valid = [a for a in child_aspects if a is not None and a > 0]
+                composite = 1.0 / sum(1.0 / a for a in valid) if valid else None
+            else:
+                composite = None
+
+            if composite is not None:
+                aspect_ratios[cell.id] = composite
+            return composite
+
+        # Walk all cells (at every depth) to optimise ratios and build composites
+        for cell in project.cells:
+            if not cell.is_leaf:
+                _optimise_and_composite(cell)
+
         new_row_settings = []
         sorted_rows = sorted(project.rows, key=lambda r: r.index)
         
@@ -78,7 +128,7 @@ class AutoLayout:
         row_height_demands = {} # row_index -> float
         
         for row in sorted_rows:
-            # Find cells in this row
+            # Find top-level cells in this row
             row_cells = sorted(
                 [c for c in project.cells if c.row_index == row.index],
                 key=lambda c: c.col_index
@@ -89,7 +139,7 @@ class AutoLayout:
                 new_row_settings.append(row.to_dict())
                 continue
                 
-            # Get aspect ratios for each column slot
+            # Get aspect ratios for each column slot (uses composite for containers)
             row_aspects = []
             valid_aspects = []
             

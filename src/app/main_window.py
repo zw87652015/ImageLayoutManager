@@ -1413,20 +1413,29 @@ class MainWindow(QMainWindow):
         cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
+    def _get_export_default_dir(self) -> str:
+        """Return directory of current project file, or empty string if none."""
+        if self._current_project_path:
+            return os.path.dirname(self._current_project_path)
+        return ""
+
     def _on_export_pdf(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
+        default_dir = self._get_export_default_dir()
+        path, _ = QFileDialog.getSaveFileName(self, "Export PDF", default_dir, "PDF Files (*.pdf)")
         if path:
             PdfExporter.export(self.project, path)
             QMessageBox.information(self, "Export", f"Exported to {path}")
 
     def _on_export_tiff(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export TIFF", "", "TIFF Files (*.tiff *.tif)")
+        default_dir = self._get_export_default_dir()
+        path, _ = QFileDialog.getSaveFileName(self, "Export TIFF", default_dir, "TIFF Files (*.tiff *.tif)")
         if path:
             ImageExporter.export(self.project, path, "TIFF")
             QMessageBox.information(self, "Export", f"Exported to {path}")
 
     def _on_export_jpg(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export JPG", "", "JPEG Files (*.jpg *.jpeg)")
+        default_dir = self._get_export_default_dir()
+        path, _ = QFileDialog.getSaveFileName(self, "Export JPG", default_dir, "JPEG Files (*.jpg *.jpeg)")
         if path:
             ImageExporter.export(self.project, path, "JPG")
             QMessageBox.information(self, "Export", f"Exported to {path}")
