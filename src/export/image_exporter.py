@@ -652,9 +652,15 @@ class ImageExporter:
         
         # Draw text if enabled
         if cell.scale_bar_show_text:
-            text = f"{cell.scale_bar_length_um:.0f} µm" if cell.scale_bar_length_um >= 1 else f"{cell.scale_bar_length_um:.2f} µm"
+            # Use custom text if provided, otherwise auto-generate from length
+            custom_text = getattr(cell, 'scale_bar_custom_text', None)
+            if custom_text:
+                text = custom_text
+            else:
+                text = f"{cell.scale_bar_length_um:.0f} µm" if cell.scale_bar_length_um >= 1 else f"{cell.scale_bar_length_um:.2f} µm"
             
-            font_size_px = max(8, int(2.0 * scale))
+            text_size_mm = getattr(cell, 'scale_bar_text_size_mm', 2.0)
+            font_size_px = max(8, int(text_size_mm * scale))
             font = QFont("Arial")
             font.setPixelSize(font_size_px)
             painter.setFont(font)

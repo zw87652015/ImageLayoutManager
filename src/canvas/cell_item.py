@@ -43,6 +43,8 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_position = "bottom_right"
         self.scale_bar_offset_x = 2.0
         self.scale_bar_offset_y = 2.0
+        self.scale_bar_custom_text = None
+        self.scale_bar_text_size_mm = 2.0
         
         # Visual settings
         self.setAcceptHoverEvents(True)
@@ -151,7 +153,8 @@ class CellItem(QGraphicsRectItem):
     def update_data(self, image_path, fit_mode, padding, is_placeholder, rotation=0, align_h="center", align_v="center",
                      scale_bar_enabled=False, scale_bar_mode="rgb", scale_bar_length_um=10.0,
                      scale_bar_color="#FFFFFF", scale_bar_show_text=True, scale_bar_thickness_mm=0.5,
-                     scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0):
+                     scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0,
+                     scale_bar_custom_text=None, scale_bar_text_size_mm=2.0):
         self.image_path = image_path
         self.fit_mode = FitMode(fit_mode)
         self.rotation = rotation
@@ -170,6 +173,8 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_position = scale_bar_position
         self.scale_bar_offset_x = scale_bar_offset_x
         self.scale_bar_offset_y = scale_bar_offset_y
+        self.scale_bar_custom_text = scale_bar_custom_text
+        self.scale_bar_text_size_mm = scale_bar_text_size_mm
         
         if self.image_path:
             import os
@@ -531,21 +536,24 @@ class CellItem(QGraphicsRectItem):
         
         # Draw text if enabled
         if self.scale_bar_show_text:
-            text = f"{self.scale_bar_length_um:.0f} µm" if self.scale_bar_length_um >= 1 else f"{self.scale_bar_length_um:.2f} µm"
+            # Use custom text if provided, otherwise auto-generate from length
+            if self.scale_bar_custom_text:
+                text = self.scale_bar_custom_text
+            else:
+                text = f"{self.scale_bar_length_um:.0f} µm" if self.scale_bar_length_um >= 1 else f"{self.scale_bar_length_um:.2f} µm"
             
-            font_size_mm = 2.0
             transform = painter.transform()
             m11 = transform.m11()
             m22 = abs(transform.m22())
 
-            device_font_size = max(1, int(font_size_mm * m11))
+            device_font_size = max(1, int(self.scale_bar_text_size_mm * m11))
             font = QFont("Arial")
             font.setPixelSize(device_font_size)
             
             # Use a wide text rect centered on the bar to avoid clipping
             text_rect_w = max(bar_length_mm, content_rect.width())
             text_rect_x = bar_x + bar_length_mm / 2 - text_rect_w / 2
-            text_height = font_size_mm * 3
+            text_height = self.scale_bar_text_size_mm * 3
             text_rect = QRectF(text_rect_x, bar_y - text_height, text_rect_w, text_height)
 
             # Draw in device-pixel space for zoom-independent sizing

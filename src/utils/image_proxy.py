@@ -1,8 +1,9 @@
 import os
 import hashlib
+from collections import OrderedDict
 from PIL import Image
 from PyQt6.QtGui import QImage, QPixmap, QPainter
-from PyQt6.QtCore import QObject, pyqtSignal, QThread, Qt, QSize
+from PyQt6.QtCore import QObject, pyqtSignal, QRunnable, QThreadPool, Qt, QSize
 from PyQt6.QtSvg import QSvgRenderer
 
 # Supported vector formats
@@ -20,13 +21,13 @@ def is_supported_image(path: str) -> bool:
     ext = os.path.splitext(path)[1].lower()
     return ext in VECTOR_EXTENSIONS or ext in RASTER_EXTENSIONS
 
-class ThumbnailWorker(QObject):
-    finished = pyqtSignal(str, QImage) # path, qimage
-
-    def __init__(self, path, max_size):
+class ThumbnailWorker(QRunnable):
+    def __init__(self, path, max_size, callback):
         super().__init__()
         self.path = path
         self.max_size = max_size
+        self.callback = callback
+        self.setAutoDelete(True)
 
     def run(self):
         try:
@@ -42,10 +43,10 @@ class ThumbnailWorker(QObject):
                 # Handle raster formats with PIL
                 qimage = self._load_raster()
             
-            self.finished.emit(self.path, qimage)
+            self.callback(self.path, qimage)
         except Exception as e:
             print(f"Error loading thumbnail for {self.path}: {e}")
-            self.finished.emit(self.path, QImage())
+            self.callback(self.path, QImage())
     
     def _load_svg(self) -> QImage:
         """Load SVG and render to QImage at appropriate size."""
@@ -121,27 +122,22 @@ class ThumbnailWorker(QObject):
 class ImageProxy(QObject):
     """
     Manages loading and caching of image thumbnails to ensure high performance.
+    Uses LRU cache with bounded size and thread pool for concurrent loading.
     """
     thumbnail_ready = pyqtSignal(str) # path
 
-    def __init__(self):
+    def __init__(self, max_cache_items=100):
         super().__init__()
-        self._cache = {} # path -> QPixmap
+        self._cache = OrderedDict() # path -> QPixmap, LRU ordered
+        self._max_cache_items = max_cache_items
         self._loading = set() # paths currently loading
         self._max_size = 1024 # Max dimension for thumbnail
-        self._workers = {} # path -> (thread, worker)
+        self._thread_pool = QThreadPool.globalInstance()
+        self._thread_pool.setMaxThreadCount(4)  # Limit concurrent image loads
 
     def shutdown(self):
-        # Stop any running thumbnail threads to avoid "QThread destroyed while running".
-        workers = list(self._workers.items())
-        for path, (thread, worker) in workers:
-            try:
-                thread.requestInterruption()
-                thread.quit()
-                thread.wait(2000)
-            except Exception:
-                pass
-        self._workers.clear()
+        # Wait for all workers to finish
+        self._thread_pool.waitForDone(2000)
         self._loading.clear()
 
     def clear_cache(self):
@@ -153,11 +149,14 @@ class ImageProxy(QObject):
         """
         Returns a cached QPixmap if available.
         If not, returns None (or placeholder) and triggers background loading.
+        Uses LRU eviction when cache is full.
         """
         if not path or not os.path.exists(path):
             return None
             
         if path in self._cache:
+            # Move to end (most recently used)
+            self._cache.move_to_end(path)
             return self._cache[path]
             
         if path not in self._loading:
@@ -167,30 +166,17 @@ class ImageProxy(QObject):
 
     def _start_loading(self, path):
         self._loading.add(path)
-        
-        thread = QThread(self)
-        worker = ThumbnailWorker(path, self._max_size)
-        worker.moveToThread(thread)
-        
-        thread.started.connect(worker.run)
-        worker.finished.connect(self._on_thumbnail_finished)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(lambda p=path: self._on_thread_finished(p))
-        
-        # Keep reference to avoid GC
-        self._workers[path] = (thread, worker)
-        
-        thread.start()
-
-    def _on_thread_finished(self, path: str):
-        if path in self._workers:
-            del self._workers[path]
+        worker = ThumbnailWorker(path, self._max_size, self._on_thumbnail_finished)
+        self._thread_pool.start(worker)
 
     def _on_thumbnail_finished(self, path, qimage):
         if not qimage.isNull():
             pixmap = QPixmap.fromImage(qimage)
+            
+            # Evict oldest item if cache is full (LRU)
+            if len(self._cache) >= self._max_cache_items:
+                self._cache.popitem(last=False)  # Remove oldest (first) item
+            
             self._cache[path] = pixmap
             
         if path in self._loading:

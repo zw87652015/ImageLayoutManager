@@ -137,6 +137,8 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'scale_bar_position', 'bottom_right'),
                     getattr(cell, 'scale_bar_offset_x', 2.0),
                     getattr(cell, 'scale_bar_offset_y', 2.0),
+                    getattr(cell, 'scale_bar_custom_text', None),
+                    getattr(cell, 'scale_bar_text_size_mm', 2.0),
                 )
                 # Nested layout
                 item.set_nested_layout(getattr(cell, 'nested_layout_path', None))

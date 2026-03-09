@@ -21,3 +21,5 @@ venv/
 .venv
 /dist_nuitka
 nuitka-crash-report.xml
+/.windsurf
+Code_*.md

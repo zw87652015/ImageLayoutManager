@@ -23,3 +23,28 @@ class PageSizePreset(Enum):
         self.label = label
         self.width_mm = width_mm
         self.height_mm = height_mm
+
+class SplitDirection(Enum):
+    NONE = "none"
+    HORIZONTAL = "horizontal"
+    VERTICAL = "vertical"
+
+class ScaleBarMode(Enum):
+    RGB = "rgb"
+    BAYER = "bayer"
+
+class ScaleBarPosition(Enum):
+    BOTTOM_LEFT = "bottom_left"
+    BOTTOM_CENTER = "bottom_center"
+    BOTTOM_RIGHT = "bottom_right"
+
+class TextScope(Enum):
+    GLOBAL = "global"
+    CELL = "cell"
+
+class Alignment(Enum):
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+    TOP = "top"
+    BOTTOM = "bottom"
