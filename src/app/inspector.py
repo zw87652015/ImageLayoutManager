@@ -222,6 +222,19 @@ class Inspector(QWidget):
         self.scale_bar_show_text.stateChanged.connect(self._emit_scale_bar)
         self.cell_layout.addRow(self.scale_bar_show_text)
         
+        self.scale_bar_custom_text = QLineEdit()
+        self.scale_bar_custom_text.setPlaceholderText("Auto (e.g. 10 µm)")
+        self.scale_bar_custom_text.editingFinished.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Custom Text:", self.scale_bar_custom_text)
+        
+        self.scale_bar_text_size = QDoubleSpinBox()
+        self.scale_bar_text_size.setRange(0.5, 10.0)
+        self.scale_bar_text_size.setSingleStep(0.1)
+        self.scale_bar_text_size.setSuffix(" mm")
+        self.scale_bar_text_size.setValue(2.0)
+        self.scale_bar_text_size.valueChanged.connect(self._emit_scale_bar)
+        self.cell_layout.addRow("Text Size:", self.scale_bar_text_size)
+        
         self.scale_bar_thickness = QDoubleSpinBox()
         self.scale_bar_thickness.setRange(0.1, 5.0)
         self.scale_bar_thickness.setSingleStep(0.1)
@@ -520,6 +533,8 @@ class Inspector(QWidget):
         """Emit all scale bar properties as a single cell property change."""
         color_text = self.scale_bar_color.currentText()
         color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
+        # Custom text: empty string means use auto-generated text
+        custom_text = self.scale_bar_custom_text.text().strip()
         self.cell_property_changed.emit({
             "scale_bar_enabled": self.scale_bar_enabled.isChecked(),
             "scale_bar_mode": self.scale_bar_mode.currentText(),
@@ -530,6 +545,8 @@ class Inspector(QWidget):
             "scale_bar_position": self.scale_bar_position.currentText(),
             "scale_bar_offset_x": self.scale_bar_offset_x.value(),
             "scale_bar_offset_y": self.scale_bar_offset_y.value(),
+            "scale_bar_custom_text": custom_text if custom_text else None,
+            "scale_bar_text_size_mm": self.scale_bar_text_size.value(),
         })
 
     def _emit_subcell_ratio(self, value):
@@ -733,6 +750,8 @@ class Inspector(QWidget):
             sb_color = data.get("scale_bar_color", "#FFFFFF")
             self.scale_bar_color.setCurrentText("Black" if sb_color == "#000000" else "White")
             self.scale_bar_show_text.setChecked(data.get("scale_bar_show_text", True))
+            self.scale_bar_custom_text.setText(data.get("scale_bar_custom_text", "") or "")
+            self.scale_bar_text_size.setValue(data.get("scale_bar_text_size_mm", 2.0))
             self.scale_bar_thickness.setValue(data.get("scale_bar_thickness_mm", 0.5))
             self.scale_bar_position.setCurrentText(data.get("scale_bar_position", "bottom_right"))
             self.scale_bar_offset_x.setValue(data.get("scale_bar_offset_x", 2.0))

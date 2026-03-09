@@ -1,4 +1,7 @@
 from PyQt6.QtGui import QUndoCommand
+import copy
+import uuid
+from src.model.data_model import RowTemplate, Cell
 
 class PropertyChangeCommand(QUndoCommand):
     def __init__(self, target, changes: dict, update_callback=None, description="Change Property"):
@@ -127,9 +130,9 @@ class InsertRowCommand(QUndoCommand):
         self.insert_index = insert_index
         self.column_count = column_count
         self.update_callback = update_callback
-        import copy
-        self.old_rows = copy.deepcopy(project.rows)
-        self.old_cells = copy.deepcopy(project.cells)
+        # Delta storage: only store the new row and cells we'll create
+        self.new_row = None
+        self.new_cells = []
 
     def redo(self):
         from src.model.data_model import RowTemplate, Cell
@@ -140,21 +143,39 @@ class InsertRowCommand(QUndoCommand):
         for c in self.project.cells:
             if c.row_index >= self.insert_index:
                 c.row_index += 1
-        # Create the new row and its cells
-        new_row = RowTemplate(index=self.insert_index, column_count=self.column_count)
-        self.project.rows.append(new_row)
+        # Create the new row and its cells (only once on first execution)
+        if self.new_row is None:
+            self.new_row = RowTemplate(index=self.insert_index, column_count=self.column_count)
+            for col in range(self.column_count):
+                self.new_cells.append(
+                    Cell(row_index=self.insert_index, col_index=col, is_placeholder=True)
+                )
+        else:
+            # On redo after undo, restore the index
+            self.new_row.index = self.insert_index
+            for cell in self.new_cells:
+                cell.row_index = self.insert_index
+        
+        self.project.rows.append(self.new_row)
         self.project.rows.sort(key=lambda r: r.index)
-        for col in range(self.column_count):
-            self.project.cells.append(
-                Cell(row_index=self.insert_index, col_index=col, is_placeholder=True)
-            )
+        self.project.cells.extend(self.new_cells)
         if self.update_callback:
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.rows[:] = copy.deepcopy(self.old_rows)
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        # Remove the inserted row and cells
+        if self.new_row in self.project.rows:
+            self.project.rows.remove(self.new_row)
+        for cell in self.new_cells:
+            if cell in self.project.cells:
+                self.project.cells.remove(cell)
+        # Shift indices back down
+        for r in self.project.rows:
+            if r.index > self.insert_index:
+                r.index -= 1
+        for c in self.project.cells:
+            if c.row_index > self.insert_index:
+                c.row_index -= 1
         if self.update_callback:
             self.update_callback()
 
@@ -167,32 +188,40 @@ class InsertCellCommand(QUndoCommand):
         self.row_index = row_index
         self.insert_col = insert_col
         self.update_callback = update_callback
-        import copy
-        self.old_rows = copy.deepcopy(project.rows)
-        self.old_cells = copy.deepcopy(project.cells)
+        # Delta storage
+        self.new_cell = None
+        self.row = None
 
     def redo(self):
         from src.model.data_model import Cell
-        row = next((r for r in self.project.rows if r.index == self.row_index), None)
-        if not row:
+        self.row = next((r for r in self.project.rows if r.index == self.row_index), None)
+        if not self.row:
             return
         # Shift cells in this row at col >= insert_col
         for c in self.project.cells:
             if c.row_index == self.row_index and c.col_index >= self.insert_col:
                 c.col_index += 1
         # Increment column count
-        row.column_count += 1
-        # Add new placeholder cell
-        self.project.cells.append(
-            Cell(row_index=self.row_index, col_index=self.insert_col, is_placeholder=True)
-        )
+        self.row.column_count += 1
+        # Add new placeholder cell (create only once)
+        if self.new_cell is None:
+            self.new_cell = Cell(row_index=self.row_index, col_index=self.insert_col, is_placeholder=True)
+        self.project.cells.append(self.new_cell)
         if self.update_callback:
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.rows[:] = copy.deepcopy(self.old_rows)
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        if not self.row:
+            return
+        # Remove the inserted cell
+        if self.new_cell in self.project.cells:
+            self.project.cells.remove(self.new_cell)
+        # Shift cells back
+        for c in self.project.cells:
+            if c.row_index == self.row_index and c.col_index > self.insert_col:
+                c.col_index -= 1
+        # Decrement column count
+        self.row.column_count -= 1
         if self.update_callback:
             self.update_callback()
 
@@ -204,15 +233,23 @@ class DeleteRowCommand(QUndoCommand):
         self.project = project
         self.row_index = row_index
         self.update_callback = update_callback
-        import copy
-        self.old_rows = copy.deepcopy(project.rows)
-        self.old_cells = copy.deepcopy(project.cells)
+        # Delta storage: save what we're deleting
+        self.deleted_row = None
+        self.deleted_cells = []
 
     def redo(self):
+        # Save deleted items on first execution
+        if self.deleted_row is None:
+            self.deleted_row = next((r for r in self.project.rows if r.index == self.row_index), None)
+            self.deleted_cells = [c for c in self.project.cells if c.row_index == self.row_index]
+        
         # Remove the row template
-        self.project.rows[:] = [r for r in self.project.rows if r.index != self.row_index]
+        if self.deleted_row in self.project.rows:
+            self.project.rows.remove(self.deleted_row)
         # Remove cells in this row
-        self.project.cells[:] = [c for c in self.project.cells if c.row_index != self.row_index]
+        for cell in self.deleted_cells:
+            if cell in self.project.cells:
+                self.project.cells.remove(cell)
         # Shift subsequent rows and cells up
         for r in self.project.rows:
             if r.index > self.row_index:
@@ -224,9 +261,21 @@ class DeleteRowCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.rows[:] = copy.deepcopy(self.old_rows)
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        # Shift rows and cells back down
+        for r in self.project.rows:
+            if r.index >= self.row_index:
+                r.index += 1
+        for c in self.project.cells:
+            if c.row_index >= self.row_index:
+                c.row_index += 1
+        # Restore deleted row and cells
+        if self.deleted_row:
+            self.deleted_row.index = self.row_index
+            self.project.rows.append(self.deleted_row)
+            self.project.rows.sort(key=lambda r: r.index)
+        for cell in self.deleted_cells:
+            cell.row_index = self.row_index
+            self.project.cells.append(cell)
         if self.update_callback:
             self.update_callback()
 
@@ -294,56 +343,66 @@ class ChangeRowCountCommand(QUndoCommand):
         super().__init__(f"Change Rows to {new_count}")
         self.project = project
         self.new_count = new_count
+        self.old_count = len(project.rows)
         self.update_callback = update_callback
         
-        # Snapshot state
-        import copy
-        self.old_rows = copy.deepcopy(project.rows)
-        self.old_cells = copy.deepcopy(project.cells)
+        # Delta storage: save only what will be added or removed
+        self.added_rows = []
+        self.added_cells = []
+        self.removed_rows = []
+        self.removed_cells = []
 
     def redo(self):
-        # Logic duplicated/moved from MainWindow._on_row_count_changed
-        from src.model.data_model import RowTemplate, Cell
-        
         current_count = len(self.project.rows)
         if self.new_count > current_count:
-            # Add rows
-            for i in range(current_count, self.new_count):
-                self.project.rows.append(RowTemplate(index=i, column_count=2))
+            # Add rows (save on first execution)
+            if not self.added_rows:
+                for i in range(current_count, self.new_count):
+                    new_row = RowTemplate(index=i, column_count=2)
+                    self.added_rows.append(new_row)
+                    self.project.rows.append(new_row)
+                    # Add cells for new rows
+                    for col_idx in range(2):
+                        new_cell = Cell(row_index=i, col_index=col_idx, is_placeholder=True)
+                        self.added_cells.append(new_cell)
+                        self.project.cells.append(new_cell)
+            else:
+                # Re-add previously created rows/cells
+                self.project.rows.extend(self.added_rows)
+                self.project.cells.extend(self.added_cells)
+                
         elif self.new_count < current_count:
-            # Remove rows
-            self.project.rows[:] = self.project.rows[:self.new_count]
+            # Remove rows (save on first execution)
+            if not self.removed_rows:
+                self.removed_rows = self.project.rows[self.new_count:]
+                self.removed_cells = [c for c in self.project.cells if c.row_index >= self.new_count]
             
-        # Ensure cells exist (simplified logic from MainWindow)
-        # We need to access the logic or replicate it. 
-        # Replicating strictly for the command to be self-contained or passing a helper.
-        # For simplicity, we'll replicate the essential "ensure" logic here.
-        
-        # 1. Keep valid cells
-        valid_cells = []
-        existing_map = {} 
-        for c in self.project.cells:
-            row_temp = next((r for r in self.project.rows if r.index == c.row_index), None)
-            if row_temp and c.col_index < row_temp.column_count:
-                valid_cells.append(c)
-                existing_map[(c.row_index, c.col_index)] = c
-        self.project.cells[:] = valid_cells
-        
-        # 2. Add missing cells
-        for r in self.project.rows:
-            for col_idx in range(r.column_count):
-                if (r.index, col_idx) not in existing_map:
-                    new_cell = Cell(row_index=r.index, col_index=col_idx, is_placeholder=True)
-                    self.project.cells.append(new_cell)
+            # Remove excess rows and cells
+            for row in self.removed_rows:
+                if row in self.project.rows:
+                    self.project.rows.remove(row)
+            for cell in self.removed_cells:
+                if cell in self.project.cells:
+                    self.project.cells.remove(cell)
 
         if self.update_callback:
             self.update_callback()
 
     def undo(self):
-        # Restore state
-        import copy
-        self.project.rows[:] = copy.deepcopy(self.old_rows)
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        if self.new_count > self.old_count:
+            # Undo add: remove added rows/cells
+            for row in self.added_rows:
+                if row in self.project.rows:
+                    self.project.rows.remove(row)
+            for cell in self.added_cells:
+                if cell in self.project.cells:
+                    self.project.cells.remove(cell)
+        elif self.new_count < self.old_count:
+            # Undo remove: restore removed rows/cells
+            self.project.rows.extend(self.removed_rows)
+            self.project.rows.sort(key=lambda r: r.index)
+            self.project.cells.extend(self.removed_cells)
+        
         if self.update_callback:
             self.update_callback()
 
@@ -636,19 +695,43 @@ class AutoLabelCommand(QUndoCommand):
         super().__init__("Auto Label")
         self.project = project
         self.update_callback = update_callback
-        # Snapshot text items
-        import copy
-        self.old_text_items = copy.deepcopy(project.text_items)
+        # Delta storage: save only existing numbering labels (will be replaced)
+        self.old_numbering_labels = [
+            t for t in project.text_items 
+            if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner'
+        ]
+        self.new_labels = []
 
     def redo(self):
         from src.utils.auto_label import AutoLabel
-        AutoLabel.generate_labels(self.project)
+        # Remove old numbering labels
+        for label in self.old_numbering_labels:
+            if label in self.project.text_items:
+                self.project.text_items.remove(label)
+        
+        # Generate new labels (save on first execution)
+        if not self.new_labels:
+            AutoLabel.generate_labels(self.project)
+            # Capture the newly generated labels
+            self.new_labels = [
+                t for t in self.project.text_items 
+                if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner'
+                and t not in self.old_numbering_labels
+            ]
+        else:
+            # Re-add previously generated labels
+            self.project.text_items.extend(self.new_labels)
+        
         if self.update_callback:
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.text_items[:] = copy.deepcopy(self.old_text_items)
+        # Remove new labels
+        for label in self.new_labels:
+            if label in self.project.text_items:
+                self.project.text_items.remove(label)
+        # Restore old labels
+        self.project.text_items.extend(self.old_numbering_labels)
         if self.update_callback:
             self.update_callback()
 
@@ -658,36 +741,64 @@ class AutoLayoutCommand(QUndoCommand):
         self.project = project
         self.update_callback = update_callback
         
-        # Snapshot rows settings, page height, and cells (split_ratios are mutated)
-        import copy
-        self.old_rows = copy.deepcopy(project.rows)
+        # Delta storage: save only the specific properties that will change
         self.old_page_height = project.page_height_mm
-        self.old_cells = copy.deepcopy(project.cells)
+        self.old_row_settings = {}  # row_index -> {height_ratio, column_ratios}
+        self.old_cell_ratios = {}   # cell_id -> split_ratios
+        
+        # Save original values
+        for row in project.rows:
+            self.old_row_settings[row.index] = {
+                'height_ratio': row.height_ratio,
+                'column_ratios': list(row.column_ratios) if row.column_ratios else []
+            }
+        
+        # Save cell split_ratios that might be modified
+        for cell in project.get_all_leaf_cells():
+            parent = project.find_parent_of(cell.id)
+            if parent and parent.split_ratios:
+                self.old_cell_ratios[parent.id] = list(parent.split_ratios)
+        
+        self.new_settings = None
 
     def redo(self):
         from src.utils.auto_layout import AutoLayout
-        # Calculate new layout settings (also mutates cell.split_ratios)
-        new_settings = AutoLayout.optimize_layout(self.project)
+        
+        # Calculate new layout settings (only once)
+        if self.new_settings is None:
+            self.new_settings = AutoLayout.optimize_layout(self.project)
         
         # Apply changes to project rows
-        for i, row_data in enumerate(new_settings['rows']):
+        for i, row_data in enumerate(self.new_settings['rows']):
             if i < len(self.project.rows):
                 row = self.project.rows[i]
                 row.height_ratio = row_data.get('height_ratio', 1.0)
                 row.column_ratios = row_data.get('column_ratios', [])
         
         # Apply optimal page height if calculated
-        if 'optimal_page_height_mm' in new_settings:
-            self.project.page_height_mm = new_settings['optimal_page_height_mm']
+        if 'optimal_page_height_mm' in self.new_settings:
+            self.project.page_height_mm = self.new_settings['optimal_page_height_mm']
                 
         if self.update_callback:
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.rows[:] = copy.deepcopy(self.old_rows)
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        # Restore row settings
+        for row in self.project.rows:
+            if row.index in self.old_row_settings:
+                settings = self.old_row_settings[row.index]
+                row.height_ratio = settings['height_ratio']
+                row.column_ratios = settings['column_ratios']
+        
+        # Restore cell split_ratios
+        for cell_id, ratios in self.old_cell_ratios.items():
+            cell = self.project.find_cell_by_id(cell_id)
+            if cell:
+                cell.split_ratios = ratios
+        
+        # Restore page height
         self.project.page_height_mm = self.old_page_height
+        
         if self.update_callback:
             self.update_callback()
 

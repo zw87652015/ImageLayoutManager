@@ -65,10 +65,10 @@ class Cell:
     rotation: int = 0  # 0, 90, 180, 270 degrees
     align_h: str = "center"  # left, center, right
     align_v: str = "center"  # top, center, bottom
-    padding_top: float = 2.0
-    padding_bottom: float = 2.0
-    padding_left: float = 2.0
-    padding_right: float = 2.0
+    padding_top: float = 0.0
+    padding_bottom: float = 0.0
+    padding_left: float = 0.0
+    padding_right: float = 0.0
     
     # If it is a placeholder
     is_placeholder: bool = False
@@ -91,6 +91,8 @@ class Cell:
     scale_bar_position: str = "bottom_right"  # bottom_left | bottom_center | bottom_right
     scale_bar_offset_x: float = 2.0
     scale_bar_offset_y: float = 2.0
+    scale_bar_custom_text: Optional[str] = None  # If set, overrides auto-generated "X µm" text
+    scale_bar_text_size_mm: float = 2.0  # Font size in mm for scale bar text
     
     @property
     def is_leaf(self) -> bool:
@@ -128,6 +130,8 @@ class Cell:
             "scale_bar_position": self.scale_bar_position,
             "scale_bar_offset_x": self.scale_bar_offset_x,
             "scale_bar_offset_y": self.scale_bar_offset_y,
+            "scale_bar_custom_text": self.scale_bar_custom_text,
+            "scale_bar_text_size_mm": self.scale_bar_text_size_mm,
             "nested_layout_path": self.nested_layout_path,
             "children": [c.to_dict() for c in self.children],
             "split_direction": self.split_direction,
@@ -148,6 +152,8 @@ class Cell:
         payload.setdefault("scale_bar_position", "bottom_right")
         payload.setdefault("scale_bar_offset_x", 2.0)
         payload.setdefault("scale_bar_offset_y", 2.0)
+        payload.setdefault("scale_bar_custom_text", None)
+        payload.setdefault("scale_bar_text_size_mm", 2.0)
         payload.setdefault("nested_layout_path", None)
         payload.setdefault("split_direction", "none")
         payload.setdefault("split_ratios", [])
@@ -200,10 +206,10 @@ class Project:
     # Page Settings
     page_width_mm: float = 210.0
     page_height_mm: float = 297.0
-    margin_left_mm: float = 10.0
-    margin_right_mm: float = 10.0
-    margin_top_mm: float = 10.0
-    margin_bottom_mm: float = 10.0
+    margin_left_mm: float = 0.0
+    margin_right_mm: float = 0.0
+    margin_top_mm: float = 0.0
+    margin_bottom_mm: float = 0.0
     gap_mm: float = 2.0  # Gap between cells
     
     dpi: int = 600
