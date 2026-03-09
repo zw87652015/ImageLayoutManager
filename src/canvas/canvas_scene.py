@@ -22,6 +22,7 @@ class CanvasScene(QGraphicsScene):
     nested_layout_open_requested = pyqtSignal(str, str) # cell_id, figlayout_path
     insert_row_requested = pyqtSignal(int)   # insert at row_index
     insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
+    cell_freeform_geometry_changed = pyqtSignal(str, float, float, float, float) # cell_id, x, y, w, h
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,6 +48,8 @@ class CanvasScene(QGraphicsScene):
         # Margins rect (guide)
         self.margin_item = self.addRect(QRectF(), QPen(QColor("#DDDDDD"), 1, Qt.PenStyle.DashLine), QBrush(Qt.BrushStyle.NoBrush))
         self.margin_item.setZValue(-99)
+        
+        self._snap_line_items = []
 
     def set_project(self, project: Project):
         self.project = project
@@ -108,11 +111,16 @@ class CanvasScene(QGraphicsScene):
             
             item = self.cell_items[cell.id]
             
+            # Freeform mode toggle
+            is_freeform = getattr(self.project, 'layout_mode', 'grid') == 'freeform'
+            item.set_freeform_mode(is_freeform)
+
             # Geometry
             if cell.id in layout_result.cell_rects:
                 x, y, w, h = layout_result.cell_rects[cell.id]
                 item.setRect(0, 0, w, h)
                 item.setPos(x, y)
+                item.setZValue(getattr(cell, 'z_index', 0))
                 
             # Content
                 item.update_data(
@@ -287,6 +295,111 @@ class CanvasScene(QGraphicsScene):
 
         # Place add-row / add-cell buttons around the layout
         self._refresh_add_buttons(layout_result)
+
+    def get_snap_lines(self, ignore_cell_id: str = None):
+        """Return lists of vertical (x) and horizontal (y) coordinates for snapping."""
+        v_lines = []
+        h_lines = []
+        m = self.margin_item.rect()
+        if m.isValid():
+            v_lines.extend([m.left(), m.center().x(), m.right()])
+            h_lines.extend([m.top(), m.center().y(), m.bottom()])
+            
+        for cid, item in self.cell_items.items():
+            if cid == ignore_cell_id or item.is_label_cell:
+                continue
+            r = QRectF(item.pos().x(), item.pos().y(), item.rect().width(), item.rect().height())
+            v_lines.extend([r.left(), r.center().x(), r.right()])
+            h_lines.extend([r.top(), r.center().y(), r.bottom()])
+            
+        return v_lines, h_lines
+
+    def show_snap_lines(self, x_coords, y_coords):
+        """Draw pink dashed lines across the scene at the given coordinates."""
+        self.hide_snap_lines()
+        pen = QPen(QColor(255, 0, 255, 180), 0.5, Qt.PenStyle.DashLine)
+        r = self.sceneRect()
+        for x in x_coords:
+            line = self.addLine(x, r.top(), x, r.bottom(), pen)
+            line.setZValue(1000)
+            self._snap_line_items.append(line)
+        for y in y_coords:
+            line = self.addLine(r.left(), y, r.right(), y, pen)
+            line.setZValue(1000)
+            self._snap_line_items.append(line)
+
+    def hide_snap_lines(self):
+        """Remove all active snap lines."""
+        for item in getattr(self, '_snap_line_items', []):
+            if item.scene():
+                self.removeItem(item)
+        self._snap_line_items = []
+
+    def snap_rect(self, rect: QRectF, ignore_cell_id: str = None):
+        """Find best snap delta for a rect and show lines. Returns (dx, dy)."""
+        v_lines, h_lines = self.get_snap_lines(ignore_cell_id)
+        
+        best_dx = 0
+        min_dx = 2.0
+        snapped_x = None
+        for cv in [rect.left(), rect.center().x(), rect.right()]:
+            for tv in v_lines:
+                diff = tv - cv
+                if abs(diff) < min_dx:
+                    min_dx = abs(diff)
+                    best_dx = diff
+                    snapped_x = tv
+                    
+        best_dy = 0
+        min_dy = 2.0
+        snapped_y = None
+        for ch in [rect.top(), rect.center().y(), rect.bottom()]:
+            for th in h_lines:
+                diff = th - ch
+                if abs(diff) < min_dy:
+                    min_dy = abs(diff)
+                    best_dy = diff
+                    snapped_y = th
+                    
+        self.show_snap_lines(
+            [snapped_x] if snapped_x is not None else [],
+            [snapped_y] if snapped_y is not None else []
+        )
+        
+        return best_dx, best_dy
+
+    def reposition_cell_text_items(self, cell_id: str, cx: float, cy: float, cw: float, ch: float):
+        """Reposition in-cell TextGraphicsItems for a specific cell immediately (used during freeform drag)."""
+        if not self.project:
+            return
+        for text_model in self.project.text_items:
+            if text_model.scope != "cell" or text_model.parent_id != cell_id:
+                continue
+            t_item = self.text_items.get(text_model.id)
+            if not t_item or not t_item.isVisible():
+                continue
+
+            cell = self.project.find_cell_by_id(cell_id)
+            ex, ey, ew, eh = cx, cy, cw, ch
+            is_corner = getattr(text_model, 'subtype', None) == 'corner'
+            attach_to = getattr(self.project, 'label_attach_to', 'figure')
+            if cell and attach_to == "figure" and not is_corner:
+                ex = cx + cell.padding_left
+                ey = cy + cell.padding_top
+                ew = cw - cell.padding_left - cell.padding_right
+                eh = ch - cell.padding_top - cell.padding_bottom
+
+            anchor = text_model.anchor or "top_left_inside"
+            ox, oy = text_model.offset_x, text_model.offset_y
+            scale = t_item.scale()
+            text_width = t_item.boundingRect().width() * scale
+            text_height = t_item.boundingRect().height() * scale
+
+            ty = ey + oy if "top" in anchor else (ey + eh - oy - text_height if "bottom" in anchor else ey + (eh - text_height) / 2)
+            tx = ex + ox if "left" in anchor else (ex + ew - ox - text_width if "right" in anchor else ex + (ew - text_width) / 2)
+
+            t_item.setPos(tx, ty)
+            t_item.cell_bounds = (ex, ey, ew, eh)
 
     def dragEnterEvent(self, event: QGraphicsSceneDragDropEvent):
         if event.mimeData().hasUrls():

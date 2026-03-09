@@ -41,11 +41,39 @@ class LayoutEngine:
         return [(r / total_ratio) * available_width for r in col_ratios]
 
     @staticmethod
+    def calculate_freeform_layout(project: Project) -> LayoutResult:
+        """Freeform pipeline: cells use their own absolute position/size fields."""
+        cell_rects: Dict[str, Tuple[float, float, float, float]] = {}
+        for cell in project.cells:
+            # Only top-level leaf cells contribute directly
+            if cell.is_leaf:
+                cell_rects[cell.id] = (
+                    cell.freeform_x_mm,
+                    cell.freeform_y_mm,
+                    cell.freeform_w_mm,
+                    cell.freeform_h_mm,
+                )
+            else:
+                # Split cells: use freeform rect as parent, then sub-layout children
+                from src.model.layout_engine import LayoutEngine
+                sub_rects: Dict[str, Tuple[float, float, float, float]] = {}
+                sub_label: Dict[str, Tuple[float, float, float, float]] = {}
+                parent_rect = (cell.freeform_x_mm, cell.freeform_y_mm,
+                               cell.freeform_w_mm, cell.freeform_h_mm)
+                LayoutEngine._layout_subcells(cell, parent_rect, project.gap_mm,
+                                              sub_rects, sub_label, set(), False, 0.0)
+                cell_rects.update(sub_rects)
+        return LayoutResult(cell_rects=cell_rects, row_heights={}, figure_rects=dict(cell_rects))
+
+    @staticmethod
     def calculate_layout(project: Project) -> LayoutResult:
         """
         Calculates the geometry for all cells in the project.
         All units are in millimeters.
         """
+        if getattr(project, 'layout_mode', 'grid') == 'freeform':
+            return LayoutEngine.calculate_freeform_layout(project)
+
         gap_mm = project.gap_mm
         
         # 1. Calculate content area
@@ -187,6 +215,38 @@ class LayoutEngine:
                     )
 
         figure_rects: Dict[str, Tuple[float, float, float, float]] = dict(cell_rects)
+
+        # Apply grid size overrides
+        if getattr(project, 'layout_mode', 'grid') == 'grid':
+            for cell in project.get_all_leaf_cells():
+                if cell.id in cell_rects:
+                    sx, sy, sw, sh = cell_rects[cell.id]
+                    ow = getattr(cell, 'override_width_mm', 0.0)
+                    oh = getattr(cell, 'override_height_mm', 0.0)
+                    
+                    if ow > 0 or oh > 0:
+                        fw = ow if ow > 0 else sw
+                        fh = oh if oh > 0 else sh
+                        
+                        align_h = getattr(cell, 'align_h', 'center')
+                        align_v = getattr(cell, 'align_v', 'center')
+                        
+                        if align_h == 'left':
+                            fx = sx
+                        elif align_h == 'right':
+                            fx = sx + sw - fw
+                        else:
+                            fx = sx + (sw - fw) / 2.0
+                            
+                        if align_v == 'top':
+                            fy = sy
+                        elif align_v == 'bottom':
+                            fy = sy + sh - fh
+                        else:
+                            fy = sy + (sh - fh) / 2.0
+                            
+                        cell_rects[cell.id] = (fx, fy, fw, fh)
+                        figure_rects[cell.id] = (fx, fy, fw, fh)
 
         # Compute row bounding rects (include label row above if present)
         row_rects: Dict[int, Tuple[float, float, float, float]] = {}

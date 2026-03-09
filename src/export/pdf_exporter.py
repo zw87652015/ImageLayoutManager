@@ -60,8 +60,9 @@ class PdfExporter:
             label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
             label_rects = getattr(layout_result, 'label_rects', {})
 
-            # 1. Draw Images, Scale Bars, and Nested Layouts
-            for cell in project.get_all_leaf_cells():
+            # 1. Draw Images, Scale Bars, and Nested Layouts (sorted by z_index for freeform overlap support)
+            sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
+            for cell in sorted_cells:
                 if cell.id not in layout_result.cell_rects:
                     continue
                 x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]

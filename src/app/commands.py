@@ -3,6 +3,117 @@ import copy
 import uuid
 from src.model.data_model import RowTemplate, Cell
 
+
+class FreeformGeometryCommand(QUndoCommand):
+    """Record a freeform drag/resize of a single cell for undo/redo."""
+    def __init__(self, cell: Cell, new_x, new_y, new_w, new_h, update_callback=None):
+        super().__init__("Move/Resize Cell")
+        self.cell = cell
+        self.old_x = cell.freeform_x_mm
+        self.old_y = cell.freeform_y_mm
+        self.old_w = cell.freeform_w_mm
+        self.old_h = cell.freeform_h_mm
+        self.new_x = new_x
+        self.new_y = new_y
+        self.new_w = new_w
+        self.new_h = new_h
+        self.update_callback = update_callback
+
+    def redo(self):
+        self.cell.freeform_x_mm = self.new_x
+        self.cell.freeform_y_mm = self.new_y
+        self.cell.freeform_w_mm = self.new_w
+        self.cell.freeform_h_mm = self.new_h
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.cell.freeform_x_mm = self.old_x
+        self.cell.freeform_y_mm = self.old_y
+        self.cell.freeform_w_mm = self.old_w
+        self.cell.freeform_h_mm = self.old_h
+        if self.update_callback:
+            self.update_callback()
+
+    def id(self):
+        # Must return a value in range [-2147483648, 2147483647] (Qt 32-bit int)
+        return hash(self.cell.id) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        """Collapse consecutive moves of the same cell into a single undo step."""
+        if not isinstance(other, FreeformGeometryCommand) or other.cell is not self.cell:
+            return False
+        self.new_x = other.new_x
+        self.new_y = other.new_y
+        self.new_w = other.new_w
+        self.new_h = other.new_h
+        return True
+
+
+class FreeformLayoutModeCommand(QUndoCommand):
+    """Switch project between 'grid' and 'freeform' layout modes, with baking support."""
+    def __init__(self, project, new_mode: str, baked_cell_rects: dict = None, update_callback=None):
+        label = "Convert to Freeform" if new_mode == "freeform" else "Switch to Grid"
+        super().__init__(label)
+        self.project = project
+        self.old_mode = project.layout_mode
+        self.new_mode = new_mode
+        self.update_callback = update_callback
+        # Store old freeform coords for all cells (for undo of bake)
+        self.old_freeform = {
+            cell.id: (cell.freeform_x_mm, cell.freeform_y_mm,
+                      cell.freeform_w_mm, cell.freeform_h_mm)
+            for cell in project.get_all_leaf_cells()
+        }
+        # New coords to apply on redo (provided when baking from grid)
+        self.baked_cell_rects = baked_cell_rects or {}
+
+    def redo(self):
+        self.project.layout_mode = self.new_mode
+        for cell in self.project.get_all_leaf_cells():
+            if cell.id in self.baked_cell_rects:
+                x, y, w, h = self.baked_cell_rects[cell.id]
+                cell.freeform_x_mm = x
+                cell.freeform_y_mm = y
+                cell.freeform_w_mm = w
+                cell.freeform_h_mm = h
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.project.layout_mode = self.old_mode
+        for cell in self.project.get_all_leaf_cells():
+            if cell.id in self.old_freeform:
+                x, y, w, h = self.old_freeform[cell.id]
+                cell.freeform_x_mm = x
+                cell.freeform_y_mm = y
+                cell.freeform_w_mm = w
+                cell.freeform_h_mm = h
+        if self.update_callback:
+            self.update_callback()
+
+
+class ZIndexChangeCommand(QUndoCommand):
+    """Change z_index of one or more cells for bring-to-front / send-to-back."""
+    def __init__(self, cells: list, delta: int, update_callback=None, description="Change Z-Order"):
+        super().__init__(description)
+        self.cells = cells
+        self.delta = delta
+        self.update_callback = update_callback
+        self.old_values = {cell.id: cell.z_index for cell in cells}
+
+    def redo(self):
+        for cell in self.cells:
+            cell.z_index += self.delta
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for cell in self.cells:
+            cell.z_index = self.old_values[cell.id]
+        if self.update_callback:
+            self.update_callback()
+
 class PropertyChangeCommand(QUndoCommand):
     def __init__(self, target, changes: dict, update_callback=None, description="Change Property"):
         super().__init__(description)

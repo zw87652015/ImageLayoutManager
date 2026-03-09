@@ -1,9 +1,153 @@
 from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphicsItem
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont
-from PyQt6.QtCore import Qt, QRectF, QPointF
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QCursor
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 
 from src.model.enums import FitMode
 from src.utils.image_proxy import get_image_proxy
+
+
+class ResizeHandleItem(QGraphicsRectItem):
+    """An 8-directional resize handle placed around a CellItem in freeform mode."""
+    HANDLE_SIZE = 6.0  # scene units (mm)
+
+    # Anchors: (col, row) each in {0=left/top, 1=center, 2=right/bottom}
+    ANCHORS = [
+        (0, 0), (1, 0), (2, 0),
+        (0, 1),          (2, 1),
+        (0, 2), (1, 2), (2, 2),
+    ]
+    CURSORS = [
+        Qt.CursorShape.SizeFDiagCursor, Qt.CursorShape.SizeVerCursor,  Qt.CursorShape.SizeBDiagCursor,
+        Qt.CursorShape.SizeHorCursor,                                   Qt.CursorShape.SizeHorCursor,
+        Qt.CursorShape.SizeBDiagCursor, Qt.CursorShape.SizeVerCursor,  Qt.CursorShape.SizeFDiagCursor,
+    ]
+
+    def __init__(self, anchor_col, anchor_row, cell_item):
+        super().__init__(cell_item)
+        self.anchor_col = anchor_col
+        self.anchor_row = anchor_row
+        self.cell_item = cell_item
+        self._dragging = False
+        self._drag_start_scene = None
+        self._drag_start_rect = None
+
+        s = self.HANDLE_SIZE
+        self.setRect(-s / 2, -s / 2, s, s)
+        self.setBrush(QBrush(QColor("#007ACC")))
+        self.setPen(QPen(Qt.PenStyle.NoPen))
+        self.setZValue(1000)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, False)
+        self.setAcceptHoverEvents(True)
+        idx = self.ANCHORS.index((anchor_col, anchor_row))
+        self.setCursor(self.CURSORS[idx])
+
+    def update_position(self):
+        r = self.cell_item.rect()
+        xs = [r.left(), r.center().x(), r.right()]
+        ys = [r.top(), r.center().y(), r.bottom()]
+        self.setPos(xs[self.anchor_col], ys[self.anchor_row])
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._drag_start_scene = event.scenePos()
+            # Store the cell's bounding rect in SCENE coordinates at the start of the drag
+            cell_pos = self.cell_item.pos()
+            cell_rect = self.cell_item.rect()
+            self._drag_start_rect = QRectF(
+                cell_pos.x(), cell_pos.y(),
+                cell_rect.width(), cell_rect.height()
+            )
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not self._dragging:
+            return
+        delta = event.scenePos() - self._drag_start_scene
+        # Work entirely in scene space from the original rect
+        r = QRectF(self._drag_start_rect)
+        dx, dy = delta.x(), delta.y()
+
+        if self.anchor_col == 0:
+            r.setLeft(r.left() + dx)
+        elif self.anchor_col == 2:
+            r.setRight(r.right() + dx)
+
+        if self.anchor_row == 0:
+            r.setTop(r.top() + dy)
+        elif self.anchor_row == 2:
+            r.setBottom(r.bottom() + dy)
+
+        # Minimum size: 2 scene units (mm)
+        min_size = 2.0
+        if r.width() < min_size:
+            if self.anchor_col == 0:
+                r.setLeft(r.right() - min_size)
+            else:
+                r.setRight(r.left() + min_size)
+        if r.height() < min_size:
+            if self.anchor_row == 0:
+                r.setTop(r.bottom() - min_size)
+            else:
+                r.setBottom(r.top() + min_size)
+
+        # Apply Snapping
+        scene = self.scene()
+        if scene and hasattr(scene, 'snap_rect'):
+            # Build a rect matching exactly what is being dragged (only snap the active edge/corner)
+            snap_r = QRectF(r)
+            if self.anchor_col == 1: # Center horizontally -> no X snapping
+                snap_r.setLeft(r.center().x())
+                snap_r.setRight(r.center().x())
+            if self.anchor_row == 1: # Center vertically -> no Y snapping
+                snap_r.setTop(r.center().y())
+                snap_r.setBottom(r.center().y())
+                
+            sdx, sdy = scene.snap_rect(snap_r, self.cell_item.cell_id)
+            
+            if sdx != 0:
+                if self.anchor_col == 0:
+                    r.setLeft(r.left() + sdx)
+                elif self.anchor_col == 2:
+                    r.setRight(r.right() + sdx)
+            if sdy != 0:
+                if self.anchor_row == 0:
+                    r.setTop(r.top() + sdy)
+                elif self.anchor_row == 2:
+                    r.setBottom(r.bottom() + sdy)
+
+        # Re-check minimum size after snap
+        if r.width() < min_size:
+            if self.anchor_col == 0:
+                r.setLeft(r.right() - min_size)
+            else:
+                r.setRight(r.left() + min_size)
+        if r.height() < min_size:
+            if self.anchor_row == 0:
+                r.setTop(r.bottom() - min_size)
+            else:
+                r.setBottom(r.top() + min_size)
+
+        # r.topLeft() is the new scene-space origin; rect is always (0,0,w,h)
+        self.cell_item.setPos(r.topLeft())
+        self.cell_item.setRect(QRectF(0, 0, r.width(), r.height()))
+        self.cell_item._update_handle_positions()
+        self.cell_item._reposition_labels_live()
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            scene = self.scene()
+            if scene and hasattr(scene, 'hide_snap_lines'):
+                scene.hide_snap_lines()
+            self.cell_item._emit_freeform_geometry()
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
 
 class CellItem(QGraphicsRectItem):
     def __init__(self, cell_id: str, parent=None):
@@ -71,6 +215,75 @@ class CellItem(QGraphicsRectItem):
         
         self.is_hovered = False
         self._drag_start_pos = None
+        self._freeform = False  # Whether this item is in freeform interactive mode
+        self._resize_handles = []  # ResizeHandleItem instances
+
+    # ---------- Freeform mode helpers ----------
+
+    def set_freeform_mode(self, enabled: bool):
+        """Enable/disable freeform drag-move and resize handles."""
+        if self._freeform == enabled:
+            return
+        self._freeform = enabled
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, enabled and not self.is_label_cell)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, enabled)
+
+        if enabled:
+            for ac, ar in ResizeHandleItem.ANCHORS:
+                handle = ResizeHandleItem(ac, ar, self)
+                handle.setVisible(self.isSelected())
+                self._resize_handles.append(handle)
+            self._update_handle_positions()
+        else:
+            for h in self._resize_handles:
+                if h.scene():
+                    h.scene().removeItem(h)
+            self._resize_handles.clear()
+
+    def _update_handle_positions(self):
+        for h in self._resize_handles:
+            h.update_position()
+
+    def _emit_freeform_geometry(self):
+        """Notify the scene that this item's freeform geometry changed."""
+        scene = self.scene()
+        if scene and hasattr(scene, 'cell_freeform_geometry_changed'):
+            pos = self.pos()
+            rect = self.rect()
+            scene.cell_freeform_geometry_changed.emit(
+                self.cell_id, pos.x(), pos.y(), rect.width(), rect.height()
+            )
+
+    def itemChange(self, change, value):
+        if (change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged
+                and self._freeform and not self.is_label_cell):
+            self._update_handle_positions()
+            self._reposition_labels_live()
+        elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            is_selected = bool(value)
+            for h in self._resize_handles:
+                h.setVisible(is_selected)
+        return super().itemChange(change, value)
+
+    def _reposition_labels_live(self):
+        """Move in-cell text labels together with the cell during freeform drag."""
+        scene = self.scene()
+        if scene and hasattr(scene, 'reposition_cell_text_items'):
+            pos = self.pos()
+            rect = self.rect()
+            scene.reposition_cell_text_items(
+                self.cell_id, pos.x(), pos.y(), rect.width(), rect.height()
+            )
+
+    def mouseReleaseEvent(self, event):
+        was_moved = self._freeform and self._drag_start_pos is not None
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+        scene = self.scene()
+        if scene and hasattr(scene, 'hide_snap_lines'):
+            scene.hide_snap_lines()
+        if was_moved:
+            self._emit_freeform_geometry()
 
     def mouseDoubleClickEvent(self, event):
         if self.nested_layout_path and not self.is_label_cell:
@@ -128,7 +341,7 @@ class CellItem(QGraphicsRectItem):
         if self.is_label_cell:
             event.ignore()
             return
-        if self._drag_start_pos:
+        if self._drag_start_pos and not self._freeform:
             dist = (event.screenPos() - self._drag_start_pos).manhattanLength()
             if dist > 10: # Drag threshold
                 scene = self.scene()
@@ -136,6 +349,18 @@ class CellItem(QGraphicsRectItem):
                     scene.drag_manager.start_drag(self, event.scenePos())
                 self._drag_start_pos = None
                 return
+        elif self._drag_start_pos and self._freeform:
+            # We are dragging in freeform mode. Handle snapping.
+            super().mouseMoveEvent(event) # Let QGraphicsItem update pos
+            scene = self.scene()
+            if scene and hasattr(scene, 'snap_rect'):
+                r = QRectF(self.pos().x(), self.pos().y(), self.rect().width(), self.rect().height())
+                dx, dy = scene.snap_rect(r, self.cell_id)
+                if dx != 0 or dy != 0:
+                    new_pos = QPointF(self.pos().x() + dx, self.pos().y() + dy)
+                    self.setPos(new_pos)
+            return
+            
         super().mouseMoveEvent(event)
 
     def contextMenuEvent(self, event):
@@ -145,10 +370,6 @@ class CellItem(QGraphicsRectItem):
             event.accept()
             return
         super().contextMenuEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._drag_start_pos = None
-        super().mouseReleaseEvent(event)
 
     def update_data(self, image_path, fit_mode, padding, is_placeholder, rotation=0, align_h="center", align_v="center",
                      scale_bar_enabled=False, scale_bar_mode="rgb", scale_bar_length_um=10.0,

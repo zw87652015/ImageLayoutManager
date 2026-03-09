@@ -175,6 +175,25 @@ class Inspector(QWidget):
         )
         self.cell_layout.addRow("Align V:", self.align_v_combo)
         
+        self.cell_layout.addRow(QLabel("— Freeform Geometry —"))
+        
+        self.freeform_x = self._create_spinbox(-1000, 1000, self._emit_freeform)
+        self.freeform_y = self._create_spinbox(-1000, 1000, self._emit_freeform)
+        self.freeform_w = self._create_spinbox(1, 1000, self._emit_freeform)
+        self.freeform_h = self._create_spinbox(1, 1000, self._emit_freeform)
+        
+        self.cell_layout.addRow("Pos X (mm):", self.freeform_x)
+        self.cell_layout.addRow("Pos Y (mm):", self.freeform_y)
+        self.cell_layout.addRow("Width (mm):", self.freeform_w)
+        self.cell_layout.addRow("Height (mm):", self.freeform_h)
+
+        self.cell_layout.addRow(QLabel("— Grid Size Override (0=Auto) —"))
+        self.override_w = self._create_spinbox(0, 1000, self._emit_override_size)
+        self.override_h = self._create_spinbox(0, 1000, self._emit_override_size)
+        self.cell_layout.addRow("Width (mm):", self.override_w)
+        self.cell_layout.addRow("Height (mm):", self.override_h)
+
+        self.cell_layout.addRow(QLabel("— Padding —"))
         self.pad_top = self._create_spinbox(0, 100, self._emit_padding)
         self.pad_bottom = self._create_spinbox(0, 100, self._emit_padding)
         self.pad_left = self._create_spinbox(0, 100, self._emit_padding)
@@ -549,6 +568,20 @@ class Inspector(QWidget):
             "padding_right": self.pad_right.value()
         })
 
+    def _emit_freeform(self):
+        self.cell_property_changed.emit({
+            "freeform_x_mm": self.freeform_x.value(),
+            "freeform_y_mm": self.freeform_y.value(),
+            "freeform_w_mm": self.freeform_w.value(),
+            "freeform_h_mm": self.freeform_h.value()
+        })
+
+    def _emit_override_size(self):
+        self.cell_property_changed.emit({
+            "override_width_mm": self.override_w.value(),
+            "override_height_mm": self.override_h.value()
+        })
+
     def _emit_scale_bar(self):
         """Emit all scale bar properties as a single cell property change."""
         color_text = self.scale_bar_color.currentText()
@@ -670,6 +703,12 @@ class Inspector(QWidget):
                 self.pad_bottom.setValue(data.get("padding_bottom", 0))
                 self.pad_left.setValue(data.get("padding_left", 0))
                 self.pad_right.setValue(data.get("padding_right", 0))
+                self.freeform_x.setValue(data.get("freeform_x_mm", 0.0))
+                self.freeform_y.setValue(data.get("freeform_y_mm", 0.0))
+                self.freeform_w.setValue(data.get("freeform_w_mm", 50.0))
+                self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
+                self.override_w.setValue(data.get("override_width_mm", 0.0))
+                self.override_h.setValue(data.get("override_height_mm", 0.0))
                 self.blockSignals(False)
             return
 
@@ -756,6 +795,12 @@ class Inspector(QWidget):
             self.pad_bottom.setValue(data.get("padding_bottom", 0))
             self.pad_left.setValue(data.get("padding_left", 0))
             self.pad_right.setValue(data.get("padding_right", 0))
+            self.freeform_x.setValue(data.get("freeform_x_mm", 0.0))
+            self.freeform_y.setValue(data.get("freeform_y_mm", 0.0))
+            self.freeform_w.setValue(data.get("freeform_w_mm", 50.0))
+            self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
+            self.override_w.setValue(data.get("override_width_mm", 0.0))
+            self.override_h.setValue(data.get("override_height_mm", 0.0))
 
             corner_labels = data.get("corner_labels", {}) if data else {}
             self.corner_label_tl.setText(corner_labels.get("top_left_inside", ""))

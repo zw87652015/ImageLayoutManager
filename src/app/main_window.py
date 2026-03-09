@@ -31,7 +31,8 @@ from src.app.commands import (
     DeleteRowCommand, DeleteCellCommand,
     AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLayoutCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
-    ChangeSubCellRatioCommand
+    ChangeSubCellRatioCommand,
+    FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand
 )
 from src.utils.image_proxy import get_image_proxy
 
@@ -197,6 +198,31 @@ class MainWindow(QMainWindow):
         auto_layout_action.triggered.connect(self._on_auto_layout)
         edit_menu.addAction(auto_layout_action)
 
+        # ── Layout menu ──
+        layout_menu = self.menuBar().addMenu("Layout")
+
+        bake_action = QAction("Convert Grid → Freeform", self)
+        bake_action.setToolTip("Bake current grid positions into per-cell freeform coordinates and switch to freeform mode")
+        bake_action.triggered.connect(self._on_bake_to_freeform)
+        layout_menu.addAction(bake_action)
+
+        grid_mode_action = QAction("Switch to Grid Mode", self)
+        grid_mode_action.setToolTip("Switch back to grid layout mode (freeform positions are retained)")
+        grid_mode_action.triggered.connect(self._on_switch_to_grid)
+        layout_menu.addAction(grid_mode_action)
+
+        layout_menu.addSeparator()
+
+        bring_front_action = QAction("Bring to Front", self)
+        bring_front_action.setShortcut(QKeySequence("Ctrl+]"))
+        bring_front_action.triggered.connect(self._on_bring_to_front)
+        layout_menu.addAction(bring_front_action)
+
+        send_back_action = QAction("Send to Back", self)
+        send_back_action.setShortcut(QKeySequence("Ctrl+["))
+        send_back_action.triggered.connect(self._on_send_to_back)
+        layout_menu.addAction(send_back_action)
+
         # ── Toolbar — quick actions ──
         self.toolbar.addAction(auto_label_action)
         self.toolbar.addAction(auto_layout_action)
@@ -264,6 +290,7 @@ class MainWindow(QMainWindow):
         self.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
         self.scene.insert_row_requested.connect(self._on_insert_row)
         self.scene.insert_cell_requested.connect(self._on_insert_cell)
+        self.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
         
         # View signals
         self.view.zoom_changed.connect(self._on_zoom_changed)
@@ -1412,6 +1439,57 @@ class MainWindow(QMainWindow):
     def _on_auto_layout(self):
         cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
+
+    # ------------------------------------------------------------------
+    # Freeform layout handlers
+    # ------------------------------------------------------------------
+
+    def _on_bake_to_freeform(self):
+        """Bake the current grid positions into per-cell freeform coordinates and switch to freeform mode (undoable)."""
+        from src.model.layout_engine import LayoutEngine
+        layout = LayoutEngine.calculate_layout(self.project)
+        baked = {cid: rect for cid, rect in layout.cell_rects.items()}
+        cmd = FreeformLayoutModeCommand(self.project, "freeform", baked, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_switch_to_grid(self):
+        """Switch back to grid layout mode (undoable)."""
+        cmd = FreeformLayoutModeCommand(self.project, "grid", update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_cell_freeform_geometry_changed(self, cell_id: str, x: float, y: float, w: float, h: float):
+        """Called when user drags/resizes a cell in freeform mode; push undoable command."""
+        cell = self.project.find_cell_by_id(cell_id)
+        if cell:
+            cmd = FreeformGeometryCommand(cell, x, y, w, h)
+            # No refresh needed — scene already shows the new geometry from direct manipulation.
+            # The command only records state for undo; calling update_callback on undo/redo will resync.
+            cmd.update_callback = self._refresh_and_update
+            self.undo_stack.push(cmd)
+
+    def _on_bring_to_front(self):
+        """Increment z_index of all selected cells (undoable)."""
+        cells = [self.project.find_cell_by_id(cid) for cid in self._get_selected_cell_ids()]
+        cells = [c for c in cells if c is not None]
+        if cells:
+            cmd = ZIndexChangeCommand(cells, +1, self._refresh_and_update, "Bring to Front")
+            self.undo_stack.push(cmd)
+
+    def _on_send_to_back(self):
+        """Decrement z_index of all selected cells (undoable)."""
+        cells = [self.project.find_cell_by_id(cid) for cid in self._get_selected_cell_ids()]
+        cells = [c for c in cells if c is not None]
+        if cells:
+            cmd = ZIndexChangeCommand(cells, -1, self._refresh_and_update, "Send to Back")
+            self.undo_stack.push(cmd)
+
+    def _get_selected_cell_ids(self):
+        """Return list of selected non-label cell IDs from the scene."""
+        from src.canvas.cell_item import CellItem
+        return [
+            item.cell_id for item in self.scene.selectedItems()
+            if isinstance(item, CellItem) and not item.is_label_cell
+        ]
 
     def _get_export_default_dir(self) -> str:
         """Return directory of current project file, or empty string if none."""

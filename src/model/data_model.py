@@ -93,7 +93,18 @@ class Cell:
     scale_bar_offset_y: float = 2.0
     scale_bar_custom_text: Optional[str] = None  # If set, overrides auto-generated "X µm" text
     scale_bar_text_size_mm: float = 2.0  # Font size in mm for scale bar text
+
+    # Freeform layout (used when Project.layout_mode == "freeform")
+    freeform_x_mm: float = 0.0
+    freeform_y_mm: float = 0.0
+    freeform_w_mm: float = 50.0
+    freeform_h_mm: float = 50.0
+    z_index: int = 0
     
+    # Grid override size (0 means auto)
+    override_width_mm: float = 0.0
+    override_height_mm: float = 0.0
+
     @property
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -132,6 +143,13 @@ class Cell:
             "scale_bar_offset_y": self.scale_bar_offset_y,
             "scale_bar_custom_text": self.scale_bar_custom_text,
             "scale_bar_text_size_mm": self.scale_bar_text_size_mm,
+            "freeform_x_mm": self.freeform_x_mm,
+            "freeform_y_mm": self.freeform_y_mm,
+            "freeform_w_mm": self.freeform_w_mm,
+            "freeform_h_mm": self.freeform_h_mm,
+            "override_width_mm": self.override_width_mm,
+            "override_height_mm": self.override_height_mm,
+            "z_index": self.z_index,
             "nested_layout_path": self.nested_layout_path,
             "children": [c.to_dict() for c in self.children],
             "split_direction": self.split_direction,
@@ -154,6 +172,13 @@ class Cell:
         payload.setdefault("scale_bar_offset_y", 2.0)
         payload.setdefault("scale_bar_custom_text", None)
         payload.setdefault("scale_bar_text_size_mm", 2.0)
+        payload.setdefault("freeform_x_mm", 0.0)
+        payload.setdefault("freeform_y_mm", 0.0)
+        payload.setdefault("freeform_w_mm", 50.0)
+        payload.setdefault("freeform_h_mm", 50.0)
+        payload.setdefault("override_width_mm", 0.0)
+        payload.setdefault("override_height_mm", 0.0)
+        payload.setdefault("z_index", 0)
         payload.setdefault("nested_layout_path", None)
         payload.setdefault("split_direction", "none")
         payload.setdefault("split_ratios", [])
@@ -213,6 +238,9 @@ class Project:
     gap_mm: float = 2.0  # Gap between cells
     
     dpi: int = 600
+    
+    # Layout Mode: "grid" uses rows/columns, "freeform" uses per-cell absolute positions
+    layout_mode: str = "grid"
     
     # Grid Settings
     grid_mode: str = "stretch" # "stretch" or "fixed"
@@ -295,6 +323,7 @@ class Project:
             "margin_bottom_mm": self.margin_bottom_mm,
             "gap_mm": self.gap_mm,
             "dpi": self.dpi,
+            "layout_mode": self.layout_mode,
             "grid_mode": self.grid_mode,
             "row_alignment": self.row_alignment,
             "rows": [r.to_dict() for r in self.rows],
@@ -331,6 +360,7 @@ class Project:
         p.gap_mm = data.get("gap_mm", 2.0)
         p.dpi = data.get("dpi", 600)
         
+        p.layout_mode = data.get("layout_mode", "grid")
         p.grid_mode = data.get("grid_mode", "stretch")
         p.row_alignment = data.get("row_alignment", "center")
         
