@@ -913,3 +913,90 @@ class AutoLayoutCommand(QUndoCommand):
         if self.update_callback:
             self.update_callback()
 
+
+class AutoLayoutFreeformCommand(QUndoCommand):
+    def __init__(self, project, update_callback=None):
+        super().__init__("Auto Layout (Freeform)")
+        self.project = project
+        self.update_callback = update_callback
+        
+        # Save old cell paddings and freeform geometry
+        self.old_cell_props = {}
+        for cell in project.get_all_leaf_cells():
+            if cell.image_path and not cell.is_placeholder:
+                self.old_cell_props[cell.id] = {
+                    'padding_top': cell.padding_top,
+                    'padding_bottom': cell.padding_bottom,
+                    'padding_left': cell.padding_left,
+                    'padding_right': cell.padding_right,
+                    'freeform_w_mm': cell.freeform_w_mm,
+                    'freeform_h_mm': cell.freeform_h_mm
+                }
+                
+        self.new_props = None
+
+    def redo(self):
+        if self.new_props is None:
+            self.new_props = {}
+            from src.utils.auto_layout import AutoLayout
+            aspect_ratios = AutoLayout._get_image_aspect_ratios(self.project)
+            
+            for cell_id, old_props in self.old_cell_props.items():
+                cell = self.project.find_cell_by_id(cell_id)
+                if not cell:
+                    continue
+                
+                ratio = aspect_ratios.get(cell.id)
+                if ratio is None or ratio <= 0:
+                    continue
+                    
+                # We want to match aspect ratio but keeping the max dimension roughly similar
+                # to not blow up or shrink the image completely. Let's preserve area.
+                old_w = old_props['freeform_w_mm']
+                old_h = old_props['freeform_h_mm']
+                old_area = old_w * old_h
+                
+                # new_w * new_h = old_area
+                # new_w = ratio * new_h
+                # ratio * new_h^2 = old_area
+                import math
+                new_h = math.sqrt(old_area / ratio) if ratio > 0 else old_h
+                new_w = new_h * ratio
+                
+                self.new_props[cell.id] = {
+                    'padding_top': 0.0,
+                    'padding_bottom': 0.0,
+                    'padding_left': 0.0,
+                    'padding_right': 0.0,
+                    'freeform_w_mm': new_w,
+                    'freeform_h_mm': new_h
+                }
+                
+        # Apply new props
+        for cell_id, props in self.new_props.items():
+            cell = self.project.find_cell_by_id(cell_id)
+            if cell:
+                cell.padding_top = props['padding_top']
+                cell.padding_bottom = props['padding_bottom']
+                cell.padding_left = props['padding_left']
+                cell.padding_right = props['padding_right']
+                cell.freeform_w_mm = props['freeform_w_mm']
+                cell.freeform_h_mm = props['freeform_h_mm']
+
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for cell_id, props in self.old_cell_props.items():
+            cell = self.project.find_cell_by_id(cell_id)
+            if cell:
+                cell.padding_top = props['padding_top']
+                cell.padding_bottom = props['padding_bottom']
+                cell.padding_left = props['padding_left']
+                cell.padding_right = props['padding_right']
+                cell.freeform_w_mm = props['freeform_w_mm']
+                cell.freeform_h_mm = props['freeform_h_mm']
+                
+        if self.update_callback:
+            self.update_callback()
+

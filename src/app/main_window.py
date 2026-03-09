@@ -1437,8 +1437,12 @@ class MainWindow(QMainWindow):
         self.undo_stack.push(cmd)
 
     def _on_auto_layout(self):
-        cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
-        self.undo_stack.push(cmd)
+        if getattr(self.project, 'layout_mode', 'grid') == 'freeform':
+            cmd = AutoLayoutFreeformCommand(self.project, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+        else:
+            cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
+            self.undo_stack.push(cmd)
 
     # ------------------------------------------------------------------
     # Freeform layout handlers

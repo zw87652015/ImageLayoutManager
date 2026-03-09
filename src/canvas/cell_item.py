@@ -71,62 +71,107 @@ class ResizeHandleItem(QGraphicsRectItem):
         r = QRectF(self._drag_start_rect)
         dx, dy = delta.x(), delta.y()
 
-        if self.anchor_col == 0:
+        # Handle aspect ratio lock (Shift key or corners)
+        # We always lock aspect ratio in freeform mode when resizing from corners
+        # to ensure images don't get squished.
+        is_corner = (self.anchor_col in [0, 2] and self.anchor_row in [0, 2])
+        lock_aspect = is_corner or (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        
+        if lock_aspect and self._drag_start_rect.height() > 0:
+            aspect = self._drag_start_rect.width() / self._drag_start_rect.height()
+            
+            # If dragging a corner, prioritize the larger movement to determine scale
+            if is_corner:
+                # Determine sign based on which corner is dragged
+                sign_x = -1 if self.anchor_col == 0 else 1
+                sign_y = -1 if self.anchor_row == 0 else 1
+                
+                # Effective delta taking direction into account
+                eff_dx = dx * sign_x
+                eff_dy = dy * sign_y
+                
+                # Use the axis with the largest proportional change
+                if abs(eff_dx) > abs(eff_dy * aspect):
+                    # X dominates, adjust Y
+                    dy = (eff_dx / aspect) * sign_y
+                else:
+                    # Y dominates, adjust X
+                    dx = (eff_dy * aspect) * sign_x
+            else:
+                # Dragging an edge, adjust the other axis
+                if self.anchor_col != 1: # Dragging left/right edge
+                    sign_y = 1 # Expand bottom by default
+                    eff_dx = dx * (-1 if self.anchor_col == 0 else 1)
+                    dy = (eff_dx / aspect) * sign_y
+                    # When dragging edge with aspect lock, we need to artificially set anchor_row to apply the dy
+                    temp_anchor_row = 2 
+                elif self.anchor_row != 1: # Dragging top/bottom edge
+                    sign_x = 1 # Expand right by default
+                    eff_dy = dy * (-1 if self.anchor_row == 0 else 1)
+                    dx = (eff_dy * aspect) * sign_x
+                    temp_anchor_col = 2
+
+        # Apply X changes
+        active_col = self.anchor_col if not (lock_aspect and self.anchor_col == 1) else temp_anchor_col
+        if active_col == 0:
             r.setLeft(r.left() + dx)
-        elif self.anchor_col == 2:
+        elif active_col == 2:
             r.setRight(r.right() + dx)
 
-        if self.anchor_row == 0:
+        # Apply Y changes
+        active_row = self.anchor_row if not (lock_aspect and self.anchor_row == 1) else temp_anchor_row
+        if active_row == 0:
             r.setTop(r.top() + dy)
-        elif self.anchor_row == 2:
+        elif active_row == 2:
             r.setBottom(r.bottom() + dy)
 
         # Minimum size: 2 scene units (mm)
         min_size = 2.0
         if r.width() < min_size:
-            if self.anchor_col == 0:
+            if active_col == 0:
                 r.setLeft(r.right() - min_size)
             else:
                 r.setRight(r.left() + min_size)
         if r.height() < min_size:
-            if self.anchor_row == 0:
+            if active_row == 0:
                 r.setTop(r.bottom() - min_size)
             else:
                 r.setBottom(r.top() + min_size)
 
-        # Apply Snapping
-        scene = self.scene()
-        if scene and hasattr(scene, 'snap_rect'):
-            # Build a rect matching exactly what is being dragged (only snap the active edge/corner)
-            snap_r = QRectF(r)
-            if self.anchor_col == 1: # Center horizontally -> no X snapping
-                snap_r.setLeft(r.center().x())
-                snap_r.setRight(r.center().x())
-            if self.anchor_row == 1: # Center vertically -> no Y snapping
-                snap_r.setTop(r.center().y())
-                snap_r.setBottom(r.center().y())
+        # Apply Snapping (disable snapping when aspect locked to avoid fighting the lock)
+        if not lock_aspect:
+            scene = self.scene()
+            if scene and hasattr(scene, 'snap_rect'):
+                # Build a rect matching exactly what is being dragged (only snap the active edge/corner)
+                snap_r = QRectF(r)
+                if active_col == 1: # Center horizontally -> no X snapping
+                    snap_r.setLeft(r.center().x())
+                    snap_r.setRight(r.center().x())
+                if active_row == 1: # Center vertically -> no Y snapping
+                    snap_r.setTop(r.center().y())
+                    snap_r.setBottom(r.center().y())
+                    
+                sdx, sdy = scene.snap_rect(snap_r, self.cell_item.cell_id)
                 
-            sdx, sdy = scene.snap_rect(snap_r, self.cell_item.cell_id)
-            
-            if sdx != 0:
-                if self.anchor_col == 0:
-                    r.setLeft(r.left() + sdx)
-                elif self.anchor_col == 2:
-                    r.setRight(r.right() + sdx)
-            if sdy != 0:
-                if self.anchor_row == 0:
-                    r.setTop(r.top() + sdy)
-                elif self.anchor_row == 2:
-                    r.setBottom(r.bottom() + sdy)
+                if sdx != 0:
+                    if active_col == 0:
+                        r.setLeft(r.left() + sdx)
+                    elif active_col == 2:
+                        r.setRight(r.right() + sdx)
+                if sdy != 0:
+                    if active_row == 0:
+                        r.setTop(r.top() + sdy)
+                    elif active_row == 2:
+                        r.setBottom(r.bottom() + sdy)
 
         # Re-check minimum size after snap
         if r.width() < min_size:
-            if self.anchor_col == 0:
+            if active_col == 0:
                 r.setLeft(r.right() - min_size)
             else:
                 r.setRight(r.left() + min_size)
         if r.height() < min_size:
-            if self.anchor_row == 0:
+            if active_row == 0:
                 r.setTop(r.bottom() - min_size)
             else:
                 r.setBottom(r.top() + min_size)
@@ -593,11 +638,14 @@ class CellItem(QGraphicsRectItem):
         painter.drawRect(rect)
 
     def _draw_image(self, painter: QPainter, rect: QRectF):
-        # Calculate content rect with padding
-        content_rect = rect.adjusted(
-            self.padding[3], self.padding[0], 
-            -self.padding[1], -self.padding[2]
-        )
+        # Calculate content rect with padding (ignore padding in freeform mode)
+        if self._freeform:
+            content_rect = rect
+        else:
+            content_rect = rect.adjusted(
+                self.padding[3], self.padding[0], 
+                -self.padding[1], -self.padding[2]
+            )
         
         if content_rect.width() <= 0 or content_rect.height() <= 0:
             return
