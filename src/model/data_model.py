@@ -214,6 +214,10 @@ class Project:
     
     dpi: int = 600
     
+    # Grid Settings
+    grid_mode: str = "stretch" # "stretch" or "fixed"
+    row_alignment: str = "center" # "left", "center", "right"
+    
     # Layout
     rows: List[RowTemplate] = field(default_factory=list)
     cells: List[Cell] = field(default_factory=list)
@@ -291,6 +295,8 @@ class Project:
             "margin_bottom_mm": self.margin_bottom_mm,
             "gap_mm": self.gap_mm,
             "dpi": self.dpi,
+            "grid_mode": self.grid_mode,
+            "row_alignment": self.row_alignment,
             "rows": [r.to_dict() for r in self.rows],
             "cells": [c.to_dict() for c in self.cells],
             "text_items": [t.to_dict() for t in self.text_items],
@@ -324,6 +330,9 @@ class Project:
         p.margin_bottom_mm = data.get("margin_bottom_mm", 10.0)
         p.gap_mm = data.get("gap_mm", 2.0)
         p.dpi = data.get("dpi", 600)
+        
+        p.grid_mode = data.get("grid_mode", "stretch")
+        p.row_alignment = data.get("row_alignment", "center")
         
         p.rows = [RowTemplate.from_dict(r) for r in data.get("rows", [])]
         p.cells = [Cell.from_dict(c, project_dir) for c in data.get("cells", [])]

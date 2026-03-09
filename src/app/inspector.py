@@ -90,6 +90,21 @@ class Inspector(QWidget):
         self.project_layout.addRow("Margin Left:", self.m_left)
         self.project_layout.addRow("Margin Right:", self.m_right)
         
+        # Grid Settings
+        self.project_layout.addRow(QLabel("<b>Grid Settings</b>"))
+        
+        self.grid_mode = QComboBox()
+        self.grid_mode.addItems(["Stretch Rows to Page", "Fixed Cell Width"])
+        self.grid_mode.currentTextChanged.connect(self._on_grid_mode_changed)
+        self.project_layout.addRow("Grid Mode:", self.grid_mode)
+        
+        self.row_alignment = QComboBox()
+        self.row_alignment.addItems(["left", "center", "right"])
+        self.row_alignment.currentTextChanged.connect(
+            lambda t: self.project_property_changed.emit({"row_alignment": t})
+        )
+        self.project_layout.addRow("Row Alignment:", self.row_alignment)
+        
         # Corner Label Settings
         self.project_layout.addRow(QLabel("<b>Corner Labels</b>"))
         
@@ -501,11 +516,16 @@ class Inspector(QWidget):
         sb.valueChanged.connect(callback)
         return sb
 
-    @staticmethod
-    def _make_collapsible(group_box: QGroupBox):
-        """Make a QGroupBox collapsible via its checkbox."""
+    def _on_grid_mode_changed(self, text):
+        mode = "stretch" if text == "Stretch Rows to Page" else "fixed"
+        # Enable/disable row alignment based on mode
+        self.row_alignment.setEnabled(mode == "fixed")
+        self.project_property_changed.emit({"grid_mode": mode})
+
+    def _make_collapsible(self, group_box: QGroupBox):
         group_box.setCheckable(True)
         group_box.setChecked(True)
+        
         def _toggle(checked):
             layout = group_box.layout()
             if not layout:
@@ -814,10 +834,16 @@ class Inspector(QWidget):
                 self.dpi_spin.setValue(effective_project_data.get("dpi", 600))
                 self.page_w.setValue(effective_project_data.get("page_width_mm", 210))
                 self.page_h.setValue(effective_project_data.get("page_height_mm", 297))
-                self.m_top.setValue(effective_project_data.get("margin_top_mm", 10))
-                self.m_bottom.setValue(effective_project_data.get("margin_bottom_mm", 10))
-                self.m_left.setValue(effective_project_data.get("margin_left_mm", 10))
-                self.m_right.setValue(effective_project_data.get("margin_right_mm", 10))
+                self.m_top.setValue(effective_project_data.get("margin_top_mm", 0))
+                self.m_bottom.setValue(effective_project_data.get("margin_bottom_mm", 0))
+                self.m_left.setValue(effective_project_data.get("margin_left_mm", 0))
+                self.m_right.setValue(effective_project_data.get("margin_right_mm", 0))
+                
+                # Grid Settings
+                grid_mode = effective_project_data.get("grid_mode", "stretch")
+                self.grid_mode.setCurrentText("Fixed Cell Width" if grid_mode == "fixed" else "Stretch Rows to Page")
+                self.row_alignment.setEnabled(grid_mode == "fixed")
+                self.row_alignment.setCurrentText(effective_project_data.get("row_alignment", "center"))
                 
                 # Corner Labels
                 self.corner_label_font.setCurrentText(effective_project_data.get("corner_label_font_family", "Arial"))
