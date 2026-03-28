@@ -194,10 +194,10 @@ class Inspector(QWidget):
         self.cell_layout.addRow("Height (mm):", self.override_h)
 
         self.cell_layout.addRow(QLabel("— Padding —"))
-        self.pad_top = self._create_spinbox(0, 100, self._emit_padding)
-        self.pad_bottom = self._create_spinbox(0, 100, self._emit_padding)
-        self.pad_left = self._create_spinbox(0, 100, self._emit_padding)
-        self.pad_right = self._create_spinbox(0, 100, self._emit_padding)
+        self.pad_top = self._create_spinbox(-100, 100, self._emit_padding)
+        self.pad_bottom = self._create_spinbox(-100, 100, self._emit_padding)
+        self.pad_left = self._create_spinbox(-100, 100, self._emit_padding)
+        self.pad_right = self._create_spinbox(-100, 100, self._emit_padding)
         
         self.cell_layout.addRow("Pad Top (mm):", self.pad_top)
         self.cell_layout.addRow("Pad Bottom:", self.pad_bottom)
@@ -379,13 +379,6 @@ class Inspector(QWidget):
             lambda v: self.project_property_changed.emit({"label_row_height": v})
         )
         self.label_cell_layout.addRow("Row Height:", self.label_row_height)
-
-        self.label_attach = QComboBox()
-        self.label_attach.addItems(["Figure", "Grid"])
-        self.label_attach.currentTextChanged.connect(
-            lambda t: self.project_property_changed.emit({"label_attach_to": t.lower()})
-        )
-        self.label_cell_layout.addRow("Attach To:", self.label_attach)
 
         self.label_cell_group.setLayout(self.label_cell_layout)
         self.layout.addWidget(self.label_cell_group)
@@ -736,8 +729,6 @@ class Inspector(QWidget):
                 self.label_offset_x.setValue(data.get("label_offset_x", 0.0))
                 self.label_offset_y.setValue(data.get("label_offset_y", 0.0))
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
-                label_attach = data.get("label_attach_to", "figure")
-                self.label_attach.setCurrentText(label_attach.capitalize())
                 self.blockSignals(False)
             return
 

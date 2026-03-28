@@ -261,7 +261,6 @@ class Project:
     label_font_weight: str = "bold"
     label_color: str = "#000000" # black or white (#FFFFFF)
     label_anchor: str = LabelPosition.TOP_LEFT.value
-    label_attach_to: str = "figure" # "grid" (cell boundary) or "figure" (image content area)
     label_align: str = "center" # "left", "center", "right" — preset for label position in label cells
     label_offset_x: float = 0.0  # mm, horizontal offset for fine-tuning label position
     label_offset_y: float = 0.0  # mm, vertical offset for fine-tuning label position
@@ -336,7 +335,6 @@ class Project:
             "label_font_weight": self.label_font_weight,
             "label_color": self.label_color,
             "label_anchor": self.label_anchor,
-            "label_attach_to": self.label_attach_to,
             "label_align": self.label_align,
             "label_offset_x": self.label_offset_x,
             "label_offset_y": self.label_offset_y,
@@ -375,7 +373,6 @@ class Project:
         p.label_font_weight = data.get("label_font_weight", "bold")
         p.label_color = data.get("label_color", "#000000")
         p.label_anchor = data.get("label_anchor", LabelPosition.TOP_LEFT.value)
-        p.label_attach_to = data.get("label_attach_to", "figure")
         p.label_align = data.get("label_align", "center")
         p.label_offset_x = data.get("label_offset_x", 0.0)
         p.label_offset_y = data.get("label_offset_y", 0.0)

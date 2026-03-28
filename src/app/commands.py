@@ -93,6 +93,79 @@ class FreeformLayoutModeCommand(QUndoCommand):
             self.update_callback()
 
 
+class DividerDragCommand(QUndoCommand):
+    """Undoable command for dragging a row-height or column-width divider.
+
+    For 'row' dividers: records old/new height_ratio for two adjacent rows.
+    For 'col' dividers: records old/new column_ratios list for one row.
+    """
+
+    def __init__(self, project, div, update_callback=None):
+        kind = div.kind
+        label = "Resize Row" if kind == 'row' else "Resize Column"
+        super().__init__(label)
+        self.project = project
+        self.kind = kind
+        self.update_callback = update_callback
+
+        if kind == 'row':
+            self.row_a_idx = div.row_a
+            self.row_b_idx = div.row_b
+            # original_ratio_* captured at drag-start before any live updates
+            self.old_ratio_a = div.original_ratio_a
+            self.old_ratio_b = div.original_ratio_b
+            self.new_ratio_a = div.ratio_a
+            self.new_ratio_b = div.ratio_b
+        else:
+            self.row_index = div.row_index
+            self.col_a = div.col_a
+            self.col_b = div.col_b
+            row = next((r for r in project.rows if r.index == div.row_index), None)
+            # Build old ratios from original_ratio_* (pre-drag values)
+            cur_ratios = list(row.column_ratios) if (row and row.column_ratios) else (
+                [1.0] * row.column_count if row else [1.0, 1.0])
+            while row and len(cur_ratios) < row.column_count:
+                cur_ratios.append(1.0)
+            old_ratios = cur_ratios[:]
+            old_ratios[div.col_a] = div.original_ratio_a
+            old_ratios[div.col_b] = div.original_ratio_b
+            self.old_ratios = old_ratios
+            new_ratios = cur_ratios[:]
+            new_ratios[div.col_a] = div.ratio_a
+            new_ratios[div.col_b] = div.ratio_b
+            self.new_ratios = new_ratios
+
+    def redo(self):
+        if self.kind == 'row':
+            row_a = next((r for r in self.project.rows if r.index == self.row_a_idx), None)
+            row_b = next((r for r in self.project.rows if r.index == self.row_b_idx), None)
+            if row_a:
+                row_a.height_ratio = self.new_ratio_a
+            if row_b:
+                row_b.height_ratio = self.new_ratio_b
+        else:
+            row = next((r for r in self.project.rows if r.index == self.row_index), None)
+            if row:
+                row.column_ratios = self.new_ratios[:]
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        if self.kind == 'row':
+            row_a = next((r for r in self.project.rows if r.index == self.row_a_idx), None)
+            row_b = next((r for r in self.project.rows if r.index == self.row_b_idx), None)
+            if row_a:
+                row_a.height_ratio = self.old_ratio_a
+            if row_b:
+                row_b.height_ratio = self.old_ratio_b
+        else:
+            row = next((r for r in self.project.rows if r.index == self.row_index), None)
+            if row:
+                row.column_ratios = self.old_ratios[:]
+        if self.update_callback:
+            self.update_callback()
+
+
 class ZIndexChangeCommand(QUndoCommand):
     """Change z_index of one or more cells for bring-to-front / send-to-back."""
     def __init__(self, cells: list, delta: int, update_callback=None, description="Change Z-Order"):

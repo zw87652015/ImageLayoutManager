@@ -32,7 +32,8 @@ from src.app.commands import (
     AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLayoutCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
-    FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand
+    FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand,
+    DividerDragCommand
 )
 from src.utils.image_proxy import get_image_proxy
 
@@ -291,6 +292,7 @@ class MainWindow(QMainWindow):
         self.scene.insert_row_requested.connect(self._on_insert_row)
         self.scene.insert_cell_requested.connect(self._on_insert_cell)
         self.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
+        self.scene.divider_drag_finished.connect(self._on_divider_drag_finished)
         
         # View signals
         self.view.zoom_changed.connect(self._on_zoom_changed)
@@ -709,7 +711,6 @@ class MainWindow(QMainWindow):
                     "label_offset_x": self.project.label_offset_x,
                     "label_offset_y": self.project.label_offset_y,
                     "label_row_height": getattr(self.project, 'label_row_height', 0.0),
-                    "label_attach_to": self.project.label_attach_to,
                 }
                 self.inspector.set_selection('label_cell', label_data)
                 return
@@ -1115,7 +1116,15 @@ class MainWindow(QMainWindow):
         # --- Label submenu ---
         label_menu = menu.addMenu("Labels")
 
-        # Numbering label
+        # Find the top-level ancestor for this cell
+        _top_cell = cell
+        _par = self.project.find_parent_of(cell_id)
+        while _par:
+            _top_cell = _par
+            _par = self.project.find_parent_of(_par.id)
+        _is_subcell = (_top_cell.id != cell_id)
+
+        # Numbering label — targets this sub-cell directly (label row inside the box)
         has_numbering = any(
             t for t in self.project.text_items
             if t.scope == "cell" and t.subtype != "corner" and t.parent_id == cell_id
@@ -1126,6 +1135,22 @@ class MainWindow(QMainWindow):
         else:
             add_num_action = label_menu.addAction("Add Label Cell")
             add_num_action.triggered.connect(lambda: self._ctx_add_numbering_label(cell_id))
+
+        # For sub-cells: also offer a label above the whole container box
+        if _is_subcell:
+            _top_cell_id = _top_cell.id
+            has_box_label = any(
+                t for t in self.project.text_items
+                if t.scope == "cell" and t.subtype != "corner" and t.parent_id == _top_cell_id
+            )
+            if has_box_label:
+                del_box_action = label_menu.addAction("Delete Label Cell Above Box")
+                del_box_action.triggered.connect(
+                    lambda: self._ctx_delete_numbering_label(_top_cell_id))
+            else:
+                add_box_action = label_menu.addAction("Add Label Cell Above Box")
+                add_box_action.triggered.connect(
+                    lambda: self._ctx_add_numbering_label(_top_cell_id))
 
         label_menu.addSeparator()
 
@@ -1470,6 +1495,11 @@ class MainWindow(QMainWindow):
             # The command only records state for undo; calling update_callback on undo/redo will resync.
             cmd.update_callback = self._refresh_and_update
             self.undo_stack.push(cmd)
+
+    def _on_divider_drag_finished(self, div):
+        """Called when user finishes dragging a row/column divider; push undoable command."""
+        cmd = DividerDragCommand(self.project, div, self._refresh_and_update)
+        self.undo_stack.push(cmd)
 
     def _on_bring_to_front(self):
         """Increment z_index of all selected cells (undoable)."""

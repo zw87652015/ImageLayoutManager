@@ -475,16 +475,6 @@ class ImageExporter:
         if text_item.scope == "cell" and text_item.parent_id and text_item.parent_id in layout_result.cell_rects:
             cx, cy, cw, ch = layout_result.cell_rects[text_item.parent_id]
 
-            is_corner = getattr(text_item, 'subtype', None) == 'corner'
-            attach_to = getattr(project, 'label_attach_to', 'figure')
-            if attach_to == "figure" and not is_corner:
-                cell = project.find_cell_by_id(text_item.parent_id)
-                if cell:
-                    cx += cell.padding_left
-                    cy += cell.padding_top
-                    cw -= cell.padding_left + cell.padding_right
-                    ch -= cell.padding_top + cell.padding_bottom
-
             anchor = text_item.anchor or "top_left_inside"
             ox, oy = text_item.offset_x, text_item.offset_y
 

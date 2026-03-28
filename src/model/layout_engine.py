@@ -202,8 +202,8 @@ class LayoutEngine:
                 col_w = col_widths[cell.col_index]
                 cell_rects[cell.id] = (x_pos, pic_y, col_w, pic_h)
 
-                # Label cell rect: only for top-level leaf cells that have a numbering label
-                if label_row_above and lbl_y is not None and cell.id in labeled_cell_ids and cell.is_leaf:
+                # Label cell rect: for top-level cells (leaf or container) that have a numbering label
+                if label_row_above and lbl_y is not None and cell.id in labeled_cell_ids:
                     label_rects[cell.id] = (x_pos, lbl_y, col_w, lbl_h)
 
                 # Recursively layout sub-cells
