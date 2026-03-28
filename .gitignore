@@ -23,3 +23,4 @@ venv/
 nuitka-crash-report.xml
 /.windsurf
 Code_*.md
+Review_Prompt.md
