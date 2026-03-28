@@ -8,6 +8,7 @@ from src.canvas.text_graphics_item import TextGraphicsItem
 from src.model.layout_engine import LayoutEngine
 from src.canvas.drag_manager import DragManager
 from src.canvas.add_button_item import AddButtonItem
+from src.canvas.divider_item import DividerItem, HIT_THICKNESS
 
 class CanvasScene(QGraphicsScene):
     # Signals
@@ -22,6 +23,8 @@ class CanvasScene(QGraphicsScene):
     nested_layout_open_requested = pyqtSignal(str, str) # cell_id, figlayout_path
     insert_row_requested = pyqtSignal(int)   # insert at row_index
     insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
+    cell_freeform_geometry_changed = pyqtSignal(str, float, float, float, float) # cell_id, x, y, w, h
+    divider_drag_finished = pyqtSignal(object)  # DividerItem
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -47,6 +50,9 @@ class CanvasScene(QGraphicsScene):
         # Margins rect (guide)
         self.margin_item = self.addRect(QRectF(), QPen(QColor("#DDDDDD"), 1, Qt.PenStyle.DashLine), QBrush(Qt.BrushStyle.NoBrush))
         self.margin_item.setZValue(-99)
+        
+        self._snap_line_items = []
+        self._divider_items = []  # list of DividerItem
 
     def set_project(self, project: Project):
         self.project = project
@@ -108,11 +114,16 @@ class CanvasScene(QGraphicsScene):
             
             item = self.cell_items[cell.id]
             
+            # Freeform mode toggle
+            is_freeform = getattr(self.project, 'layout_mode', 'grid') == 'freeform'
+            item.set_freeform_mode(is_freeform)
+
             # Geometry
             if cell.id in layout_result.cell_rects:
                 x, y, w, h = layout_result.cell_rects[cell.id]
                 item.setRect(0, 0, w, h)
                 item.setPos(x, y)
+                item.setZValue(getattr(cell, 'z_index', 0))
                 
             # Content
                 item.update_data(
@@ -236,17 +247,10 @@ class CanvasScene(QGraphicsScene):
                 if text_model.parent_id in layout_result.cell_rects:
                     cx, cy, cw, ch = layout_result.cell_rects[text_model.parent_id]
 
-                    # Corner labels always anchor to cell boundary (ignore padding).
-                    # Other labels respect the attach_to setting.
-                    is_corner = getattr(text_model, 'subtype', None) == 'corner'
-                    attach_to = getattr(self.project, 'label_attach_to', 'figure')
-                    if attach_to == "figure" and not is_corner:
-                        cell = self.project.find_cell_by_id(text_model.parent_id)
-                        if cell:
-                            cx = cx + cell.padding_left
-                            cy = cy + cell.padding_top
-                            cw = cw - cell.padding_left - cell.padding_right
-                            ch = ch - cell.padding_top - cell.padding_bottom
+                    # In previous code, 'attach_to' logic modified cx, cy, cw, ch by subtracting padding.
+                    # As requested, padding should NOT affect the label position. Labels should always anchor 
+                    # relative to the full cell boundaries. 
+                    # We simply remove the code that adjusts cx, cy, cw, ch based on padding.
                     
                     # Calculate position based on anchor
                     anchor = text_model.anchor or "top_left_inside"
@@ -285,8 +289,110 @@ class CanvasScene(QGraphicsScene):
                 t_item.setPos(text_model.x, text_model.y)
                 t_item.scope = "global"
 
-        # Place add-row / add-cell buttons around the layout
+        # Place add-row / add-cell buttons and dividers around the layout
         self._refresh_add_buttons(layout_result)
+        dragging = any(getattr(d, '_dragging', False) for d in self._divider_items)
+        if getattr(self.project, 'layout_mode', 'grid') == 'grid' and not dragging:
+            self._refresh_dividers(layout_result)
+        elif getattr(self.project, 'layout_mode', 'grid') != 'grid':
+            self._clear_dividers()
+
+    def get_snap_lines(self, ignore_cell_id: str = None):
+        """Return lists of vertical (x) and horizontal (y) coordinates for snapping."""
+        v_lines = []
+        h_lines = []
+        m = self.margin_item.rect()
+        if m.isValid():
+            v_lines.extend([m.left(), m.center().x(), m.right()])
+            h_lines.extend([m.top(), m.center().y(), m.bottom()])
+            
+        for cid, item in self.cell_items.items():
+            if cid == ignore_cell_id or item.is_label_cell:
+                continue
+            r = QRectF(item.pos().x(), item.pos().y(), item.rect().width(), item.rect().height())
+            v_lines.extend([r.left(), r.center().x(), r.right()])
+            h_lines.extend([r.top(), r.center().y(), r.bottom()])
+            
+        return v_lines, h_lines
+
+    def show_snap_lines(self, x_coords, y_coords):
+        """Draw pink dashed lines across the scene at the given coordinates."""
+        self.hide_snap_lines()
+        pen = QPen(QColor(255, 0, 255, 180), 0.5, Qt.PenStyle.DashLine)
+        r = self.sceneRect()
+        for x in x_coords:
+            line = self.addLine(x, r.top(), x, r.bottom(), pen)
+            line.setZValue(1000)
+            self._snap_line_items.append(line)
+        for y in y_coords:
+            line = self.addLine(r.left(), y, r.right(), y, pen)
+            line.setZValue(1000)
+            self._snap_line_items.append(line)
+
+    def hide_snap_lines(self):
+        """Remove all active snap lines."""
+        for item in getattr(self, '_snap_line_items', []):
+            if item.scene():
+                self.removeItem(item)
+        self._snap_line_items = []
+
+    def snap_rect(self, rect: QRectF, ignore_cell_id: str = None):
+        """Find best snap delta for a rect and show lines. Returns (dx, dy)."""
+        v_lines, h_lines = self.get_snap_lines(ignore_cell_id)
+        
+        best_dx = 0
+        min_dx = 2.0
+        snapped_x = None
+        for cv in [rect.left(), rect.center().x(), rect.right()]:
+            for tv in v_lines:
+                diff = tv - cv
+                if abs(diff) < min_dx:
+                    min_dx = abs(diff)
+                    best_dx = diff
+                    snapped_x = tv
+                    
+        best_dy = 0
+        min_dy = 2.0
+        snapped_y = None
+        for ch in [rect.top(), rect.center().y(), rect.bottom()]:
+            for th in h_lines:
+                diff = th - ch
+                if abs(diff) < min_dy:
+                    min_dy = abs(diff)
+                    best_dy = diff
+                    snapped_y = th
+                    
+        self.show_snap_lines(
+            [snapped_x] if snapped_x is not None else [],
+            [snapped_y] if snapped_y is not None else []
+        )
+        
+        return best_dx, best_dy
+
+    def reposition_cell_text_items(self, cell_id: str, cx: float, cy: float, cw: float, ch: float):
+        """Reposition in-cell TextGraphicsItems for a specific cell immediately (used during freeform drag)."""
+        if not self.project:
+            return
+        for text_model in self.project.text_items:
+            if text_model.scope != "cell" or text_model.parent_id != cell_id:
+                continue
+            t_item = self.text_items.get(text_model.id)
+            if not t_item or not t_item.isVisible():
+                continue
+
+            ex, ey, ew, eh = cx, cy, cw, ch
+
+            anchor = text_model.anchor or "top_left_inside"
+            ox, oy = text_model.offset_x, text_model.offset_y
+            scale = t_item.scale()
+            text_width = t_item.boundingRect().width() * scale
+            text_height = t_item.boundingRect().height() * scale
+
+            ty = ey + oy if "top" in anchor else (ey + eh - oy - text_height if "bottom" in anchor else ey + (eh - text_height) / 2)
+            tx = ex + ox if "left" in anchor else (ex + ew - ox - text_width if "right" in anchor else ex + (ew - text_width) / 2)
+
+            t_item.setPos(tx, ty)
+            t_item.cell_bounds = (ex, ey, ew, eh)
 
     def dragEnterEvent(self, event: QGraphicsSceneDragDropEvent):
         if event.mimeData().hasUrls():
@@ -398,6 +504,118 @@ class CanvasScene(QGraphicsScene):
             btn_r.setPos(rx + rw + GAP, ry)
             self.addItem(btn_r)
             self._add_buttons.append(btn_r)
+
+    def _clear_dividers(self):
+        for d in self._divider_items:
+            if d.scene():
+                self.removeItem(d)
+        self._divider_items.clear()
+
+    def _refresh_dividers(self, layout_result):
+        """Create draggable dividers between rows and between columns."""
+        self._clear_dividers()
+        if not self.project:
+            return
+
+        sorted_rows = sorted(layout_result.row_rects.items(), key=lambda kv: kv[0])
+        row_heights = layout_result.row_heights
+        row_templates = {r.index: r for r in self.project.rows}
+        content_width = (self.project.page_width_mm
+                         - self.project.margin_left_mm
+                         - self.project.margin_right_mm)
+        gap = self.project.gap_mm
+        from src.model.layout_engine import LayoutEngine
+
+        # --- Horizontal dividers between consecutive rows ---
+        for i in range(len(sorted_rows) - 1):
+            idx_a, (rx_a, ry_a, rw_a, rh_a) = sorted_rows[i]
+            idx_b, (rx_b, ry_b, rw_b, rh_b) = sorted_rows[i + 1]
+            row_a = row_templates.get(idx_a)
+            row_b = row_templates.get(idx_b)
+            if row_a is None or row_b is None:
+                continue
+
+            # Position in the gap between row_a bottom and row_b top
+            gap_top = ry_a + rh_a
+            gap_bot = ry_b
+            cy = (gap_top + gap_bot) / 2
+            div_x = self.project.margin_left_mm
+            div_w = content_width
+
+            div = DividerItem(
+                kind='row',
+                row_a=idx_a, row_b=idx_b,
+                ratio_a=row_a.height_ratio,
+                ratio_b=row_b.height_ratio,
+            )
+            div.setRect(0, 0, div_w, HIT_THICKNESS)
+            div.setPos(div_x, cy - HIT_THICKNESS / 2)
+            self.addItem(div)
+            self._divider_items.append(div)
+
+        # --- Vertical dividers between columns within each row ---
+        for row_idx, (rx, ry, rw, rh) in sorted_rows:
+            row_temp = row_templates.get(row_idx)
+            if row_temp is None or row_temp.column_count < 2:
+                continue
+
+            col_widths = LayoutEngine._compute_col_widths(row_temp, content_width, gap)
+            # Determine actual row x start (may differ in fixed/alignment mode)
+            row_cells = [c for c in self.project.cells if c.row_index == row_idx]
+            if not row_cells:
+                continue
+
+            x_cursor = rx
+            col_ratios = (row_temp.column_ratios if row_temp.column_ratios
+                          else [1.0] * row_temp.column_count)
+            while len(col_ratios) < row_temp.column_count:
+                col_ratios.append(1.0)
+            col_ratios = list(col_ratios[:row_temp.column_count])
+
+            for ci in range(row_temp.column_count - 1):
+                x_cursor += col_widths[ci]
+                # gap centre
+                cx = x_cursor + gap / 2
+
+                div = DividerItem(
+                    kind='col',
+                    col_a=ci, col_b=ci + 1,
+                    ratio_a=col_ratios[ci],
+                    ratio_b=col_ratios[ci + 1],
+                    row_index=row_idx,
+                )
+                div.setRect(0, 0, HIT_THICKNESS, rh)
+                div.setPos(cx - HIT_THICKNESS / 2, ry)
+                self.addItem(div)
+                self._divider_items.append(div)
+
+                x_cursor += gap
+
+    def _divider_live_update(self, div: 'DividerItem'):
+        """Apply ratio changes live (without undo) so the user sees instant feedback."""
+        if not self.project:
+            return
+        if div.kind == 'row':
+            row_a = next((r for r in self.project.rows if r.index == div.row_a), None)
+            row_b = next((r for r in self.project.rows if r.index == div.row_b), None)
+            if row_a and row_b:
+                row_a.height_ratio = div.ratio_a
+                row_b.height_ratio = div.ratio_b
+        else:
+            row = next((r for r in self.project.rows if r.index == div.row_index), None)
+            if row:
+                col_ratios = (list(row.column_ratios) if row.column_ratios
+                              else [1.0] * row.column_count)
+                while len(col_ratios) < row.column_count:
+                    col_ratios.append(1.0)
+                col_ratios[div.col_a] = div.ratio_a
+                col_ratios[div.col_b] = div.ratio_b
+                row.column_ratios = col_ratios
+        self.refresh_layout()
+
+    def _divider_drag_finished(self, div: 'DividerItem'):
+        """Emit signal so MainWindow can push an undoable command."""
+        self.divider_drag_finished.emit(div)
 
     def _on_add_button_clicked(self, action: str, row_index: int, col_index: int):
         """Called by AddButtonItem when clicked."""

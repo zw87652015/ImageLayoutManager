@@ -6,6 +6,53 @@ from src.model.data_model import Project, RowTemplate, Cell
 
 class AutoLayout:
     @staticmethod
+    def _get_image_aspect_ratios(project: Project) -> Dict[str, float]:
+        """Extracts the native w/h aspect ratio for all images in the project."""
+        aspect_ratios = {}
+        for cell in project.get_all_leaf_cells():
+            if cell.image_path and os.path.exists(cell.image_path) and not cell.is_placeholder:
+                try:
+                    ext = os.path.splitext(cell.image_path)[1].lower()
+                    if ext == '.svg':
+                        # Handle SVG vector format
+                        renderer = QSvgRenderer(cell.image_path)
+                        if renderer.isValid():
+                            size = renderer.defaultSize()
+                            if size.height() > 0:
+                                ratio = size.width() / size.height()
+                                if getattr(cell, 'rotation', 0) in [90, 270]:
+                                    ratio = 1.0 / ratio if ratio != 0 else 0
+                                aspect_ratios[cell.id] = ratio
+                    elif ext == '.pdf':
+                        # Handle PDF format with PyMuPDF
+                        try:
+                            import fitz
+                            doc = fitz.open(cell.image_path)
+                            if doc.page_count > 0:
+                                page = doc[0]
+                                rect = page.rect
+                                if rect.height > 0:
+                                    ratio = rect.width / rect.height
+                                    if getattr(cell, 'rotation', 0) in [90, 270]:
+                                        ratio = 1.0 / ratio if ratio != 0 else 0
+                                    aspect_ratios[cell.id] = ratio
+                            doc.close()
+                        except ImportError:
+                            pass
+                    else:
+                        # Handle raster formats with PIL
+                        with Image.open(cell.image_path) as img:
+                            w, h = img.size
+                            if h > 0:
+                                ratio = w / h
+                                if getattr(cell, 'rotation', 0) in [90, 270]:
+                                    ratio = 1.0 / ratio if ratio != 0 else 0
+                                aspect_ratios[cell.id] = ratio
+                except Exception:
+                    pass
+        return aspect_ratios
+
+    @staticmethod
     def optimize_layout(project: Project) -> Dict[str, any]:
         """
         Calculates optimized row heights and column ratios.

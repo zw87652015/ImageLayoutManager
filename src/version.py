@@ -1,4 +1,4 @@
 # ──────────────────────────────────────────────
 # Application Version  (update this before release)
 # ──────────────────────────────────────────────
-APP_VERSION = "1.4.5"
+APP_VERSION = "2.1.4"

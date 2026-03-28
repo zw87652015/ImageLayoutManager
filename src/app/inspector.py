@@ -90,6 +90,21 @@ class Inspector(QWidget):
         self.project_layout.addRow("Margin Left:", self.m_left)
         self.project_layout.addRow("Margin Right:", self.m_right)
         
+        # Grid Settings
+        self.project_layout.addRow(QLabel("<b>Grid Settings</b>"))
+        
+        self.grid_mode = QComboBox()
+        self.grid_mode.addItems(["Stretch Rows to Page", "Fixed Cell Width"])
+        self.grid_mode.currentTextChanged.connect(self._on_grid_mode_changed)
+        self.project_layout.addRow("Grid Mode:", self.grid_mode)
+        
+        self.row_alignment = QComboBox()
+        self.row_alignment.addItems(["left", "center", "right"])
+        self.row_alignment.currentTextChanged.connect(
+            lambda t: self.project_property_changed.emit({"row_alignment": t})
+        )
+        self.project_layout.addRow("Row Alignment:", self.row_alignment)
+        
         # Corner Label Settings
         self.project_layout.addRow(QLabel("<b>Corner Labels</b>"))
         
@@ -160,10 +175,29 @@ class Inspector(QWidget):
         )
         self.cell_layout.addRow("Align V:", self.align_v_combo)
         
-        self.pad_top = self._create_spinbox(0, 100, self._emit_padding)
-        self.pad_bottom = self._create_spinbox(0, 100, self._emit_padding)
-        self.pad_left = self._create_spinbox(0, 100, self._emit_padding)
-        self.pad_right = self._create_spinbox(0, 100, self._emit_padding)
+        self.cell_layout.addRow(QLabel("— Freeform Geometry —"))
+        
+        self.freeform_x = self._create_spinbox(-1000, 1000, self._emit_freeform)
+        self.freeform_y = self._create_spinbox(-1000, 1000, self._emit_freeform)
+        self.freeform_w = self._create_spinbox(1, 1000, self._emit_freeform)
+        self.freeform_h = self._create_spinbox(1, 1000, self._emit_freeform)
+        
+        self.cell_layout.addRow("Pos X (mm):", self.freeform_x)
+        self.cell_layout.addRow("Pos Y (mm):", self.freeform_y)
+        self.cell_layout.addRow("Width (mm):", self.freeform_w)
+        self.cell_layout.addRow("Height (mm):", self.freeform_h)
+
+        self.cell_layout.addRow(QLabel("— Grid Size Override (0=Auto) —"))
+        self.override_w = self._create_spinbox(0, 1000, self._emit_override_size)
+        self.override_h = self._create_spinbox(0, 1000, self._emit_override_size)
+        self.cell_layout.addRow("Width (mm):", self.override_w)
+        self.cell_layout.addRow("Height (mm):", self.override_h)
+
+        self.cell_layout.addRow(QLabel("— Padding —"))
+        self.pad_top = self._create_spinbox(-100, 100, self._emit_padding)
+        self.pad_bottom = self._create_spinbox(-100, 100, self._emit_padding)
+        self.pad_left = self._create_spinbox(-100, 100, self._emit_padding)
+        self.pad_right = self._create_spinbox(-100, 100, self._emit_padding)
         
         self.cell_layout.addRow("Pad Top (mm):", self.pad_top)
         self.cell_layout.addRow("Pad Bottom:", self.pad_bottom)
@@ -346,13 +380,6 @@ class Inspector(QWidget):
         )
         self.label_cell_layout.addRow("Row Height:", self.label_row_height)
 
-        self.label_attach = QComboBox()
-        self.label_attach.addItems(["Figure", "Grid"])
-        self.label_attach.currentTextChanged.connect(
-            lambda t: self.project_property_changed.emit({"label_attach_to": t.lower()})
-        )
-        self.label_cell_layout.addRow("Attach To:", self.label_attach)
-
         self.label_cell_group.setLayout(self.label_cell_layout)
         self.layout.addWidget(self.label_cell_group)
         self.label_cell_group.hide()
@@ -501,11 +528,16 @@ class Inspector(QWidget):
         sb.valueChanged.connect(callback)
         return sb
 
-    @staticmethod
-    def _make_collapsible(group_box: QGroupBox):
-        """Make a QGroupBox collapsible via its checkbox."""
+    def _on_grid_mode_changed(self, text):
+        mode = "stretch" if text == "Stretch Rows to Page" else "fixed"
+        # Enable/disable row alignment based on mode
+        self.row_alignment.setEnabled(mode == "fixed")
+        self.project_property_changed.emit({"grid_mode": mode})
+
+    def _make_collapsible(self, group_box: QGroupBox):
         group_box.setCheckable(True)
         group_box.setChecked(True)
+        
         def _toggle(checked):
             layout = group_box.layout()
             if not layout:
@@ -527,6 +559,20 @@ class Inspector(QWidget):
             "padding_bottom": self.pad_bottom.value(),
             "padding_left": self.pad_left.value(),
             "padding_right": self.pad_right.value()
+        })
+
+    def _emit_freeform(self):
+        self.cell_property_changed.emit({
+            "freeform_x_mm": self.freeform_x.value(),
+            "freeform_y_mm": self.freeform_y.value(),
+            "freeform_w_mm": self.freeform_w.value(),
+            "freeform_h_mm": self.freeform_h.value()
+        })
+
+    def _emit_override_size(self):
+        self.cell_property_changed.emit({
+            "override_width_mm": self.override_w.value(),
+            "override_height_mm": self.override_h.value()
         })
 
     def _emit_scale_bar(self):
@@ -650,6 +696,12 @@ class Inspector(QWidget):
                 self.pad_bottom.setValue(data.get("padding_bottom", 0))
                 self.pad_left.setValue(data.get("padding_left", 0))
                 self.pad_right.setValue(data.get("padding_right", 0))
+                self.freeform_x.setValue(data.get("freeform_x_mm", 0.0))
+                self.freeform_y.setValue(data.get("freeform_y_mm", 0.0))
+                self.freeform_w.setValue(data.get("freeform_w_mm", 50.0))
+                self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
+                self.override_w.setValue(data.get("override_width_mm", 0.0))
+                self.override_h.setValue(data.get("override_height_mm", 0.0))
                 self.blockSignals(False)
             return
 
@@ -677,8 +729,6 @@ class Inspector(QWidget):
                 self.label_offset_x.setValue(data.get("label_offset_x", 0.0))
                 self.label_offset_y.setValue(data.get("label_offset_y", 0.0))
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
-                label_attach = data.get("label_attach_to", "figure")
-                self.label_attach.setCurrentText(label_attach.capitalize())
                 self.blockSignals(False)
             return
 
@@ -736,6 +786,12 @@ class Inspector(QWidget):
             self.pad_bottom.setValue(data.get("padding_bottom", 0))
             self.pad_left.setValue(data.get("padding_left", 0))
             self.pad_right.setValue(data.get("padding_right", 0))
+            self.freeform_x.setValue(data.get("freeform_x_mm", 0.0))
+            self.freeform_y.setValue(data.get("freeform_y_mm", 0.0))
+            self.freeform_w.setValue(data.get("freeform_w_mm", 50.0))
+            self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
+            self.override_w.setValue(data.get("override_width_mm", 0.0))
+            self.override_h.setValue(data.get("override_height_mm", 0.0))
 
             corner_labels = data.get("corner_labels", {}) if data else {}
             self.corner_label_tl.setText(corner_labels.get("top_left_inside", ""))
@@ -814,10 +870,16 @@ class Inspector(QWidget):
                 self.dpi_spin.setValue(effective_project_data.get("dpi", 600))
                 self.page_w.setValue(effective_project_data.get("page_width_mm", 210))
                 self.page_h.setValue(effective_project_data.get("page_height_mm", 297))
-                self.m_top.setValue(effective_project_data.get("margin_top_mm", 10))
-                self.m_bottom.setValue(effective_project_data.get("margin_bottom_mm", 10))
-                self.m_left.setValue(effective_project_data.get("margin_left_mm", 10))
-                self.m_right.setValue(effective_project_data.get("margin_right_mm", 10))
+                self.m_top.setValue(effective_project_data.get("margin_top_mm", 0))
+                self.m_bottom.setValue(effective_project_data.get("margin_bottom_mm", 0))
+                self.m_left.setValue(effective_project_data.get("margin_left_mm", 0))
+                self.m_right.setValue(effective_project_data.get("margin_right_mm", 0))
+                
+                # Grid Settings
+                grid_mode = effective_project_data.get("grid_mode", "stretch")
+                self.grid_mode.setCurrentText("Fixed Cell Width" if grid_mode == "fixed" else "Stretch Rows to Page")
+                self.row_alignment.setEnabled(grid_mode == "fixed")
+                self.row_alignment.setCurrentText(effective_project_data.get("row_alignment", "center"))
                 
                 # Corner Labels
                 self.corner_label_font.setCurrentText(effective_project_data.get("corner_label_font_family", "Arial"))

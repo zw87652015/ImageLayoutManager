@@ -93,7 +93,18 @@ class Cell:
     scale_bar_offset_y: float = 2.0
     scale_bar_custom_text: Optional[str] = None  # If set, overrides auto-generated "X µm" text
     scale_bar_text_size_mm: float = 2.0  # Font size in mm for scale bar text
+
+    # Freeform layout (used when Project.layout_mode == "freeform")
+    freeform_x_mm: float = 0.0
+    freeform_y_mm: float = 0.0
+    freeform_w_mm: float = 50.0
+    freeform_h_mm: float = 50.0
+    z_index: int = 0
     
+    # Grid override size (0 means auto)
+    override_width_mm: float = 0.0
+    override_height_mm: float = 0.0
+
     @property
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -132,6 +143,13 @@ class Cell:
             "scale_bar_offset_y": self.scale_bar_offset_y,
             "scale_bar_custom_text": self.scale_bar_custom_text,
             "scale_bar_text_size_mm": self.scale_bar_text_size_mm,
+            "freeform_x_mm": self.freeform_x_mm,
+            "freeform_y_mm": self.freeform_y_mm,
+            "freeform_w_mm": self.freeform_w_mm,
+            "freeform_h_mm": self.freeform_h_mm,
+            "override_width_mm": self.override_width_mm,
+            "override_height_mm": self.override_height_mm,
+            "z_index": self.z_index,
             "nested_layout_path": self.nested_layout_path,
             "children": [c.to_dict() for c in self.children],
             "split_direction": self.split_direction,
@@ -154,6 +172,13 @@ class Cell:
         payload.setdefault("scale_bar_offset_y", 2.0)
         payload.setdefault("scale_bar_custom_text", None)
         payload.setdefault("scale_bar_text_size_mm", 2.0)
+        payload.setdefault("freeform_x_mm", 0.0)
+        payload.setdefault("freeform_y_mm", 0.0)
+        payload.setdefault("freeform_w_mm", 50.0)
+        payload.setdefault("freeform_h_mm", 50.0)
+        payload.setdefault("override_width_mm", 0.0)
+        payload.setdefault("override_height_mm", 0.0)
+        payload.setdefault("z_index", 0)
         payload.setdefault("nested_layout_path", None)
         payload.setdefault("split_direction", "none")
         payload.setdefault("split_ratios", [])
@@ -214,6 +239,13 @@ class Project:
     
     dpi: int = 600
     
+    # Layout Mode: "grid" uses rows/columns, "freeform" uses per-cell absolute positions
+    layout_mode: str = "grid"
+    
+    # Grid Settings
+    grid_mode: str = "stretch" # "stretch" or "fixed"
+    row_alignment: str = "center" # "left", "center", "right"
+    
     # Layout
     rows: List[RowTemplate] = field(default_factory=list)
     cells: List[Cell] = field(default_factory=list)
@@ -229,7 +261,6 @@ class Project:
     label_font_weight: str = "bold"
     label_color: str = "#000000" # black or white (#FFFFFF)
     label_anchor: str = LabelPosition.TOP_LEFT.value
-    label_attach_to: str = "figure" # "grid" (cell boundary) or "figure" (image content area)
     label_align: str = "center" # "left", "center", "right" — preset for label position in label cells
     label_offset_x: float = 0.0  # mm, horizontal offset for fine-tuning label position
     label_offset_y: float = 0.0  # mm, vertical offset for fine-tuning label position
@@ -291,6 +322,9 @@ class Project:
             "margin_bottom_mm": self.margin_bottom_mm,
             "gap_mm": self.gap_mm,
             "dpi": self.dpi,
+            "layout_mode": self.layout_mode,
+            "grid_mode": self.grid_mode,
+            "row_alignment": self.row_alignment,
             "rows": [r.to_dict() for r in self.rows],
             "cells": [c.to_dict() for c in self.cells],
             "text_items": [t.to_dict() for t in self.text_items],
@@ -301,7 +335,6 @@ class Project:
             "label_font_weight": self.label_font_weight,
             "label_color": self.label_color,
             "label_anchor": self.label_anchor,
-            "label_attach_to": self.label_attach_to,
             "label_align": self.label_align,
             "label_offset_x": self.label_offset_x,
             "label_offset_y": self.label_offset_y,
@@ -325,6 +358,10 @@ class Project:
         p.gap_mm = data.get("gap_mm", 2.0)
         p.dpi = data.get("dpi", 600)
         
+        p.layout_mode = data.get("layout_mode", "grid")
+        p.grid_mode = data.get("grid_mode", "stretch")
+        p.row_alignment = data.get("row_alignment", "center")
+        
         p.rows = [RowTemplate.from_dict(r) for r in data.get("rows", [])]
         p.cells = [Cell.from_dict(c, project_dir) for c in data.get("cells", [])]
         p.text_items = [TextItem.from_dict(t) for t in data.get("text_items", [])]
@@ -336,7 +373,6 @@ class Project:
         p.label_font_weight = data.get("label_font_weight", "bold")
         p.label_color = data.get("label_color", "#000000")
         p.label_anchor = data.get("label_anchor", LabelPosition.TOP_LEFT.value)
-        p.label_attach_to = data.get("label_attach_to", "figure")
         p.label_align = data.get("label_align", "center")
         p.label_offset_x = data.get("label_offset_x", 0.0)
         p.label_offset_y = data.get("label_offset_y", 0.0)

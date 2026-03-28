@@ -1,1 +1,0 @@
-Investigate in this project, and find if there are irrelevant, deprecated, useless, excessively packaged, specious, illusory code. Also find if the code has incorrect data structure, poor RAM management, or low maintainability.

@@ -60,8 +60,9 @@ class PdfExporter:
             label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
             label_rects = getattr(layout_result, 'label_rects', {})
 
-            # 1. Draw Images, Scale Bars, and Nested Layouts
-            for cell in project.get_all_leaf_cells():
+            # 1. Draw Images, Scale Bars, and Nested Layouts (sorted by z_index for freeform overlap support)
+            sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
+            for cell in sorted_cells:
                 if cell.id not in layout_result.cell_rects:
                     continue
                 x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
@@ -446,16 +447,6 @@ class PdfExporter:
         # For cell-scoped labels, use anchor-based positioning (default to top_left_inside if anchor is None)
         if text_item.scope == "cell" and text_item.parent_id and text_item.parent_id in layout_result.cell_rects:
             cx, cy, cw, ch = layout_result.cell_rects[text_item.parent_id]
-
-            is_corner = getattr(text_item, 'subtype', None) == 'corner'
-            attach_to = getattr(project, 'label_attach_to', 'figure')
-            if attach_to == "figure" and not is_corner:
-                cell = project.find_cell_by_id(text_item.parent_id)
-                if cell:
-                    cx += cell.padding_left
-                    cy += cell.padding_top
-                    cw -= cell.padding_left + cell.padding_right
-                    ch -= cell.padding_top + cell.padding_bottom
 
             # Default to top_left_inside if anchor is None (for numbering labels)
             anchor = text_item.anchor or "top_left_inside"

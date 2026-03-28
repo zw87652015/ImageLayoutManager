@@ -41,11 +41,39 @@ class LayoutEngine:
         return [(r / total_ratio) * available_width for r in col_ratios]
 
     @staticmethod
+    def calculate_freeform_layout(project: Project) -> LayoutResult:
+        """Freeform pipeline: cells use their own absolute position/size fields."""
+        cell_rects: Dict[str, Tuple[float, float, float, float]] = {}
+        for cell in project.cells:
+            # Only top-level leaf cells contribute directly
+            if cell.is_leaf:
+                cell_rects[cell.id] = (
+                    cell.freeform_x_mm,
+                    cell.freeform_y_mm,
+                    cell.freeform_w_mm,
+                    cell.freeform_h_mm,
+                )
+            else:
+                # Split cells: use freeform rect as parent, then sub-layout children
+                from src.model.layout_engine import LayoutEngine
+                sub_rects: Dict[str, Tuple[float, float, float, float]] = {}
+                sub_label: Dict[str, Tuple[float, float, float, float]] = {}
+                parent_rect = (cell.freeform_x_mm, cell.freeform_y_mm,
+                               cell.freeform_w_mm, cell.freeform_h_mm)
+                LayoutEngine._layout_subcells(cell, parent_rect, project.gap_mm,
+                                              sub_rects, sub_label, set(), False, 0.0)
+                cell_rects.update(sub_rects)
+        return LayoutResult(cell_rects=cell_rects, row_heights={}, figure_rects=dict(cell_rects))
+
+    @staticmethod
     def calculate_layout(project: Project) -> LayoutResult:
         """
         Calculates the geometry for all cells in the project.
         All units are in millimeters.
         """
+        if getattr(project, 'layout_mode', 'grid') == 'freeform':
+            return LayoutEngine.calculate_freeform_layout(project)
+
         gap_mm = project.gap_mm
         
         # 1. Calculate content area
@@ -120,15 +148,46 @@ class LayoutEngine:
                 calculated_row_geometries.append((None, 0, current_y, pic_h, r_temp))
                 current_y += pic_h + gap_mm
             
-        # 4. Calculate cell rectangles and label cell rectangles
+        # 4. Handle grid mode configuration
+        grid_mode = getattr(project, "grid_mode", "stretch")
+        row_alignment = getattr(project, "row_alignment", "center")
+        
+        # Calculate standard column width for fixed grid mode
+        max_col_count = max((r.column_count for r in row_templates), default=1)
+        standard_col_widths = []
+        if grid_mode == "fixed" and max_col_count > 0:
+            # Create a dummy row template with max columns to compute standard widths
+            # We assume all rows in fixed mode share the column ratios of the widest row
+            # If multiple rows have the same max width but different ratios, we just use the first one
+            widest_row = next(r for r in row_templates if r.column_count == max_col_count)
+            standard_col_widths = LayoutEngine._compute_col_widths(widest_row, content_width, gap_mm)
+            
+        # 5. Calculate cell rectangles and label cell rectangles
         cell_rects = {}
         label_rects: Dict[str, Tuple[float, float, float, float]] = {}
         
         for lbl_y, lbl_h, pic_y, pic_h, r_temp in calculated_row_geometries:
-            col_widths = LayoutEngine._compute_col_widths(r_temp, content_width, gap_mm)
             col_count = r_temp.column_count
             if col_count <= 0:
                 continue
+
+            if grid_mode == "fixed" and max_col_count > 0:
+                # Use standard column widths up to this row's column count
+                col_widths = standard_col_widths[:col_count]
+                row_width = sum(col_widths) + (col_count - 1) * gap_mm if col_count > 1 else sum(col_widths)
+                
+                # Apply row alignment offset
+                if row_alignment == "left":
+                    x_offset = project.margin_left_mm
+                elif row_alignment == "right":
+                    x_offset = project.margin_left_mm + content_width - row_width
+                else: # center (default)
+                    x_offset = project.margin_left_mm + (content_width - row_width) / 2.0
+            else:
+                # Stretch mode (default behavior)
+                col_widths = LayoutEngine._compute_col_widths(r_temp, content_width, gap_mm)
+                x_offset = project.margin_left_mm
+                row_width = content_width
 
             row_cells = [c for c in project.cells if c.row_index == r_temp.index]
             
@@ -136,15 +195,15 @@ class LayoutEngine:
                 if cell.col_index >= col_count:
                     continue
                 
-                x_pos = project.margin_left_mm
+                x_pos = x_offset
                 for i in range(cell.col_index):
                     x_pos += col_widths[i] + gap_mm
                 
                 col_w = col_widths[cell.col_index]
                 cell_rects[cell.id] = (x_pos, pic_y, col_w, pic_h)
 
-                # Label cell rect: only for top-level leaf cells that have a numbering label
-                if label_row_above and lbl_y is not None and cell.id in labeled_cell_ids and cell.is_leaf:
+                # Label cell rect: for top-level cells (leaf or container) that have a numbering label
+                if label_row_above and lbl_y is not None and cell.id in labeled_cell_ids:
                     label_rects[cell.id] = (x_pos, lbl_y, col_w, lbl_h)
 
                 # Recursively layout sub-cells
@@ -157,16 +216,64 @@ class LayoutEngine:
 
         figure_rects: Dict[str, Tuple[float, float, float, float]] = dict(cell_rects)
 
+        # Apply grid size overrides
+        if getattr(project, 'layout_mode', 'grid') == 'grid':
+            for cell in project.get_all_leaf_cells():
+                if cell.id in cell_rects:
+                    sx, sy, sw, sh = cell_rects[cell.id]
+                    ow = getattr(cell, 'override_width_mm', 0.0)
+                    oh = getattr(cell, 'override_height_mm', 0.0)
+                    
+                    if ow > 0 or oh > 0:
+                        fw = ow if ow > 0 else sw
+                        fh = oh if oh > 0 else sh
+                        
+                        align_h = getattr(cell, 'align_h', 'center')
+                        align_v = getattr(cell, 'align_v', 'center')
+                        
+                        if align_h == 'left':
+                            fx = sx
+                        elif align_h == 'right':
+                            fx = sx + sw - fw
+                        else:
+                            fx = sx + (sw - fw) / 2.0
+                            
+                        if align_v == 'top':
+                            fy = sy
+                        elif align_v == 'bottom':
+                            fy = sy + sh - fh
+                        else:
+                            fy = sy + (sh - fh) / 2.0
+                            
+                        cell_rects[cell.id] = (fx, fy, fw, fh)
+                        figure_rects[cell.id] = (fx, fy, fw, fh)
+
         # Compute row bounding rects (include label row above if present)
         row_rects: Dict[int, Tuple[float, float, float, float]] = {}
         for _lbl_y, _lbl_h, pic_y, pic_h, r_temp in calculated_row_geometries:
+            col_count = r_temp.column_count
+            
+            # Re-calculate x_offset and row_width for bounding rect
+            if grid_mode == "fixed" and max_col_count > 0:
+                col_widths = standard_col_widths[:col_count]
+                row_width = sum(col_widths) + (col_count - 1) * gap_mm if col_count > 1 else sum(col_widths)
+                if row_alignment == "left":
+                    x_offset = project.margin_left_mm
+                elif row_alignment == "right":
+                    x_offset = project.margin_left_mm + content_width - row_width
+                else: # center
+                    x_offset = project.margin_left_mm + (content_width - row_width) / 2.0
+            else:
+                x_offset = project.margin_left_mm
+                row_width = content_width
+
             if _lbl_y is not None:
                 # Label row sits above picture row; include both in the bounding rect
                 top_y = _lbl_y
                 total_h = (pic_y - _lbl_y) + pic_h
-                row_rects[r_temp.index] = (project.margin_left_mm, top_y, content_width, total_h)
+                row_rects[r_temp.index] = (x_offset, top_y, row_width, total_h)
             else:
-                row_rects[r_temp.index] = (project.margin_left_mm, pic_y, content_width, pic_h)
+                row_rects[r_temp.index] = (x_offset, pic_y, row_width, pic_h)
 
         return LayoutResult(cell_rects, row_heights, figure_rects=figure_rects, label_rects=label_rects, row_rects=row_rects)
 

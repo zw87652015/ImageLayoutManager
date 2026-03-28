@@ -228,8 +228,46 @@ class DragManager(QObject):
                 return item
         return None
 
+    def _get_cell_model(self, cell_id):
+        """Return the Cell data model for a given cell_id, or None."""
+        project = getattr(self.scene, 'project', None)
+        if project and hasattr(project, 'find_cell_by_id'):
+            return project.find_cell_by_id(cell_id)
+        return None
+
+    def _detect_source_shape(self):
+        """Detect if sources form a row, column, or arbitrary selection.
+        Returns ('row', row_index, sorted_col_offsets),
+                ('col', col_index, sorted_row_offsets), or
+                ('arbitrary', None, None).
+        """
+        models = [self._get_cell_model(cid) for cid in self._source_ids]
+        if any(m is None for m in models):
+            return 'arbitrary', None, None
+
+        row_indices = {m.row_index for m in models}
+        col_indices = {m.col_index for m in models}
+
+        if len(row_indices) == 1:
+            # All sources in the same row → row selection
+            row_idx = next(iter(row_indices))
+            col_offsets = sorted(m.col_index for m in models)
+            # Normalize to relative offsets from the minimum
+            min_col = col_offsets[0]
+            return 'row', row_idx, [c - min_col for c in col_offsets]
+
+        if len(col_indices) == 1:
+            # All sources in the same column → column selection
+            col_idx = next(iter(col_indices))
+            row_offsets = sorted(m.row_index for m in models)
+            min_row = row_offsets[0]
+            return 'col', col_idx, [r - min_row for r in row_offsets]
+
+        return 'arbitrary', None, None
+
     def _find_target_cells(self, scene_pos):
-        """Find N consecutive target cells starting from the cell under cursor.
+        """Find N target cells starting from the cell under cursor.
+        Preserves row/column shape of the source selection when possible.
         Returns (target_items, valid) where valid=True if placement is possible."""
         n = len(self._source_ids)
         anchor = self._find_target_cell(scene_pos)
@@ -239,29 +277,90 @@ class DragManager(QObject):
         if n == 1:
             return [anchor], True
 
+        shape, shape_idx, offsets = self._detect_source_shape()
+        anchor_model = self._get_cell_model(anchor.cell_id)
+
+        if shape == 'row' and anchor_model is not None:
+            # Try to place sources into the same row as the anchor, preserving
+            # relative column offsets.
+            anchor_col = anchor_model.col_index
+            # Build id->item map for fast lookup
+            id_to_item = {cid: item for cid, item in self.scene.cell_items.items()
+                          if not item.is_label_cell}
+            targets = []
+            for rel_col in offsets:
+                target_col = anchor_col + rel_col
+                # Find a cell in the anchor's row with this col_index
+                candidate = None
+                for cid, item in id_to_item.items():
+                    m = self._get_cell_model(cid)
+                    if m and m.row_index == anchor_model.row_index and m.col_index == target_col:
+                        candidate = item
+                        break
+                if candidate is None:
+                    # Column doesn't exist in target row → fall through to arbitrary
+                    targets = []
+                    break
+                targets.append(candidate)
+
+            if targets:
+                target_ids = {t.cell_id for t in targets}
+                source_ids = set(self._source_ids)
+                if target_ids & source_ids:
+                    if target_ids != source_ids:
+                        return targets, False
+                    return [], False
+                return targets, True
+
+        if shape == 'col' and anchor_model is not None:
+            # Try to place sources into the same column as the anchor, preserving
+            # relative row offsets.
+            anchor_row = anchor_model.row_index
+            id_to_item = {cid: item for cid, item in self.scene.cell_items.items()
+                          if not item.is_label_cell}
+            targets = []
+            for rel_row in offsets:
+                target_row = anchor_row + rel_row
+                candidate = None
+                for cid, item in id_to_item.items():
+                    m = self._get_cell_model(cid)
+                    if m and m.row_index == target_row and m.col_index == anchor_model.col_index:
+                        candidate = item
+                        break
+                if candidate is None:
+                    targets = []
+                    break
+                targets.append(candidate)
+
+            if targets:
+                target_ids = {t.cell_id for t in targets}
+                source_ids = set(self._source_ids)
+                if target_ids & source_ids:
+                    if target_ids != source_ids:
+                        return targets, False
+                    return [], False
+                return targets, True
+
+        # Arbitrary / fallback: consecutive row-major placement
         all_cells = self._get_all_cells_sorted()
         id_to_idx = {i.cell_id: idx for idx, i in enumerate(all_cells)}
         anchor_idx = id_to_idx.get(anchor.cell_id)
         if anchor_idx is None:
             return [], False
 
-        # Try to place N cells starting at anchor_idx
         targets = []
         for offset in range(n):
             idx = anchor_idx + offset
             if idx >= len(all_cells):
-                return [anchor], False  # Not enough room
-            candidate = all_cells[idx]
-            targets.append(candidate)
+                return [anchor], False
+            targets.append(all_cells[idx])
 
-        # Check none of the targets overlap with sources
         target_ids = {t.cell_id for t in targets}
         source_ids = set(self._source_ids)
         if target_ids & source_ids:
-            # Overlap is OK only if the sets are identical (drop on self = cancel)
             if target_ids != source_ids:
                 return targets, False
-            return [], False  # Dropped on self
+            return [], False
 
         return targets, True
 
@@ -316,7 +415,7 @@ class DragManager(QObject):
 
         targets, valid = self._find_target_cells(scene_pos)
         if valid and targets:
-            self._animate_drop(targets[0])
+            self._animate_drop(targets)
         else:
             self._animate_cancel()
 
@@ -324,20 +423,13 @@ class DragManager(QObject):
     # Drop / cancel animations (QVariantAnimation on QPointF)
     # ------------------------------------------------------------------
 
-    def _animate_drop(self, first_target_cell):
+    def _animate_drop(self, target_cells):
+        first_target_cell = target_cells[0]
         self._anim_start = QPointF(self._ghost_scene_pos)
         self._anim_end = QPointF(first_target_cell.pos().x(), first_target_cell.pos().y())
 
-        # Compute target IDs for the drop
-        n = len(self._source_ids)
         source_ids = list(self._source_ids)
-        if n == 1:
-            target_ids = [first_target_cell.cell_id]
-        else:
-            all_cells = self._get_all_cells_sorted()
-            id_to_idx = {i.cell_id: idx for idx, i in enumerate(all_cells)}
-            anchor_idx = id_to_idx.get(first_target_cell.cell_id, 0)
-            target_ids = [all_cells[anchor_idx + i].cell_id for i in range(n)]
+        target_ids = [t.cell_id for t in target_cells]
 
         self._anim = QVariantAnimation(self)
         self._anim.setStartValue(0.0)

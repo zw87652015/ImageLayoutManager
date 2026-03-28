@@ -31,7 +31,9 @@ from src.app.commands import (
     DeleteRowCommand, DeleteCellCommand,
     AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLayoutCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
-    ChangeSubCellRatioCommand
+    ChangeSubCellRatioCommand,
+    FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand,
+    DividerDragCommand
 )
 from src.utils.image_proxy import get_image_proxy
 
@@ -197,6 +199,31 @@ class MainWindow(QMainWindow):
         auto_layout_action.triggered.connect(self._on_auto_layout)
         edit_menu.addAction(auto_layout_action)
 
+        # ── Layout menu ──
+        layout_menu = self.menuBar().addMenu("Layout")
+
+        bake_action = QAction("Convert Grid → Freeform", self)
+        bake_action.setToolTip("Bake current grid positions into per-cell freeform coordinates and switch to freeform mode")
+        bake_action.triggered.connect(self._on_bake_to_freeform)
+        layout_menu.addAction(bake_action)
+
+        grid_mode_action = QAction("Switch to Grid Mode", self)
+        grid_mode_action.setToolTip("Switch back to grid layout mode (freeform positions are retained)")
+        grid_mode_action.triggered.connect(self._on_switch_to_grid)
+        layout_menu.addAction(grid_mode_action)
+
+        layout_menu.addSeparator()
+
+        bring_front_action = QAction("Bring to Front", self)
+        bring_front_action.setShortcut(QKeySequence("Ctrl+]"))
+        bring_front_action.triggered.connect(self._on_bring_to_front)
+        layout_menu.addAction(bring_front_action)
+
+        send_back_action = QAction("Send to Back", self)
+        send_back_action.setShortcut(QKeySequence("Ctrl+["))
+        send_back_action.triggered.connect(self._on_send_to_back)
+        layout_menu.addAction(send_back_action)
+
         # ── Toolbar — quick actions ──
         self.toolbar.addAction(auto_label_action)
         self.toolbar.addAction(auto_layout_action)
@@ -264,6 +291,8 @@ class MainWindow(QMainWindow):
         self.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
         self.scene.insert_row_requested.connect(self._on_insert_row)
         self.scene.insert_cell_requested.connect(self._on_insert_cell)
+        self.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
+        self.scene.divider_drag_finished.connect(self._on_divider_drag_finished)
         
         # View signals
         self.view.zoom_changed.connect(self._on_zoom_changed)
@@ -682,7 +711,6 @@ class MainWindow(QMainWindow):
                     "label_offset_x": self.project.label_offset_x,
                     "label_offset_y": self.project.label_offset_y,
                     "label_row_height": getattr(self.project, 'label_row_height', 0.0),
-                    "label_attach_to": self.project.label_attach_to,
                 }
                 self.inspector.set_selection('label_cell', label_data)
                 return
@@ -1088,7 +1116,15 @@ class MainWindow(QMainWindow):
         # --- Label submenu ---
         label_menu = menu.addMenu("Labels")
 
-        # Numbering label
+        # Find the top-level ancestor for this cell
+        _top_cell = cell
+        _par = self.project.find_parent_of(cell_id)
+        while _par:
+            _top_cell = _par
+            _par = self.project.find_parent_of(_par.id)
+        _is_subcell = (_top_cell.id != cell_id)
+
+        # Numbering label — targets this sub-cell directly (label row inside the box)
         has_numbering = any(
             t for t in self.project.text_items
             if t.scope == "cell" and t.subtype != "corner" and t.parent_id == cell_id
@@ -1099,6 +1135,22 @@ class MainWindow(QMainWindow):
         else:
             add_num_action = label_menu.addAction("Add Label Cell")
             add_num_action.triggered.connect(lambda: self._ctx_add_numbering_label(cell_id))
+
+        # For sub-cells: also offer a label above the whole container box
+        if _is_subcell:
+            _top_cell_id = _top_cell.id
+            has_box_label = any(
+                t for t in self.project.text_items
+                if t.scope == "cell" and t.subtype != "corner" and t.parent_id == _top_cell_id
+            )
+            if has_box_label:
+                del_box_action = label_menu.addAction("Delete Label Cell Above Box")
+                del_box_action.triggered.connect(
+                    lambda: self._ctx_delete_numbering_label(_top_cell_id))
+            else:
+                add_box_action = label_menu.addAction("Add Label Cell Above Box")
+                add_box_action.triggered.connect(
+                    lambda: self._ctx_add_numbering_label(_top_cell_id))
 
         label_menu.addSeparator()
 
@@ -1410,8 +1462,68 @@ class MainWindow(QMainWindow):
         self.undo_stack.push(cmd)
 
     def _on_auto_layout(self):
-        cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
+        if getattr(self.project, 'layout_mode', 'grid') == 'freeform':
+            cmd = AutoLayoutFreeformCommand(self.project, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+        else:
+            cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    # ------------------------------------------------------------------
+    # Freeform layout handlers
+    # ------------------------------------------------------------------
+
+    def _on_bake_to_freeform(self):
+        """Bake the current grid positions into per-cell freeform coordinates and switch to freeform mode (undoable)."""
+        from src.model.layout_engine import LayoutEngine
+        layout = LayoutEngine.calculate_layout(self.project)
+        baked = {cid: rect for cid, rect in layout.cell_rects.items()}
+        cmd = FreeformLayoutModeCommand(self.project, "freeform", baked, self._refresh_and_update)
         self.undo_stack.push(cmd)
+
+    def _on_switch_to_grid(self):
+        """Switch back to grid layout mode (undoable)."""
+        cmd = FreeformLayoutModeCommand(self.project, "grid", update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_cell_freeform_geometry_changed(self, cell_id: str, x: float, y: float, w: float, h: float):
+        """Called when user drags/resizes a cell in freeform mode; push undoable command."""
+        cell = self.project.find_cell_by_id(cell_id)
+        if cell:
+            cmd = FreeformGeometryCommand(cell, x, y, w, h)
+            # No refresh needed — scene already shows the new geometry from direct manipulation.
+            # The command only records state for undo; calling update_callback on undo/redo will resync.
+            cmd.update_callback = self._refresh_and_update
+            self.undo_stack.push(cmd)
+
+    def _on_divider_drag_finished(self, div):
+        """Called when user finishes dragging a row/column divider; push undoable command."""
+        cmd = DividerDragCommand(self.project, div, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_bring_to_front(self):
+        """Increment z_index of all selected cells (undoable)."""
+        cells = [self.project.find_cell_by_id(cid) for cid in self._get_selected_cell_ids()]
+        cells = [c for c in cells if c is not None]
+        if cells:
+            cmd = ZIndexChangeCommand(cells, +1, self._refresh_and_update, "Bring to Front")
+            self.undo_stack.push(cmd)
+
+    def _on_send_to_back(self):
+        """Decrement z_index of all selected cells (undoable)."""
+        cells = [self.project.find_cell_by_id(cid) for cid in self._get_selected_cell_ids()]
+        cells = [c for c in cells if c is not None]
+        if cells:
+            cmd = ZIndexChangeCommand(cells, -1, self._refresh_and_update, "Send to Back")
+            self.undo_stack.push(cmd)
+
+    def _get_selected_cell_ids(self):
+        """Return list of selected non-label cell IDs from the scene."""
+        from src.canvas.cell_item import CellItem
+        return [
+            item.cell_id for item in self.scene.selectedItems()
+            if isinstance(item, CellItem) and not item.is_label_cell
+        ]
 
     def _get_export_default_dir(self) -> str:
         """Return directory of current project file, or empty string if none."""

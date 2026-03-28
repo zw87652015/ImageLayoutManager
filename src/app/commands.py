@@ -3,6 +3,190 @@ import copy
 import uuid
 from src.model.data_model import RowTemplate, Cell
 
+
+class FreeformGeometryCommand(QUndoCommand):
+    """Record a freeform drag/resize of a single cell for undo/redo."""
+    def __init__(self, cell: Cell, new_x, new_y, new_w, new_h, update_callback=None):
+        super().__init__("Move/Resize Cell")
+        self.cell = cell
+        self.old_x = cell.freeform_x_mm
+        self.old_y = cell.freeform_y_mm
+        self.old_w = cell.freeform_w_mm
+        self.old_h = cell.freeform_h_mm
+        self.new_x = new_x
+        self.new_y = new_y
+        self.new_w = new_w
+        self.new_h = new_h
+        self.update_callback = update_callback
+
+    def redo(self):
+        self.cell.freeform_x_mm = self.new_x
+        self.cell.freeform_y_mm = self.new_y
+        self.cell.freeform_w_mm = self.new_w
+        self.cell.freeform_h_mm = self.new_h
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.cell.freeform_x_mm = self.old_x
+        self.cell.freeform_y_mm = self.old_y
+        self.cell.freeform_w_mm = self.old_w
+        self.cell.freeform_h_mm = self.old_h
+        if self.update_callback:
+            self.update_callback()
+
+    def id(self):
+        # Must return a value in range [-2147483648, 2147483647] (Qt 32-bit int)
+        return hash(self.cell.id) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        """Collapse consecutive moves of the same cell into a single undo step."""
+        if not isinstance(other, FreeformGeometryCommand) or other.cell is not self.cell:
+            return False
+        self.new_x = other.new_x
+        self.new_y = other.new_y
+        self.new_w = other.new_w
+        self.new_h = other.new_h
+        return True
+
+
+class FreeformLayoutModeCommand(QUndoCommand):
+    """Switch project between 'grid' and 'freeform' layout modes, with baking support."""
+    def __init__(self, project, new_mode: str, baked_cell_rects: dict = None, update_callback=None):
+        label = "Convert to Freeform" if new_mode == "freeform" else "Switch to Grid"
+        super().__init__(label)
+        self.project = project
+        self.old_mode = project.layout_mode
+        self.new_mode = new_mode
+        self.update_callback = update_callback
+        # Store old freeform coords for all cells (for undo of bake)
+        self.old_freeform = {
+            cell.id: (cell.freeform_x_mm, cell.freeform_y_mm,
+                      cell.freeform_w_mm, cell.freeform_h_mm)
+            for cell in project.get_all_leaf_cells()
+        }
+        # New coords to apply on redo (provided when baking from grid)
+        self.baked_cell_rects = baked_cell_rects or {}
+
+    def redo(self):
+        self.project.layout_mode = self.new_mode
+        for cell in self.project.get_all_leaf_cells():
+            if cell.id in self.baked_cell_rects:
+                x, y, w, h = self.baked_cell_rects[cell.id]
+                cell.freeform_x_mm = x
+                cell.freeform_y_mm = y
+                cell.freeform_w_mm = w
+                cell.freeform_h_mm = h
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.project.layout_mode = self.old_mode
+        for cell in self.project.get_all_leaf_cells():
+            if cell.id in self.old_freeform:
+                x, y, w, h = self.old_freeform[cell.id]
+                cell.freeform_x_mm = x
+                cell.freeform_y_mm = y
+                cell.freeform_w_mm = w
+                cell.freeform_h_mm = h
+        if self.update_callback:
+            self.update_callback()
+
+
+class DividerDragCommand(QUndoCommand):
+    """Undoable command for dragging a row-height or column-width divider.
+
+    For 'row' dividers: records old/new height_ratio for two adjacent rows.
+    For 'col' dividers: records old/new column_ratios list for one row.
+    """
+
+    def __init__(self, project, div, update_callback=None):
+        kind = div.kind
+        label = "Resize Row" if kind == 'row' else "Resize Column"
+        super().__init__(label)
+        self.project = project
+        self.kind = kind
+        self.update_callback = update_callback
+
+        if kind == 'row':
+            self.row_a_idx = div.row_a
+            self.row_b_idx = div.row_b
+            # original_ratio_* captured at drag-start before any live updates
+            self.old_ratio_a = div.original_ratio_a
+            self.old_ratio_b = div.original_ratio_b
+            self.new_ratio_a = div.ratio_a
+            self.new_ratio_b = div.ratio_b
+        else:
+            self.row_index = div.row_index
+            self.col_a = div.col_a
+            self.col_b = div.col_b
+            row = next((r for r in project.rows if r.index == div.row_index), None)
+            # Build old ratios from original_ratio_* (pre-drag values)
+            cur_ratios = list(row.column_ratios) if (row and row.column_ratios) else (
+                [1.0] * row.column_count if row else [1.0, 1.0])
+            while row and len(cur_ratios) < row.column_count:
+                cur_ratios.append(1.0)
+            old_ratios = cur_ratios[:]
+            old_ratios[div.col_a] = div.original_ratio_a
+            old_ratios[div.col_b] = div.original_ratio_b
+            self.old_ratios = old_ratios
+            new_ratios = cur_ratios[:]
+            new_ratios[div.col_a] = div.ratio_a
+            new_ratios[div.col_b] = div.ratio_b
+            self.new_ratios = new_ratios
+
+    def redo(self):
+        if self.kind == 'row':
+            row_a = next((r for r in self.project.rows if r.index == self.row_a_idx), None)
+            row_b = next((r for r in self.project.rows if r.index == self.row_b_idx), None)
+            if row_a:
+                row_a.height_ratio = self.new_ratio_a
+            if row_b:
+                row_b.height_ratio = self.new_ratio_b
+        else:
+            row = next((r for r in self.project.rows if r.index == self.row_index), None)
+            if row:
+                row.column_ratios = self.new_ratios[:]
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        if self.kind == 'row':
+            row_a = next((r for r in self.project.rows if r.index == self.row_a_idx), None)
+            row_b = next((r for r in self.project.rows if r.index == self.row_b_idx), None)
+            if row_a:
+                row_a.height_ratio = self.old_ratio_a
+            if row_b:
+                row_b.height_ratio = self.old_ratio_b
+        else:
+            row = next((r for r in self.project.rows if r.index == self.row_index), None)
+            if row:
+                row.column_ratios = self.old_ratios[:]
+        if self.update_callback:
+            self.update_callback()
+
+
+class ZIndexChangeCommand(QUndoCommand):
+    """Change z_index of one or more cells for bring-to-front / send-to-back."""
+    def __init__(self, cells: list, delta: int, update_callback=None, description="Change Z-Order"):
+        super().__init__(description)
+        self.cells = cells
+        self.delta = delta
+        self.update_callback = update_callback
+        self.old_values = {cell.id: cell.z_index for cell in cells}
+
+    def redo(self):
+        for cell in self.cells:
+            cell.z_index += self.delta
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for cell in self.cells:
+            cell.z_index = self.old_values[cell.id]
+        if self.update_callback:
+            self.update_callback()
+
 class PropertyChangeCommand(QUndoCommand):
     def __init__(self, target, changes: dict, update_callback=None, description="Change Property"):
         super().__init__(description)
@@ -799,6 +983,93 @@ class AutoLayoutCommand(QUndoCommand):
         # Restore page height
         self.project.page_height_mm = self.old_page_height
         
+        if self.update_callback:
+            self.update_callback()
+
+
+class AutoLayoutFreeformCommand(QUndoCommand):
+    def __init__(self, project, update_callback=None):
+        super().__init__("Auto Layout (Freeform)")
+        self.project = project
+        self.update_callback = update_callback
+        
+        # Save old cell paddings and freeform geometry
+        self.old_cell_props = {}
+        for cell in project.get_all_leaf_cells():
+            if cell.image_path and not cell.is_placeholder:
+                self.old_cell_props[cell.id] = {
+                    'padding_top': cell.padding_top,
+                    'padding_bottom': cell.padding_bottom,
+                    'padding_left': cell.padding_left,
+                    'padding_right': cell.padding_right,
+                    'freeform_w_mm': cell.freeform_w_mm,
+                    'freeform_h_mm': cell.freeform_h_mm
+                }
+                
+        self.new_props = None
+
+    def redo(self):
+        if self.new_props is None:
+            self.new_props = {}
+            from src.utils.auto_layout import AutoLayout
+            aspect_ratios = AutoLayout._get_image_aspect_ratios(self.project)
+            
+            for cell_id, old_props in self.old_cell_props.items():
+                cell = self.project.find_cell_by_id(cell_id)
+                if not cell:
+                    continue
+                
+                ratio = aspect_ratios.get(cell.id)
+                if ratio is None or ratio <= 0:
+                    continue
+                    
+                # We want to match aspect ratio but keeping the max dimension roughly similar
+                # to not blow up or shrink the image completely. Let's preserve area.
+                old_w = old_props['freeform_w_mm']
+                old_h = old_props['freeform_h_mm']
+                old_area = old_w * old_h
+                
+                # new_w * new_h = old_area
+                # new_w = ratio * new_h
+                # ratio * new_h^2 = old_area
+                import math
+                new_h = math.sqrt(old_area / ratio) if ratio > 0 else old_h
+                new_w = new_h * ratio
+                
+                self.new_props[cell.id] = {
+                    'padding_top': 0.0,
+                    'padding_bottom': 0.0,
+                    'padding_left': 0.0,
+                    'padding_right': 0.0,
+                    'freeform_w_mm': new_w,
+                    'freeform_h_mm': new_h
+                }
+                
+        # Apply new props
+        for cell_id, props in self.new_props.items():
+            cell = self.project.find_cell_by_id(cell_id)
+            if cell:
+                cell.padding_top = props['padding_top']
+                cell.padding_bottom = props['padding_bottom']
+                cell.padding_left = props['padding_left']
+                cell.padding_right = props['padding_right']
+                cell.freeform_w_mm = props['freeform_w_mm']
+                cell.freeform_h_mm = props['freeform_h_mm']
+
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for cell_id, props in self.old_cell_props.items():
+            cell = self.project.find_cell_by_id(cell_id)
+            if cell:
+                cell.padding_top = props['padding_top']
+                cell.padding_bottom = props['padding_bottom']
+                cell.padding_left = props['padding_left']
+                cell.padding_right = props['padding_right']
+                cell.freeform_w_mm = props['freeform_w_mm']
+                cell.freeform_h_mm = props['freeform_h_mm']
+                
         if self.update_callback:
             self.update_callback()
 
