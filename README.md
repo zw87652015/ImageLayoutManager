@@ -77,6 +77,12 @@ Notes:
 - **DPI** mainly affects raster exports (TIFF/JPG) by controlling output pixel dimensions.
 - PDF export is page-size based; DPI affects internal rendering resolution but not the intended physical layout size.
 
+## Support
+
+If you find this project useful and would like to support its development, you can buy me a coffee via Alipay:
+
+<img src="assets/Alipay.jpg" alt="Alipay QR code" width="200"/>
+
 ## License
 
 MIT License. See `LICENSE`.
