@@ -1,10 +1,11 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QFormLayout, QHBoxLayout,
-    QLabel, QSpinBox, QDoubleSpinBox, QComboBox, 
+    QLabel, QSpinBox, QDoubleSpinBox, QComboBox,
     QLineEdit, QPushButton, QCheckBox, QScrollArea
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from src.model.enums import FitMode
+from src.app.scale_bar_mappings import load_mappings, mapping_names
 
 class Inspector(QWidget):
     # Signals for property changes
@@ -235,10 +236,16 @@ class Inspector(QWidget):
         self.scale_bar_enabled.stateChanged.connect(self._emit_scale_bar)
         self.cell_layout.addRow(self.scale_bar_enabled)
         
+        mapping_row = QHBoxLayout()
         self.scale_bar_mode = QComboBox()
-        self.scale_bar_mode.addItems(["rgb", "bayer"])
+        self._refresh_mapping_combo()
         self.scale_bar_mode.currentTextChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Mode:", self.scale_bar_mode)
+        mapping_row.addWidget(self.scale_bar_mode, stretch=1)
+        manage_btn = QPushButton("Manage…")
+        manage_btn.setFixedWidth(72)
+        manage_btn.clicked.connect(self._open_mappings_dialog)
+        mapping_row.addWidget(manage_btn)
+        self.cell_layout.addRow("Mapping:", mapping_row)
         
         self.scale_bar_length = QDoubleSpinBox()
         self.scale_bar_length.setRange(0.1, 1000.0)
@@ -577,13 +584,16 @@ class Inspector(QWidget):
 
     def _emit_scale_bar(self):
         """Emit all scale bar properties as a single cell property change."""
+        from src.app.scale_bar_mappings import get_um_per_px
         color_text = self.scale_bar_color.currentText()
         color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
         # Custom text: empty string means use auto-generated text
         custom_text = self.scale_bar_custom_text.text().strip()
+        mapping_name = self.scale_bar_mode.currentText()
         self.cell_property_changed.emit({
             "scale_bar_enabled": self.scale_bar_enabled.isChecked(),
-            "scale_bar_mode": self.scale_bar_mode.currentText(),
+            "scale_bar_mode": mapping_name,
+            "scale_bar_um_per_px": get_um_per_px(mapping_name),
             "scale_bar_length_um": self.scale_bar_length.value(),
             "scale_bar_color": color_hex,
             "scale_bar_show_text": self.scale_bar_show_text.isChecked(),
@@ -594,6 +604,26 @@ class Inspector(QWidget):
             "scale_bar_custom_text": custom_text if custom_text else None,
             "scale_bar_text_size_mm": self.scale_bar_text_size.value(),
         })
+
+    def _refresh_mapping_combo(self):
+        """Reload the mapping combo from disk (called on init and after the dialog)."""
+        current = self.scale_bar_mode.currentText()
+        self.scale_bar_mode.blockSignals(True)
+        self.scale_bar_mode.clear()
+        self.scale_bar_mode.addItems(mapping_names())
+        # Restore previously selected item if still present
+        idx = self.scale_bar_mode.findText(current)
+        if idx >= 0:
+            self.scale_bar_mode.setCurrentIndex(idx)
+        self.scale_bar_mode.blockSignals(False)
+
+    def _open_mappings_dialog(self):
+        """Open the scale bar mappings management dialog."""
+        from src.app.scale_bar_mappings_dialog import ScaleBarMappingsDialog
+        dlg = ScaleBarMappingsDialog(self)
+        if dlg.exec():
+            self._refresh_mapping_combo()
+            self._emit_scale_bar()
 
     def _emit_subcell_ratio(self, value):
         if self._subcell_id:
@@ -801,7 +831,10 @@ class Inspector(QWidget):
 
             # Scale bar settings
             self.scale_bar_enabled.setChecked(data.get("scale_bar_enabled", False))
-            self.scale_bar_mode.setCurrentText(data.get("scale_bar_mode", "rgb"))
+            self._refresh_mapping_combo()
+            mapping_name = data.get("scale_bar_mode", "rgb")
+            idx = self.scale_bar_mode.findText(mapping_name)
+            self.scale_bar_mode.setCurrentIndex(idx if idx >= 0 else 0)
             self.scale_bar_length.setValue(data.get("scale_bar_length_um", 10.0))
             sb_color = data.get("scale_bar_color", "#FFFFFF")
             self.scale_bar_color.setCurrentText("Black" if sb_color == "#000000" else "White")

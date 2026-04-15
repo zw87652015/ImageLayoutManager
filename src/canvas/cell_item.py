@@ -225,6 +225,7 @@ class CellItem(QGraphicsRectItem):
         # Scale bar properties
         self.scale_bar_enabled = False
         self.scale_bar_mode = "rgb"
+        self.scale_bar_um_per_px = 0.1301
         self.scale_bar_length_um = 10.0
         self.scale_bar_color = "#FFFFFF"
         self.scale_bar_show_text = True
@@ -417,7 +418,7 @@ class CellItem(QGraphicsRectItem):
         super().contextMenuEvent(event)
 
     def update_data(self, image_path, fit_mode, padding, is_placeholder, rotation=0, align_h="center", align_v="center",
-                     scale_bar_enabled=False, scale_bar_mode="rgb", scale_bar_length_um=10.0,
+                     scale_bar_enabled=False, scale_bar_mode="rgb", scale_bar_um_per_px=0.1301, scale_bar_length_um=10.0,
                      scale_bar_color="#FFFFFF", scale_bar_show_text=True, scale_bar_thickness_mm=0.5,
                      scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0,
                      scale_bar_custom_text=None, scale_bar_text_size_mm=2.0):
@@ -432,6 +433,7 @@ class CellItem(QGraphicsRectItem):
         # Scale bar
         self.scale_bar_enabled = scale_bar_enabled
         self.scale_bar_mode = scale_bar_mode
+        self.scale_bar_um_per_px = scale_bar_um_per_px
         self.scale_bar_length_um = scale_bar_length_um
         self.scale_bar_color = scale_bar_color
         self.scale_bar_show_text = scale_bar_show_text
@@ -752,8 +754,8 @@ class CellItem(QGraphicsRectItem):
         if content_rect.width() <= 0 or content_rect.height() <= 0:
             return
         
-        # µm per pixel based on mode
-        um_per_px = 0.1301 if self.scale_bar_mode == "rgb" else 0.2569
+        # µm per pixel — value stored on the cell (set by the user via the inspector)
+        um_per_px = self.scale_bar_um_per_px if self.scale_bar_um_per_px > 0 else 0.1301
         
         # Calculate bar length in pixels (source image pixels)
         bar_length_px = self.scale_bar_length_um / um_per_px

@@ -141,6 +141,7 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'align_v', 'center'),
                     getattr(cell, 'scale_bar_enabled', False),
                     getattr(cell, 'scale_bar_mode', 'rgb'),
+                    getattr(cell, 'scale_bar_um_per_px', 0.1301),
                     getattr(cell, 'scale_bar_length_um', 10.0),
                     getattr(cell, 'scale_bar_color', '#FFFFFF'),
                     getattr(cell, 'scale_bar_show_text', True),

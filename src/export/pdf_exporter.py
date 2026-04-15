@@ -579,8 +579,10 @@ class PdfExporter:
         eff_pix_w = orig_h if is_sideways else orig_w
         eff_pix_h = orig_w if is_sideways else orig_h
 
-        # µm per pixel based on mode
-        um_per_px = 0.1301 if cell.scale_bar_mode == "rgb" else 0.2569
+        # µm per pixel — value stored on the cell (set by the user via the inspector)
+        um_per_px = getattr(cell, 'scale_bar_um_per_px', 0.1301)
+        if um_per_px <= 0:
+            um_per_px = 0.1301
         
         # Calculate bar length in source image pixels
         bar_length_px = cell.scale_bar_length_um / um_per_px

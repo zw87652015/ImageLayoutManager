@@ -83,7 +83,8 @@ class Cell:
 
     # Scale bar (microscopy)
     scale_bar_enabled: bool = False
-    scale_bar_mode: str = "rgb"  # "rgb" | "bayer"
+    scale_bar_mode: str = "rgb"  # mapping name chosen by the user
+    scale_bar_um_per_px: float = 0.1301  # µm per source-image pixel for the chosen mapping
     scale_bar_length_um: float = 10.0
     scale_bar_color: str = "#FFFFFF"  # white or black
     scale_bar_show_text: bool = True
@@ -134,6 +135,7 @@ class Cell:
             "is_placeholder": self.is_placeholder,
             "scale_bar_enabled": self.scale_bar_enabled,
             "scale_bar_mode": self.scale_bar_mode,
+            "scale_bar_um_per_px": self.scale_bar_um_per_px,
             "scale_bar_length_um": self.scale_bar_length_um,
             "scale_bar_color": self.scale_bar_color,
             "scale_bar_show_text": self.scale_bar_show_text,
@@ -163,6 +165,10 @@ class Cell:
         payload.setdefault("rotation", 0)
         payload.setdefault("scale_bar_enabled", False)
         payload.setdefault("scale_bar_mode", "rgb")
+        # Backward compat: derive µm/px from the old mode string when not present
+        if "scale_bar_um_per_px" not in payload:
+            _legacy = {"rgb": 0.1301, "bayer": 0.2569}
+            payload["scale_bar_um_per_px"] = _legacy.get(payload.get("scale_bar_mode", "rgb"), 0.1301)
         payload.setdefault("scale_bar_length_um", 10.0)
         payload.setdefault("scale_bar_color", "#FFFFFF")
         payload.setdefault("scale_bar_show_text", True)
