@@ -79,4 +79,4 @@ Notes:
 
 ## License
 
-MIT License. See `LICENSE`.
+Apache-2.0 license. See `LICENSE`.
