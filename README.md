@@ -85,4 +85,4 @@ If you find this project useful and would like to support its development, you c
 
 ## License
 
-MIT License. See `LICENSE`.
+Apache-2.0 license. See `LICENSE`.
