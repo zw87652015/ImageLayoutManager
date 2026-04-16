@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import pyqtSignal, Qt
 from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
+from src.app.i18n import tr
 
 class Inspector(QWidget):
     # Signals for property changes
@@ -30,6 +31,8 @@ class Inspector(QWidget):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         outer.addWidget(scroll)
 
+        self._lbl_registry: list[tuple[str, QLabel]] = []
+
         container = QWidget()
         self.layout = QVBoxLayout(container)
         self.layout.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -48,7 +51,7 @@ class Inspector(QWidget):
         self.dpi_spin.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"dpi": v})
         )
-        self.project_layout.addRow("DPI:", self.dpi_spin)
+        self.project_layout.addRow(self._fl("lbl_dpi"), self.dpi_spin)
         
         # Page Size Presets
         self.page_preset = QComboBox()
@@ -61,7 +64,7 @@ class Inspector(QWidget):
             "Double Column (178×240mm)"
         ])
         self.page_preset.currentTextChanged.connect(self._on_page_preset_changed)
-        self.project_layout.addRow("Page Preset:", self.page_preset)
+        self.project_layout.addRow(self._fl("lbl_page_preset"), self.page_preset)
         
         # Page Size (Manual entry)
         self.page_w = QDoubleSpinBox()
@@ -70,7 +73,7 @@ class Inspector(QWidget):
         self.page_w.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"page_width_mm": v})
         )
-        self.project_layout.addRow("Page Width:", self.page_w)
+        self.project_layout.addRow(self._fl("lbl_page_width"), self.page_w)
         
         self.page_h = QDoubleSpinBox()
         self.page_h.setRange(10, 1000)
@@ -78,7 +81,7 @@ class Inspector(QWidget):
         self.page_h.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"page_height_mm": v})
         )
-        self.project_layout.addRow("Page Height:", self.page_h)
+        self.project_layout.addRow(self._fl("lbl_page_height"), self.page_h)
         
         # Margins
         self.m_top = self._create_spinbox(0, 100, self._emit_project_margins)
@@ -86,35 +89,37 @@ class Inspector(QWidget):
         self.m_left = self._create_spinbox(0, 100, self._emit_project_margins)
         self.m_right = self._create_spinbox(0, 100, self._emit_project_margins)
         
-        self.project_layout.addRow("Margin Top:", self.m_top)
-        self.project_layout.addRow("Margin Bottom:", self.m_bottom)
-        self.project_layout.addRow("Margin Left:", self.m_left)
-        self.project_layout.addRow("Margin Right:", self.m_right)
+        self.project_layout.addRow(self._fl("lbl_margin_top"),    self.m_top)
+        self.project_layout.addRow(self._fl("lbl_margin_bottom"), self.m_bottom)
+        self.project_layout.addRow(self._fl("lbl_margin_left"),   self.m_left)
+        self.project_layout.addRow(self._fl("lbl_margin_right"),  self.m_right)
         
         # Grid Settings
-        self.project_layout.addRow(QLabel("<b>Grid Settings</b>"))
+        self._sec_grid = QLabel("<b>Grid Settings</b>")
+        self.project_layout.addRow(self._sec_grid)
         
         self.grid_mode = QComboBox()
         self.grid_mode.addItems(["Stretch Rows to Page", "Fixed Cell Width"])
         self.grid_mode.currentTextChanged.connect(self._on_grid_mode_changed)
-        self.project_layout.addRow("Grid Mode:", self.grid_mode)
+        self.project_layout.addRow(self._fl("lbl_grid_mode"), self.grid_mode)
         
         self.row_alignment = QComboBox()
         self.row_alignment.addItems(["left", "center", "right"])
         self.row_alignment.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"row_alignment": t})
         )
-        self.project_layout.addRow("Row Alignment:", self.row_alignment)
+        self.project_layout.addRow(self._fl("lbl_row_align"), self.row_alignment)
         
         # Corner Label Settings
-        self.project_layout.addRow(QLabel("<b>Corner Labels</b>"))
+        self._sec_corner = QLabel("<b>Corner Labels</b>")
+        self.project_layout.addRow(self._sec_corner)
         
         self.corner_label_font = QComboBox()
         self.corner_label_font.addItems(["Arial", "Times New Roman", "Courier New", "Verdana"])
         self.corner_label_font.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"corner_label_font_family": t})
         )
-        self.project_layout.addRow("Font:", self.corner_label_font)
+        self.project_layout.addRow(self._fl("lbl_font"), self.corner_label_font)
         
         self.corner_label_size = QSpinBox()
         self.corner_label_size.setRange(1, 72)
@@ -122,15 +127,16 @@ class Inspector(QWidget):
         self.corner_label_size.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"corner_label_font_size": v})
         )
-        self.project_layout.addRow("Size:", self.corner_label_size)
+        self.project_layout.addRow(self._fl("lbl_size"), self.corner_label_size)
         
         self.corner_label_color = QComboBox()
         self.corner_label_color.addItems(["Black", "White"])
         self.corner_label_color.currentTextChanged.connect(self._on_corner_label_color_changed)
-        self.project_layout.addRow("Color:", self.corner_label_color)
+        self.project_layout.addRow(self._fl("lbl_color"), self.corner_label_color)
         
         # Gap between cells
-        self.project_layout.addRow(QLabel("<b>Layout</b>"))
+        self._sec_layout = QLabel("<b>Layout</b>")
+        self.project_layout.addRow(self._sec_layout)
         self.gap_spin = QDoubleSpinBox()
         self.gap_spin.setRange(0, 20)
         self.gap_spin.setSingleStep(0.5)
@@ -138,7 +144,7 @@ class Inspector(QWidget):
         self.gap_spin.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"gap_mm": v})
         )
-        self.project_layout.addRow("Cell Gap:", self.gap_spin)
+        self.project_layout.addRow(self._fl("lbl_cell_gap"), self.gap_spin)
         
         self.project_group.setLayout(self.project_layout)
         self.layout.addWidget(self.project_group)
@@ -152,14 +158,14 @@ class Inspector(QWidget):
         self.fit_mode_combo.currentTextChanged.connect(
             lambda t: self.cell_property_changed.emit({"fit_mode": t})
         )
-        self.cell_layout.addRow("Fit Mode:", self.fit_mode_combo)
+        self.cell_layout.addRow(self._fl("lbl_fit_mode"), self.fit_mode_combo)
         
         self.rotation_combo = QComboBox()
         self.rotation_combo.addItems(["0", "90", "180", "270"])
         self.rotation_combo.currentTextChanged.connect(
             lambda t: self.cell_property_changed.emit({"rotation": int(t)})
         )
-        self.cell_layout.addRow("Rotation:", self.rotation_combo)
+        self.cell_layout.addRow(self._fl("lbl_rotation"), self.rotation_combo)
         
         # Alignment
         self.align_h_combo = QComboBox()
@@ -167,14 +173,14 @@ class Inspector(QWidget):
         self.align_h_combo.currentTextChanged.connect(
             lambda t: self.cell_property_changed.emit({"align_h": t})
         )
-        self.cell_layout.addRow("Align H:", self.align_h_combo)
+        self.cell_layout.addRow(self._fl("lbl_align_h"), self.align_h_combo)
         
         self.align_v_combo = QComboBox()
         self.align_v_combo.addItems(["top", "center", "bottom"])
         self.align_v_combo.currentTextChanged.connect(
             lambda t: self.cell_property_changed.emit({"align_v": t})
         )
-        self.cell_layout.addRow("Align V:", self.align_v_combo)
+        self.cell_layout.addRow(self._fl("lbl_align_v"), self.align_v_combo)
         
         self.freeform_section_label = QLabel("— Freeform Geometry —")
         self.cell_layout.addRow(self.freeform_section_label)
@@ -184,54 +190,57 @@ class Inspector(QWidget):
         self.freeform_w = self._create_spinbox(1, 1000, self._emit_freeform)
         self.freeform_h = self._create_spinbox(1, 1000, self._emit_freeform)
 
-        self.cell_layout.addRow("Pos X (mm):", self.freeform_x)
-        self.cell_layout.addRow("Pos Y (mm):", self.freeform_y)
-        self.cell_layout.addRow("Width (mm):", self.freeform_w)
-        self.cell_layout.addRow("Height (mm):", self.freeform_h)
+        self.cell_layout.addRow(self._fl("lbl_pos_x"),    self.freeform_x)
+        self.cell_layout.addRow(self._fl("lbl_pos_y"),    self.freeform_y)
+        self.cell_layout.addRow(self._fl("lbl_width_mm"),  self.freeform_w)
+        self.cell_layout.addRow(self._fl("lbl_height_mm"), self.freeform_h)
 
-        self.cell_layout.addRow(QLabel("— Grid Size Override (0=Auto) —"))
+        self._sec_grid_override = QLabel("— Grid Size Override (0=Auto) —")
+        self.cell_layout.addRow(self._sec_grid_override)
         self.override_w = self._create_spinbox(0, 1000, self._emit_override_size)
         self.override_h = self._create_spinbox(0, 1000, self._emit_override_size)
-        self.cell_layout.addRow("Width (mm):", self.override_w)
-        self.cell_layout.addRow("Height (mm):", self.override_h)
+        self.cell_layout.addRow(self._fl("lbl_width_mm"),  self.override_w)
+        self.cell_layout.addRow(self._fl("lbl_height_mm"), self.override_h)
 
-        self.cell_layout.addRow(QLabel("— Padding —"))
+        self._sec_padding = QLabel("— Padding —")
+        self.cell_layout.addRow(self._sec_padding)
         self.pad_top = self._create_spinbox(-100, 100, self._emit_padding)
         self.pad_bottom = self._create_spinbox(-100, 100, self._emit_padding)
         self.pad_left = self._create_spinbox(-100, 100, self._emit_padding)
         self.pad_right = self._create_spinbox(-100, 100, self._emit_padding)
         
-        self.cell_layout.addRow("Pad Top (mm):", self.pad_top)
-        self.cell_layout.addRow("Pad Bottom:", self.pad_bottom)
-        self.cell_layout.addRow("Pad Left:", self.pad_left)
-        self.cell_layout.addRow("Pad Right:", self.pad_right)
+        self.cell_layout.addRow(self._fl("lbl_pad_top"),    self.pad_top)
+        self.cell_layout.addRow(self._fl("lbl_pad_bottom"), self.pad_bottom)
+        self.cell_layout.addRow(self._fl("lbl_pad_left"),   self.pad_left)
+        self.cell_layout.addRow(self._fl("lbl_pad_right"),  self.pad_right)
 
         self.corner_label_tl = QLineEdit()
         self.corner_label_tl.editingFinished.connect(
             lambda: self.corner_label_changed.emit({"anchor": "top_left_inside", "text": self.corner_label_tl.text()})
         )
-        self.cell_layout.addRow("Label TL:", self.corner_label_tl)
+        self.cell_layout.addRow(self._fl("lbl_corner_tl"), self.corner_label_tl)
 
         self.corner_label_tr = QLineEdit()
         self.corner_label_tr.editingFinished.connect(
             lambda: self.corner_label_changed.emit({"anchor": "top_right_inside", "text": self.corner_label_tr.text()})
         )
-        self.cell_layout.addRow("Label TR:", self.corner_label_tr)
+        self.cell_layout.addRow(self._fl("lbl_corner_tr"), self.corner_label_tr)
 
         self.corner_label_bl = QLineEdit()
         self.corner_label_bl.editingFinished.connect(
             lambda: self.corner_label_changed.emit({"anchor": "bottom_left_inside", "text": self.corner_label_bl.text()})
         )
-        self.cell_layout.addRow("Label BL:", self.corner_label_bl)
+        self.cell_layout.addRow(self._fl("lbl_corner_bl"), self.corner_label_bl)
 
         self.corner_label_br = QLineEdit()
         self.corner_label_br.editingFinished.connect(
             lambda: self.corner_label_changed.emit({"anchor": "bottom_right_inside", "text": self.corner_label_br.text()})
         )
-        self.cell_layout.addRow("Label BR:", self.corner_label_br)
+        self.cell_layout.addRow(self._fl("lbl_corner_br"), self.corner_label_br)
 
         # --- Scale Bar Controls ---
-        self.cell_layout.addRow(QLabel("— Scale Bar —"))
+        self._sec_scale_bar = QLabel("— Scale Bar —")
+        self.cell_layout.addRow(self._sec_scale_bar)
         
         self.scale_bar_enabled = QCheckBox("Enable Scale Bar")
         self.scale_bar_enabled.stateChanged.connect(self._emit_scale_bar)
@@ -246,19 +255,19 @@ class Inspector(QWidget):
         manage_btn.setFixedWidth(72)
         manage_btn.clicked.connect(self._open_mappings_dialog)
         mapping_row.addWidget(manage_btn)
-        self.cell_layout.addRow("Mapping:", mapping_row)
+        self.cell_layout.addRow(self._fl("lbl_mapping"), mapping_row)
         
         self.scale_bar_length = QDoubleSpinBox()
         self.scale_bar_length.setRange(0.1, 1000.0)
         self.scale_bar_length.setSingleStep(1.0)
         self.scale_bar_length.setSuffix(" µm")
         self.scale_bar_length.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Length:", self.scale_bar_length)
+        self.cell_layout.addRow(self._fl("lbl_length"), self.scale_bar_length)
         
         self.scale_bar_color = QComboBox()
         self.scale_bar_color.addItems(["White", "Black"])
         self.scale_bar_color.currentTextChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Color:", self.scale_bar_color)
+        self.cell_layout.addRow(self._fl("lbl_color"), self.scale_bar_color)
         
         self.scale_bar_show_text = QCheckBox("Show Text")
         self.scale_bar_show_text.stateChanged.connect(self._emit_scale_bar)
@@ -267,7 +276,7 @@ class Inspector(QWidget):
         self.scale_bar_custom_text = QLineEdit()
         self.scale_bar_custom_text.setPlaceholderText("Auto (e.g. 10 µm)")
         self.scale_bar_custom_text.editingFinished.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Custom Text:", self.scale_bar_custom_text)
+        self.cell_layout.addRow(self._fl("lbl_custom_text"), self.scale_bar_custom_text)
         
         self.scale_bar_text_size = QDoubleSpinBox()
         self.scale_bar_text_size.setRange(0.5, 10.0)
@@ -275,31 +284,31 @@ class Inspector(QWidget):
         self.scale_bar_text_size.setSuffix(" mm")
         self.scale_bar_text_size.setValue(2.0)
         self.scale_bar_text_size.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Text Size:", self.scale_bar_text_size)
+        self.cell_layout.addRow(self._fl("lbl_text_size"), self.scale_bar_text_size)
         
         self.scale_bar_thickness = QDoubleSpinBox()
         self.scale_bar_thickness.setRange(0.1, 5.0)
         self.scale_bar_thickness.setSingleStep(0.1)
         self.scale_bar_thickness.setSuffix(" mm")
         self.scale_bar_thickness.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Thickness:", self.scale_bar_thickness)
+        self.cell_layout.addRow(self._fl("lbl_thickness"), self.scale_bar_thickness)
         
         self.scale_bar_position = QComboBox()
         self.scale_bar_position.addItems(["bottom_left", "bottom_center", "bottom_right"])
         self.scale_bar_position.currentTextChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Position:", self.scale_bar_position)
+        self.cell_layout.addRow(self._fl("lbl_position"), self.scale_bar_position)
         
         self.scale_bar_offset_x = QDoubleSpinBox()
         self.scale_bar_offset_x.setRange(0, 50)
         self.scale_bar_offset_x.setSingleStep(0.5)
         self.scale_bar_offset_x.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Offset X (mm):", self.scale_bar_offset_x)
+        self.cell_layout.addRow(self._fl("lbl_offset_x_mm"), self.scale_bar_offset_x)
         
         self.scale_bar_offset_y = QDoubleSpinBox()
         self.scale_bar_offset_y.setRange(0, 50)
         self.scale_bar_offset_y.setSingleStep(0.5)
         self.scale_bar_offset_y.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow("Offset Y (mm):", self.scale_bar_offset_y)
+        self.cell_layout.addRow(self._fl("lbl_offset_y_mm"), self.scale_bar_offset_y)
         
         self.cell_group.setLayout(self.cell_layout)
         self.layout.addWidget(self.cell_group)
@@ -313,21 +322,21 @@ class Inspector(QWidget):
         self.label_text_edit = QLineEdit()
         self.label_text_edit.setPlaceholderText("Label text")
         self.label_text_edit.editingFinished.connect(self._on_label_text_edited)
-        self.label_cell_layout.addRow("Text:", self.label_text_edit)
+        self.label_cell_layout.addRow(self._fl("lbl_text"), self.label_text_edit)
 
         self.label_scheme = QComboBox()
         self.label_scheme.addItems(["(a)", "(A)", "a", "A"])
         self.label_scheme.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_scheme": t})
         )
-        self.label_cell_layout.addRow("Scheme:", self.label_scheme)
+        self.label_cell_layout.addRow(self._fl("lbl_scheme"), self.label_scheme)
 
         self.label_font = QComboBox()
         self.label_font.addItems(["Arial", "Times New Roman", "Courier New", "Verdana"])
         self.label_font.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_font_family": t})
         )
-        self.label_cell_layout.addRow("Font:", self.label_font)
+        self.label_cell_layout.addRow(self._fl("lbl_font"), self.label_font)
 
         self.label_size = QSpinBox()
         self.label_size.setRange(1, 72)
@@ -335,7 +344,7 @@ class Inspector(QWidget):
         self.label_size.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"label_font_size": v})
         )
-        self.label_cell_layout.addRow("Size (pt):", self.label_size)
+        self.label_cell_layout.addRow(self._fl("lbl_size_pt"), self.label_size)
 
         self.label_bold = QCheckBox("Bold")
         self.label_bold.setChecked(True)
@@ -347,12 +356,12 @@ class Inspector(QWidget):
         self.label_color = QComboBox()
         self.label_color.addItems(["Black", "White"])
         self.label_color.currentTextChanged.connect(self._on_label_color_changed)
-        self.label_cell_layout.addRow("Color:", self.label_color)
+        self.label_cell_layout.addRow(self._fl("lbl_color"), self.label_color)
 
         self.label_align = QComboBox()
         self.label_align.addItems(["Left", "Center", "Right"])
         self.label_align.currentTextChanged.connect(self._on_label_align_preset_changed)
-        self.label_cell_layout.addRow("Align:", self.label_align)
+        self.label_cell_layout.addRow(self._fl("lbl_align"), self.label_align)
 
         self.label_offset_x = QDoubleSpinBox()
         self.label_offset_x.setRange(-100.0, 100.0)
@@ -363,7 +372,7 @@ class Inspector(QWidget):
         self.label_offset_x.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"label_offset_x": v})
         )
-        self.label_cell_layout.addRow("Offset X:", self.label_offset_x)
+        self.label_cell_layout.addRow(self._fl("lbl_offset_x"), self.label_offset_x)
 
         self.label_offset_y = QDoubleSpinBox()
         self.label_offset_y.setRange(-100.0, 100.0)
@@ -374,7 +383,7 @@ class Inspector(QWidget):
         self.label_offset_y.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"label_offset_y": v})
         )
-        self.label_cell_layout.addRow("Offset Y:", self.label_offset_y)
+        self.label_cell_layout.addRow(self._fl("lbl_offset_y"), self.label_offset_y)
 
         self.label_row_height = QDoubleSpinBox()
         self.label_row_height.setRange(0.0, 50.0)
@@ -386,7 +395,7 @@ class Inspector(QWidget):
         self.label_row_height.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"label_row_height": v})
         )
-        self.label_cell_layout.addRow("Row Height:", self.label_row_height)
+        self.label_cell_layout.addRow(self._fl("lbl_row_height"), self.label_row_height)
 
         self.label_cell_group.setLayout(self.label_cell_layout)
         self.layout.addWidget(self.label_cell_group)
@@ -402,13 +411,13 @@ class Inspector(QWidget):
         self.row_height.valueChanged.connect(
             lambda v: self.row_property_changed.emit({"height_ratio": v})
         )
-        self.row_layout.addRow("Height Ratio:", self.row_height)
+        self.row_layout.addRow(self._fl("lbl_height_ratio"), self.row_height)
         
         # Column ratios (comma-separated, e.g. "1,2,1" for 25%-50%-25%)
         self.col_ratios_edit = QLineEdit()
         self.col_ratios_edit.setPlaceholderText("e.g. 1,2,1 (equal if empty)")
         self.col_ratios_edit.editingFinished.connect(self._emit_column_ratios)
-        self.row_layout.addRow("Col Ratios:", self.col_ratios_edit)
+        self.row_layout.addRow(self._fl("lbl_col_ratios"), self.col_ratios_edit)
         
         self.row_group.setLayout(self.row_layout)
         self.layout.addWidget(self.row_group)
@@ -429,7 +438,7 @@ class Inspector(QWidget):
         self.subcell_ratio.setSingleStep(0.1)
         self.subcell_ratio.setDecimals(2)
         self.subcell_ratio.valueChanged.connect(self._emit_subcell_ratio)
-        self.subcell_layout.addRow("Size Ratio:", self.subcell_ratio)
+        self.subcell_layout.addRow(self._fl("lbl_size_ratio"), self.subcell_ratio)
 
         self.subcell_fixed_size = QDoubleSpinBox()
         self.subcell_fixed_size.setRange(0.0, 2000.0)
@@ -453,21 +462,21 @@ class Inspector(QWidget):
         self.text_content.editingFinished.connect(
             lambda: self.text_property_changed.emit({"text": self.text_content.text()})
         )
-        self.text_layout.addRow("Content:", self.text_content)
+        self.text_layout.addRow(self._fl("lbl_content"), self.text_content)
         
         self.font_family = QComboBox()
         self.font_family.addItems(["Arial", "Times New Roman", "Courier New", "Verdana"]) # Basic list
         self.font_family.currentTextChanged.connect(
             lambda t: self.text_property_changed.emit({"font_family": t})
         )
-        self.text_layout.addRow("Font:", self.font_family)
+        self.text_layout.addRow(self._fl("lbl_font"), self.font_family)
         
         self.font_size = QSpinBox()
         self.font_size.setRange(1, 72)
         self.font_size.valueChanged.connect(
             lambda v: self.text_property_changed.emit({"font_size_pt": v})
         )
-        self.text_layout.addRow("Size (pt):", self.font_size)
+        self.text_layout.addRow(self._fl("lbl_size_pt"), self.font_size)
         
         self.is_bold = QCheckBox("Bold")
         self.is_bold.toggled.connect(
@@ -489,7 +498,7 @@ class Inspector(QWidget):
         
         color_widget = QWidget()
         color_widget.setLayout(color_row)
-        self.text_layout.addRow("Color:", color_widget)
+        self.text_layout.addRow(self._fl("lbl_color"), color_widget)
         
         # Store current text item subtype for apply-to-group
         self._current_text_subtype = None
@@ -502,7 +511,7 @@ class Inspector(QWidget):
         self.offset_x.valueChanged.connect(
             lambda v: self.text_property_changed.emit({"offset_x": v})
         )
-        self.text_layout.addRow("Offset X:", self.offset_x)
+        self.text_layout.addRow(self._fl("lbl_offset_x"), self.offset_x)
         
         self.offset_y = QDoubleSpinBox()
         self.offset_y.setRange(0, 100)
@@ -511,7 +520,7 @@ class Inspector(QWidget):
         self.offset_y.valueChanged.connect(
             lambda v: self.text_property_changed.emit({"offset_y": v})
         )
-        self.text_layout.addRow("Offset Y:", self.offset_y)
+        self.text_layout.addRow(self._fl("lbl_offset_y"), self.offset_y)
         
         self.text_group.setLayout(self.text_layout)
         self.layout.addWidget(self.text_group)
@@ -532,6 +541,39 @@ class Inspector(QWidget):
         self._make_collapsible(self.project_group)
         self._make_collapsible(self.cell_group)
         self._make_collapsible(self.row_group)
+
+    def _fl(self, key: str) -> QLabel:
+        """Create a form-row QLabel, register it for retranslation, and return it."""
+        lbl = QLabel(tr(key))
+        self._lbl_registry.append((key, lbl))
+        return lbl
+
+    def retranslate_ui(self):
+        """Update all visible translatable strings to the current language."""
+        self.project_group.setTitle(tr("grp_project"))
+        self.cell_group.setTitle(tr("grp_cell"))
+        self.label_cell_group.setTitle(tr("grp_label_cell"))
+        self.row_group.setTitle(tr("grp_row"))
+        self.subcell_group.setTitle(tr("grp_subcell"))
+        self.text_group.setTitle(tr("grp_text"))
+
+        self._sec_grid.setText(tr("sec_grid"))
+        self._sec_corner.setText(tr("sec_corner_labels"))
+        self._sec_layout.setText(tr("sec_layout"))
+        self.freeform_section_label.setText(tr("sec_freeform"))
+        self._sec_grid_override.setText(tr("sec_grid_override"))
+        self._sec_padding.setText(tr("sec_padding"))
+        self._sec_scale_bar.setText(tr("sec_scale_bar"))
+
+        self.scale_bar_enabled.setText(tr("chk_scale_enabled"))
+        self.scale_bar_show_text.setText(tr("chk_scale_text"))
+        self.apply_color_btn.setText(tr("btn_apply_all"))
+        self.label_bold.setText(tr("chk_bold"))
+        self.is_bold.setText(tr("chk_bold"))
+        self._subcell_fixed_size_label.setText(tr("lbl_fixed_width"))
+
+        for key, lbl in self._lbl_registry:
+            lbl.setText(tr(key))
 
     def _emit_project_margins(self):
         self.project_property_changed.emit({
