@@ -68,7 +68,6 @@ def main() -> int:
         # Pillow plugins sometimes require hidden imports
         "--collect-submodules=PIL",
         # stdlib modules that PyInstaller can miss in --windowed mode
-        "--hidden-import=io",
         "--hidden-import=encodings",
         "--hidden-import=codecs",
         *add_data_args,
