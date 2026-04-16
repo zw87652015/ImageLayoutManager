@@ -2,11 +2,17 @@ import os
 from PyQt6.QtGui import QPalette, QColor
 from PyQt6.QtCore import Qt
 
-# Resolve check mark SVG relative to this file
-_ASSETS = os.path.normpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "assets")
-).replace("\\", "/")
-_CHECK_ON = f"{_ASSETS}/check_on.svg"
+# Resolve check mark SVG: works both in dev and inside a PyInstaller .app bundle.
+def _assets_dir() -> str:
+    import sys
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        # Running inside a PyInstaller bundle; data files land at _MEIPASS root
+        base = sys._MEIPASS
+    else:
+        base = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    return os.path.join(base, "assets").replace("\\", "/")
+
+_CHECK_ON = f"{_assets_dir()}/check_on.svg"
 
 DARK = "dark"
 LIGHT = "light"
