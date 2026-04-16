@@ -35,7 +35,7 @@ class Inspector(QWidget):
         self.layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(container)
 
-        self.setMinimumWidth(220)
+        self.setMinimumWidth(300)
         
         # --- Project Settings Group (Default View) ---
         self.project_group = QGroupBox("Project Settings")
@@ -176,13 +176,14 @@ class Inspector(QWidget):
         )
         self.cell_layout.addRow("Align V:", self.align_v_combo)
         
-        self.cell_layout.addRow(QLabel("— Freeform Geometry —"))
-        
+        self.freeform_section_label = QLabel("— Freeform Geometry —")
+        self.cell_layout.addRow(self.freeform_section_label)
+
         self.freeform_x = self._create_spinbox(-1000, 1000, self._emit_freeform)
         self.freeform_y = self._create_spinbox(-1000, 1000, self._emit_freeform)
         self.freeform_w = self._create_spinbox(1, 1000, self._emit_freeform)
         self.freeform_h = self._create_spinbox(1, 1000, self._emit_freeform)
-        
+
         self.cell_layout.addRow("Pos X (mm):", self.freeform_x)
         self.cell_layout.addRow("Pos Y (mm):", self.freeform_y)
         self.cell_layout.addRow("Width (mm):", self.freeform_w)
@@ -417,7 +418,8 @@ class Inspector(QWidget):
         self.subcell_group = QGroupBox("Sub-Cell Settings")
         self.subcell_layout = QFormLayout()
 
-        self._subcell_id = None  # Track which sub-cell is selected
+        self._subcell_id = None        # Track which sub-cell is selected
+        self._subcell_direction = None  # "horizontal" or "vertical"
 
         self.subcell_info_label = QLabel("")
         self.subcell_layout.addRow(self.subcell_info_label)
@@ -428,6 +430,16 @@ class Inspector(QWidget):
         self.subcell_ratio.setDecimals(2)
         self.subcell_ratio.valueChanged.connect(self._emit_subcell_ratio)
         self.subcell_layout.addRow("Size Ratio:", self.subcell_ratio)
+
+        self.subcell_fixed_size = QDoubleSpinBox()
+        self.subcell_fixed_size.setRange(0.0, 2000.0)
+        self.subcell_fixed_size.setSingleStep(1.0)
+        self.subcell_fixed_size.setDecimals(2)
+        self.subcell_fixed_size.setSuffix(" mm")
+        self.subcell_fixed_size.setSpecialValueText("Auto (use ratio)")
+        self.subcell_fixed_size.valueChanged.connect(self._emit_subcell_fixed_size)
+        self._subcell_fixed_size_label = QLabel("Fixed Width:")
+        self.subcell_layout.addRow(self._subcell_fixed_size_label, self.subcell_fixed_size)
 
         self.subcell_group.setLayout(self.subcell_layout)
         self.layout.addWidget(self.subcell_group)
@@ -568,6 +580,15 @@ class Inspector(QWidget):
             "padding_right": self.pad_right.value()
         })
 
+    def _set_freeform_visible(self, visible: bool):
+        """Show or hide the Freeform Geometry section in the cell inspector."""
+        self.freeform_section_label.setVisible(visible)
+        for widget in (self.freeform_x, self.freeform_y, self.freeform_w, self.freeform_h):
+            widget.setVisible(visible)
+            label = self.cell_layout.labelForField(widget)
+            if label:
+                label.setVisible(visible)
+
     def _emit_freeform(self):
         self.cell_property_changed.emit({
             "freeform_x_mm": self.freeform_x.value(),
@@ -628,6 +649,11 @@ class Inspector(QWidget):
     def _emit_subcell_ratio(self, value):
         if self._subcell_id:
             self.subcell_ratio_changed.emit(self._subcell_id, value)
+
+    def _emit_subcell_fixed_size(self, value):
+        if self._subcell_id and self._subcell_direction:
+            key = "override_height_mm" if self._subcell_direction == "vertical" else "override_width_mm"
+            self.cell_property_changed.emit({key: value})
 
     def _emit_column_ratios(self):
         text = self.col_ratios_edit.text().strip()
@@ -718,6 +744,7 @@ class Inspector(QWidget):
             self.multi_label.show()
             # Show cell group for bulk editing
             self.cell_group.show()
+            self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
             if data:
                 self.blockSignals(True)
                 self.fit_mode_combo.setCurrentText(data.get("fit_mode", "contain"))
@@ -768,7 +795,8 @@ class Inspector(QWidget):
             self.text_group.hide()
             self.label_cell_group.hide()
             self.cell_group.show()
-            
+            self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
+
             # Show row group
             if row_data:
                 self.row_group.show()
@@ -791,20 +819,25 @@ class Inspector(QWidget):
                 self.blockSignals(True)
                 self._subcell_id = subcell_data.get("cell_id")
                 direction = subcell_data.get("direction", "")
+                self._subcell_direction = direction
                 sibling_count = subcell_data.get("sibling_count", 0)
                 sibling_index = subcell_data.get("sibling_index", 0)
                 dim = "Height" if direction == "vertical" else "Width"
                 self.subcell_info_label.setText(
                     f"Split: {direction}  |  {sibling_index + 1} of {sibling_count}")
                 self.subcell_ratio.setValue(subcell_data.get("ratio", 1.0))
-                # Update label to reflect dimension
-                label = self.subcell_layout.labelForField(self.subcell_ratio)
-                if label:
-                    label.setText(f"{dim} Ratio:")
+                # Update labels to reflect H vs V dimension
+                ratio_label = self.subcell_layout.labelForField(self.subcell_ratio)
+                if ratio_label:
+                    ratio_label.setText(f"{dim} Ratio:")
+                self._subcell_fixed_size_label.setText(f"Fixed {dim}:")
+                fixed_key = "override_height_mm" if direction == "vertical" else "override_width_mm"
+                self.subcell_fixed_size.setValue(subcell_data.get(fixed_key, 0.0))
                 self.blockSignals(False)
             else:
                 self.subcell_group.hide()
                 self._subcell_id = None
+                self._subcell_direction = None
             
             # Block signals to prevent feedback loop
             self.blockSignals(True)

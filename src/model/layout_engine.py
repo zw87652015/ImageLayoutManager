@@ -307,14 +307,22 @@ class LayoutEngine:
 
         if parent_cell.split_direction == "vertical":
             # --- Vertical stacking: divide height ---
-            # Account for label rows above leaf children
+            # Account for label rows above leaf children and fixed-height children.
             label_space = 0.0
-            if label_row_above:
-                for child in children:
-                    if child.is_leaf and child.id in labeled_cell_ids:
-                        label_space += label_row_h + gap_mm
+            fixed_h_total = 0.0
+            ratio_sum = 0.0
+            for i, child in enumerate(children):
+                if label_row_above and child.is_leaf and child.id in labeled_cell_ids:
+                    label_space += label_row_h + gap_mm
+                oh = getattr(child, 'override_height_mm', 0.0)
+                if oh > 0:
+                    fixed_h_total += oh
+                else:
+                    ratio_sum += ratios[i]
+            if ratio_sum <= 0:
+                ratio_sum = 1.0
 
-            available = ph - total_gap - label_space
+            available = ph - total_gap - label_space - fixed_h_total
             if available < 0:
                 available = 0
             current_y = py
@@ -324,7 +332,8 @@ class LayoutEngine:
                     label_rects[child.id] = (px, current_y, pw, label_row_h)
                     current_y += label_row_h + gap_mm
 
-                child_h = (ratios[i] / total_ratio) * available
+                oh = getattr(child, 'override_height_mm', 0.0)
+                child_h = oh if oh > 0 else (ratios[i] / ratio_sum) * available
                 child_rect = (px, current_y, pw, child_h)
                 cell_rects[child.id] = child_rect
 
@@ -337,20 +346,41 @@ class LayoutEngine:
 
         elif parent_cell.split_direction == "horizontal":
             # --- Horizontal stacking: divide width ---
-            available = pw - total_gap
-            if available < 0:
-                available = 0
+            # Account for fixed-width children; ratio children share the remainder.
+            fixed_w_total = 0.0
+            ratio_sum = 0.0
+            for i, child in enumerate(children):
+                ow = getattr(child, 'override_width_mm', 0.0)
+                if ow > 0:
+                    fixed_w_total += ow
+                else:
+                    ratio_sum += ratios[i]
+            if ratio_sum <= 0:
+                ratio_sum = 1.0
+
+            available = max(0.0, pw - total_gap - fixed_w_total)
+
+            # If any direct leaf child is labeled, reserve a label strip at the
+            # top of the shared height band.  All children must start at the same
+            # y, so the overhead applies to every child once any one needs it.
+            any_labeled_leaf = label_row_above and any(
+                child.is_leaf and child.id in labeled_cell_ids for child in children
+            )
+            label_overhead = (label_row_h + gap_mm) if any_labeled_leaf else 0.0
+            img_py = py + label_overhead
+            img_ph = max(0.0, ph - label_overhead)
+
             current_x = px
             for i, child in enumerate(children):
-                child_w = (ratios[i] / total_ratio) * available
-                child_rect = (current_x, py, child_w, ph)
-                cell_rects[child.id] = child_rect
+                ow = getattr(child, 'override_width_mm', 0.0)
+                child_w = ow if ow > 0 else (ratios[i] / ratio_sum) * available
 
-                # Label rect for leaf children in horizontal split
+                # Label rect: spans the child's width, sits in the reserved strip
                 if label_row_above and child.is_leaf and child.id in labeled_cell_ids:
-                    # For horizontal children, labels go above the parent rect area
-                    # We cannot add extra height here, so labels share the parent's label row if any
-                    pass  # Labels for horizontal sub-cells handled at parent level
+                    label_rects[child.id] = (current_x, py, child_w, label_row_h)
+
+                child_rect = (current_x, img_py, child_w, img_ph)
+                cell_rects[child.id] = child_rect
 
                 if not child.is_leaf:
                     LayoutEngine._layout_subcells(

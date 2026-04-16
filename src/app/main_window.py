@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
         from src.version import APP_VERSION
         self._app_version = APP_VERSION
         self.setWindowTitle(f"Academic Figure Layout v{APP_VERSION}[*]")
-        self.resize(1200, 800)
+        self.resize(1400, 850)
         
         # Undo Stack
         self.undo_stack = QUndoStack(self)
@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.inspector)
         
         # Set initial sizes and stretch factors
-        splitter.setSizes([900, 300])
+        splitter.setSizes([1050, 350])
         splitter.setStretchFactor(0, 1)   # Canvas stretches
         splitter.setStretchFactor(1, 0)   # Inspector keeps its size
         
@@ -674,7 +674,7 @@ class MainWindow(QMainWindow):
         # Multi-cell selection
         if len(cell_items) > 1:
             first_cell = self.project.find_cell_by_id(cell_items[0].cell_id)
-            multi_data = {"count": len(cell_items)}
+            multi_data = {"count": len(cell_items), "layout_mode": getattr(self.project, 'layout_mode', 'grid')}
             if first_cell:
                 multi_data.update({
                     "fit_mode": first_cell.fit_mode,
@@ -730,6 +730,7 @@ class MainWindow(QMainWindow):
 
                 # Populate corner label fields from existing cell-scoped text items
                 cell_dict = cell.to_dict()
+                cell_dict["layout_mode"] = getattr(self.project, 'layout_mode', 'grid')
                 corner_labels = {}
                 for t in self.project.text_items:
                     if t.scope == "cell" and t.parent_id == cell.id and t.anchor:
@@ -749,6 +750,8 @@ class MainWindow(QMainWindow):
                         "sibling_count": len(cell_parent.children),
                         "sibling_index": idx,
                         "ratio": ratios[idx] if idx < len(ratios) else 1.0,
+                        "override_width_mm": getattr(cell, 'override_width_mm', 0.0),
+                        "override_height_mm": getattr(cell, 'override_height_mm', 0.0),
                     }
 
                 self.inspector.set_selection('cell', cell_dict, row_data)
@@ -1258,6 +1261,15 @@ class MainWindow(QMainWindow):
         act_sub_right.triggered.connect(
             lambda: self._ctx_wrap_and_insert(cell_id, "horizontal", "after"))
 
+        if cell.is_leaf:
+            sub_menu.addSeparator()
+            act_split_cols = sub_menu.addAction("Split into N Columns...")
+            act_split_cols.triggered.connect(
+                lambda: self._ctx_split_into_n(cell_id, "horizontal"))
+            act_split_rows = sub_menu.addAction("Split into N Rows...")
+            act_split_rows.triggered.connect(
+                lambda: self._ctx_split_into_n(cell_id, "vertical"))
+
         cell_parent = self.project.find_parent_of(cell_id)
 
         # --- Delete Row / Cell ---
@@ -1436,6 +1448,17 @@ class MainWindow(QMainWindow):
         """Context menu: wrap cell in a split and insert a new sibling."""
         cmd = WrapAndInsertCommand(self.project, cell_id, direction, position,
                                     update_callback=self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _ctx_split_into_n(self, cell_id: str, direction: str):
+        """Context menu: split a leaf cell into N equal sub-cells at once."""
+        from PyQt6.QtWidgets import QInputDialog
+        label = "Number of columns:" if direction == "horizontal" else "Number of rows:"
+        count, ok = QInputDialog.getInt(self, "Split Cell", label, value=2, min=2, max=64)
+        if not ok:
+            return
+        cmd = SplitCellCommand(self.project, cell_id, direction, count=count,
+                               update_callback=self._refresh_and_update)
         self.undo_stack.push(cmd)
 
     def _ctx_insert_subcell(self, cell_id: str, position: str):
