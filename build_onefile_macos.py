@@ -41,20 +41,36 @@ def main() -> int:
     # Make sure imports like `from src...` work during analysis.
     src_path = str(project_root / "src")
 
+    # Detect current architecture so the build matches the running Python.
+    # Override by setting MACOS_ARCH env var to "x86_64", "arm64", or "universal2".
+    import platform
+    arch = os.environ.get("MACOS_ARCH", platform.machine())  # "x86_64" or "arm64"
+
+    assets_dir = project_root / "assets"
+    # PyInstaller --add-data syntax:  src:dest  (dest is relative inside bundle)
+    add_data_args = []
+    if assets_dir.exists():
+        add_data_args.append(f"--add-data={assets_dir}:assets")
+
     args = [
         "--noconfirm",
         "--clean",
-        "--onefile",
+        # Do NOT use --onefile on macOS: it extracts to a temp dir at launch,
+        # which breaks Python's early init (io module) and triggers macOS Gatekeeper.
+        # --windowed alone produces a proper self-contained .app bundle.
         "--windowed",
         "--name=ImageLayoutManager",
         f"--paths={src_path}",
-        # Ensure QtSvg gets bundled (used for SVG import/export)
+        f"--target-arch={arch}",
+        # Ensure QtSvg gets bundled (used for SVG rendering of checkbox assets)
         "--collect-submodules=PyQt6.QtSvg",
         "--collect-submodules=PyQt6",
         # Pillow plugins sometimes require hidden imports
         "--collect-submodules=PIL",
-        # macOS: request high-resolution (Retina) display support
-        "--target-arch=x86_64",  # change to arm64 on Apple Silicon, or universal2 for both
+        # stdlib modules that PyInstaller can miss in --windowed mode
+        "--hidden-import=encodings",
+        "--hidden-import=codecs",
+        *add_data_args,
         str(entry),
     ]
 
@@ -64,21 +80,22 @@ def main() -> int:
 
     pyinstaller_run(args)
 
-    # --onefile on macOS produces a Unix binary, not a .app bundle
-    dist_bin = project_root / "dist" / "ImageLayoutManager"
     dist_app = project_root / "dist" / "ImageLayoutManager.app"
+    dist_bin = project_root / "dist" / "ImageLayoutManager"
+
+    if dist_app.exists():
+        print(f"\nBuild OK: {dist_app}")
+        print("To ad-hoc sign (required to run on macOS 10.15+):")
+        print(f'  codesign --deep --force --sign "-" "{dist_app}"')
+        return 0
 
     if dist_bin.exists():
         print(f"Build OK: {dist_bin}")
         return 0
 
-    if dist_app.exists():
-        print(f"Build OK: {dist_app}")
-        return 0
-
     print("Build finished, but the output was not found at expected paths:")
-    print(f"  {dist_bin}")
     print(f"  {dist_app}")
+    print(f"  {dist_bin}")
     return 2
 
 

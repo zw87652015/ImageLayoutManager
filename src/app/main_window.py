@@ -1,6 +1,7 @@
 import os
 import math
 from typing import Optional
+from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QToolBar, QPushButton, QSplitter, QFileDialog,
@@ -9,6 +10,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack
+from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, DARK, LIGHT
+from src.app.i18n import tr, set_language, current_language
 
 # Try importing QOpenGLWidget for GPU acceleration
 try:
@@ -21,6 +24,9 @@ from src.model.data_model import Project, Cell, RowTemplate, TextItem
 from src.canvas.canvas_scene import CanvasScene
 from src.canvas.canvas_view import CanvasView
 from src.app.inspector import Inspector
+from src.app.layers_panel import LayersPanel
+from src.app.about_dialog import AboutDialog
+from src.app.help_dialog import HelpDialog
 from src.model.enums import PageSizePreset
 from src.export.pdf_exporter import PdfExporter
 from src.export.image_exporter import ImageExporter
@@ -42,6 +48,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self._current_project_path = None
+        self._current_theme = DARK
         from src.version import APP_VERSION
         self._app_version = APP_VERSION
         self.setWindowTitle(f"Academic Figure Layout v{APP_VERSION}[*]")
@@ -65,6 +72,7 @@ class MainWindow(QMainWindow):
         
         # Initialize Scene
         self.scene.set_project(self.project)
+        self.layers_panel.set_project(self.project)
         
         # Connect Signals
         self._connect_signals()
@@ -87,13 +95,37 @@ class MainWindow(QMainWindow):
         self.addToolBar(self.toolbar)
 
         # ── Menu Bar ──
-        file_menu = self.menuBar().addMenu("File")
-        edit_menu = self.menuBar().addMenu("Edit")
-        help_menu = self.menuBar().addMenu("Help")
+        self._file_menu   = self.menuBar().addMenu(tr("menu_file"))
+        self._edit_menu   = self.menuBar().addMenu(tr("menu_edit"))
+        self._layout_menu_ref = None  # set below
+        self._view_menu   = self.menuBar().addMenu(tr("menu_view"))
+        self._help_menu   = self.menuBar().addMenu(tr("menu_help"))
+        # local aliases for building
+        file_menu   = self._file_menu
+        edit_menu   = self._edit_menu
+        help_menu   = self._help_menu
 
-        about_action = QAction("About", self)
-        about_action.triggered.connect(self._on_show_about)
-        help_menu.addAction(about_action)
+        # ── View menu (theme + language toggles) ──
+        self._theme_action = QAction(tr("action_switch_light"), self)
+        self._theme_action.setShortcut("Ctrl+Shift+T")
+        self._theme_action.triggered.connect(self._on_toggle_theme)
+        self._view_menu.addAction(self._theme_action)
+
+        self._lang_action = QAction(tr("action_switch_zh"), self)
+        self._lang_action.setShortcut("Ctrl+Shift+G")
+        self._lang_action.triggered.connect(self._on_toggle_language)
+        self._view_menu.addAction(self._lang_action)
+
+        self._about_action = QAction(tr("action_about"), self)
+        self._about_action.setMenuRole(QAction.MenuRole.NoRole)
+        self._about_action.triggered.connect(self._on_show_about)
+        help_menu.addAction(self._about_action)
+
+        self._help_guide_action = QAction(tr("action_user_guide"), self)
+        self._help_guide_action.setShortcut("F1")
+        self._help_guide_action.setMenuRole(QAction.MenuRole.NoRole)
+        self._help_guide_action.triggered.connect(self._on_show_help)
+        help_menu.addAction(self._help_guide_action)
 
         # ── Undo / Redo ──
         undo_action = self.undo_stack.createUndoAction(self, "Undo")
@@ -112,24 +144,28 @@ class MainWindow(QMainWindow):
         self.toolbar.addSeparator()
 
         # ── File Actions ──
-        new_action = QAction("New", self)
+        new_action = QAction(tr("action_new"), self)
         new_action.setShortcut(QKeySequence.StandardKey.New)
         new_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         new_action.triggered.connect(self._on_new_project)
+        self._act_new = new_action
 
-        open_action = QAction("Open", self)
+        open_action = QAction(tr("action_open"), self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
         open_action.triggered.connect(self._on_open_project)
+        self._act_open = open_action
 
-        save_action = QAction("Save", self)
+        save_action = QAction(tr("action_save"), self)
         save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         save_action.triggered.connect(self._on_save_project)
+        self._act_save = save_action
 
-        save_as_action = QAction("Save As...", self)
+        save_as_action = QAction(tr("action_save_as"), self)
         save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
         save_as_action.triggered.connect(self._on_save_project_as)
+        self._act_save_as = save_as_action
 
         file_menu.addAction(new_action)
         file_menu.addAction(open_action)
@@ -138,33 +174,39 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
 
         # File menu — image operations
-        import_action = QAction("Import Images...", self)
+        import_action = QAction(tr("action_import"), self)
         import_action.triggered.connect(self._on_import_images)
         file_menu.addAction(import_action)
+        self._act_import = import_action
 
-        open_images_grid_action = QAction("Open Images as Grid...", self)
+        open_images_grid_action = QAction(tr("action_open_grid"), self)
         open_images_grid_action.triggered.connect(self._on_open_images_as_grid)
         file_menu.addAction(open_images_grid_action)
+        self._act_open_grid = open_images_grid_action
 
-        reload_images_action = QAction("Reload Images", self)
+        reload_images_action = QAction(tr("action_reload"), self)
         reload_images_action.setShortcut(QKeySequence("F5"))
         reload_images_action.triggered.connect(self._on_reload_images)
         file_menu.addAction(reload_images_action)
+        self._act_reload = reload_images_action
 
         file_menu.addSeparator()
 
         # File menu — export
-        export_pdf_action = QAction("Export PDF...", self)
+        export_pdf_action = QAction(tr("action_export_pdf"), self)
         export_pdf_action.triggered.connect(self._on_export_pdf)
         file_menu.addAction(export_pdf_action)
+        self._act_export_pdf = export_pdf_action
 
-        export_tiff_action = QAction("Export TIFF...", self)
+        export_tiff_action = QAction(tr("action_export_tiff"), self)
         export_tiff_action.triggered.connect(self._on_export_tiff)
         file_menu.addAction(export_tiff_action)
+        self._act_export_tiff = export_tiff_action
 
-        export_jpg_action = QAction("Export JPG...", self)
+        export_jpg_action = QAction(tr("action_export_jpg"), self)
         export_jpg_action.triggered.connect(self._on_export_jpg)
         file_menu.addAction(export_jpg_action)
+        self._act_export_jpg = export_jpg_action
 
         # Toolbar — file group (New, Open, Save only)
         self.toolbar.addAction(new_action)
@@ -173,56 +215,65 @@ class MainWindow(QMainWindow):
         self.toolbar.addSeparator()
 
         # ── Edit menu — text/image/label actions ──
-        add_text_action = QAction("Add Text", self)
+        add_text_action = QAction(tr("action_add_text"), self)
         add_text_action.triggered.connect(self._on_add_text)
         edit_menu.addAction(add_text_action)
+        self._act_add_text = add_text_action
 
-        delete_text_action = QAction("Delete Selected", self)
+        delete_text_action = QAction(tr("action_delete_sel"), self)
         delete_text_action.setShortcut(QKeySequence.StandardKey.Delete)
         delete_text_action.triggered.connect(self._on_delete_text)
         edit_menu.addAction(delete_text_action)
+        self._act_delete_sel = delete_text_action
 
-        delete_image_action = QAction("Delete Image", self)
+        delete_image_action = QAction(tr("action_delete_img"), self)
         delete_image_action.setShortcut(QKeySequence("Ctrl+Delete"))
         delete_image_action.triggered.connect(self._on_delete_image)
         edit_menu.addAction(delete_image_action)
+        self._act_delete_img = delete_image_action
 
         edit_menu.addSeparator()
 
-        auto_label_action = QAction("Auto Label", self)
+        auto_label_action = QAction(tr("action_auto_label"), self)
         auto_label_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
         auto_label_action.triggered.connect(self._on_auto_label)
         edit_menu.addAction(auto_label_action)
+        self._act_auto_label = auto_label_action
 
-        auto_layout_action = QAction("Auto Layout", self)
+        auto_layout_action = QAction(tr("action_auto_layout"), self)
         auto_layout_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
         auto_layout_action.triggered.connect(self._on_auto_layout)
         edit_menu.addAction(auto_layout_action)
+        self._act_auto_layout = auto_layout_action
 
-        # ── Layout menu ──
-        layout_menu = self.menuBar().addMenu("Layout")
+        # ── Layout menu ── (inserted before View in menubar)
+        self._layout_menu_ref = QMenu(tr("menu_layout"), self)
+        self.menuBar().insertMenu(self._view_menu.menuAction(), self._layout_menu_ref)
+        layout_menu = self._layout_menu_ref
 
-        bake_action = QAction("Convert Grid → Freeform", self)
-        bake_action.setToolTip("Bake current grid positions into per-cell freeform coordinates and switch to freeform mode")
+        bake_action = QAction(tr("action_bake"), self)
         bake_action.triggered.connect(self._on_bake_to_freeform)
         layout_menu.addAction(bake_action)
+        self._act_bake = bake_action
 
-        grid_mode_action = QAction("Switch to Grid Mode", self)
-        grid_mode_action.setToolTip("Switch back to grid layout mode (freeform positions are retained)")
+        grid_mode_action = QAction(tr("action_grid_mode"), self)
         grid_mode_action.triggered.connect(self._on_switch_to_grid)
         layout_menu.addAction(grid_mode_action)
+        self._act_grid_mode = grid_mode_action
 
         layout_menu.addSeparator()
 
-        bring_front_action = QAction("Bring to Front", self)
+        bring_front_action = QAction(tr("action_bring_front"), self)
         bring_front_action.setShortcut(QKeySequence("Ctrl+]"))
         bring_front_action.triggered.connect(self._on_bring_to_front)
         layout_menu.addAction(bring_front_action)
+        self._act_bring_front = bring_front_action
 
-        send_back_action = QAction("Send to Back", self)
+        send_back_action = QAction(tr("action_send_back"), self)
         send_back_action.setShortcut(QKeySequence("Ctrl+["))
         send_back_action.triggered.connect(self._on_send_to_back)
         layout_menu.addAction(send_back_action)
+        self._act_send_back = send_back_action
 
         # ── Toolbar — quick actions ──
         self.toolbar.addAction(auto_label_action)
@@ -232,7 +283,8 @@ class MainWindow(QMainWindow):
         # ── Toolbar — Export dropdown button ──
         from PyQt6.QtWidgets import QToolButton
         export_button = QToolButton(self)
-        export_button.setText("Export")
+        export_button.setText(tr("toolbar_export"))
+        self._export_button = export_button
         export_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         export_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         export_menu = QMenu(self)
@@ -242,10 +294,21 @@ class MainWindow(QMainWindow):
         export_button.setMenu(export_menu)
         export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.toolbar.addWidget(export_button)
+        self.toolbar.addSeparator()
 
-        # Splitter for Content | Inspector
+        # Theme toggle button in toolbar
+        self._theme_toolbar_action = QAction("☀ Light", self)
+        self._theme_toolbar_action.setToolTip("Toggle light / dark theme (Ctrl+Shift+T)")
+        self._theme_toolbar_action.triggered.connect(self._on_toggle_theme)
+        self.toolbar.addAction(self._theme_toolbar_action)
+
+        # Splitter for Layers | Content | Inspector
         splitter = QSplitter(Qt.Orientation.Horizontal)
         main_layout.addWidget(splitter)
+        
+        # Left Panel (Layers)
+        self.layers_panel = LayersPanel()
+        splitter.addWidget(self.layers_panel)
         
         # Canvas Area
         self.scene = CanvasScene()
@@ -262,10 +325,11 @@ class MainWindow(QMainWindow):
         self.inspector = Inspector()
         splitter.addWidget(self.inspector)
         
-        # Set initial sizes and stretch factors
-        splitter.setSizes([1050, 350])
-        splitter.setStretchFactor(0, 1)   # Canvas stretches
-        splitter.setStretchFactor(1, 0)   # Inspector keeps its size
+        # Set initial sizes and stretch factors (3-columns)
+        splitter.setSizes([200, 900, 300])
+        splitter.setStretchFactor(0, 0)   # Layers keeps its size
+        splitter.setStretchFactor(1, 1)   # Canvas stretches
+        splitter.setStretchFactor(2, 0)   # Inspector keeps its size
         
         # Status Bar
         self.statusbar = self.statusBar()
@@ -311,6 +375,72 @@ class MainWindow(QMainWindow):
         self.inspector.subcell_ratio_changed.connect(self._on_subcell_ratio_changed)
 
         self.undo_stack.cleanChanged.connect(self._on_undo_clean_changed)
+        
+        # Layers Panel signals
+        self.layers_panel.item_selected.connect(self._select_cell_by_id)
+
+    def _on_toggle_theme(self):
+        new_theme = LIGHT if self._current_theme == DARK else DARK
+        self._apply_theme(new_theme)
+
+    def _apply_theme(self, theme: str):
+        self._current_theme = theme
+        app = QApplication.instance()
+        app.setPalette(build_palette(theme))
+        app.setStyleSheet(get_stylesheet(theme))
+        self.layers_panel.tree.setStyleSheet(get_layers_tree_stylesheet(theme))
+        self._update_theme_labels()
+
+    def _update_theme_labels(self):
+        if self._current_theme == DARK:
+            self._theme_action.setText(tr("action_switch_light"))
+            self._theme_toolbar_action.setText(tr("action_light_theme"))
+        else:
+            self._theme_action.setText(tr("action_switch_dark"))
+            self._theme_toolbar_action.setText(tr("action_dark_theme"))
+
+    def _on_toggle_language(self):
+        new_lang = "zh" if current_language() == "en" else "en"
+        set_language(new_lang)
+        self.retranslate_ui()
+
+    def retranslate_ui(self):
+        """Update all UI text to the current language."""
+        self._file_menu.setTitle(tr("menu_file"))
+        self._edit_menu.setTitle(tr("menu_edit"))
+        self._layout_menu_ref.setTitle(tr("menu_layout"))
+        self._view_menu.setTitle(tr("menu_view"))
+        self._help_menu.setTitle(tr("menu_help"))
+
+        self._act_new.setText(tr("action_new"))
+        self._act_open.setText(tr("action_open"))
+        self._act_save.setText(tr("action_save"))
+        self._act_save_as.setText(tr("action_save_as"))
+        self._act_import.setText(tr("action_import"))
+        self._act_open_grid.setText(tr("action_open_grid"))
+        self._act_reload.setText(tr("action_reload"))
+        self._act_export_pdf.setText(tr("action_export_pdf"))
+        self._act_export_tiff.setText(tr("action_export_tiff"))
+        self._act_export_jpg.setText(tr("action_export_jpg"))
+        self._act_add_text.setText(tr("action_add_text"))
+        self._act_delete_sel.setText(tr("action_delete_sel"))
+        self._act_delete_img.setText(tr("action_delete_img"))
+        self._act_auto_label.setText(tr("action_auto_label"))
+        self._act_auto_layout.setText(tr("action_auto_layout"))
+        self._act_bake.setText(tr("action_bake"))
+        self._act_grid_mode.setText(tr("action_grid_mode"))
+        self._act_bring_front.setText(tr("action_bring_front"))
+        self._act_send_back.setText(tr("action_send_back"))
+        self._about_action.setText(tr("action_about"))
+        self._help_guide_action.setText(tr("action_user_guide"))
+        self._export_button.setText(tr("toolbar_export"))
+
+        # Language toggle shows what you'd switch TO
+        self._lang_action.setText(tr("action_switch_zh"))
+
+        self._update_theme_labels()
+        self.inspector.retranslate_ui()
+        self.layers_panel.retranslate_ui()
 
     def _on_zoom_changed(self, zoom_level):
         self.zoom_label.setText(f"Zoom: {int(zoom_level * 100)}%")
@@ -451,6 +581,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_and_update(self):
         self.scene.refresh_layout()
+        self.layers_panel.set_project(self.project)
         # Update Canvas Size Label
         rect = self.scene.sceneRect()
         self.canvas_size_label.setText(f"Canvas: {int(rect.width())}x{int(rect.height())}")
@@ -652,6 +783,7 @@ class MainWindow(QMainWindow):
         if not items:
             self.selection_info_label.setText("")
             self.inspector.set_selection(None, self.project.to_dict())
+            self.layers_panel.select_item(None)
             return
 
         # Status bar: selection info
@@ -690,6 +822,7 @@ class MainWindow(QMainWindow):
         item = items[0]
         
         if hasattr(item, 'cell_id'):
+            self.layers_panel.select_item(item.cell_id)
             # Check if it's a label cell (id starts with "label_")
             if hasattr(item, 'is_label_cell') and item.is_label_cell:
                 # Find the corresponding text item for this label cell
@@ -1576,14 +1709,12 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Export", f"Exported to {path}")
 
     def _on_show_about(self):
-        """Show About dialog with version information."""
-        QMessageBox.about(
-            self,
-            "About Academic Figure Layout",
-            f"<h2>Academic Figure Layout</h2>"
-            f"<p><b>Version:</b> {self._app_version}</p>"
-            f"<p>A tool for creating academic figure layouts with precise control.</p>"
-        )
+        dlg = AboutDialog(self)
+        dlg.exec()
+
+    def _on_show_help(self):
+        dlg = HelpDialog(self)
+        dlg.exec()
 
     def _on_open_nested_layout(self, cell_id: str, figlayout_path: str):
         """Open a nested layout in a separate editor window."""
