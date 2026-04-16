@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QSurfaceFormat
 from PyQt6.QtCore import Qt
 from src.app.main_window import MainWindow
+from src.app.theme import STYLESHEET
 
 def main():
     fmt = QSurfaceFormat()
@@ -17,6 +18,7 @@ def main():
     # AA_UseHighDpiPixmaps was removed in PyQt6 (enabled by default)
     app = QApplication(sys.argv)
     app.setApplicationName("Academic Figure Layout")
+    app.setStyleSheet(STYLESHEET)
     
     window = MainWindow()
     window.show()
