@@ -1,98 +1,92 @@
-# ImageLayoutManager
+# ImageLayoutManager — 学术图像排版工具
 
-Academic Image Layout Manager.
+[English README](README.en.md)
 
-## Overview
+## 简介
 
-ImageLayoutManager is a PyQt6 desktop tool for producing consistent, publication-ready multi-panel figures with repeatable spacing, alignment, labels, and export.
+ImageLayoutManager 是一款基于 PyQt6 的桌面应用，专为学术写作场景设计，帮助研究者快速排列多面板图，保证统一的间距、对齐、标签与导出质量，满足期刊投稿要求。
 
-## What you can do with it
+## 功能亮点
 
-- **Assemble multi-panel figures**
-  Place multiple images into a single layout with consistent margins and gaps.
-- **Keep layouts reproducible**
-  Save and re-open layout definitions so a figure can be regenerated later.
-- **Export for papers and reports**
-  Export layouts to common formats suitable for academic writing workflows.
+- **多面板图组装**
+  将多张图片放入同一布局，统一设置边距与间隔。
+- **布局可复现**
+  支持保存和重新加载布局文件，随时重新生成同一张图。
+- **面向论文的导出**
+  导出为 PDF、TIFF、JPG 等格式，适配学术写作工作流。
+- **层级分割**
+  单元格可无限纵向/横向分割，支持按比例调节子单元格大小，并可在子单元格组上方添加标签行而不破坏整体布局。
+- **所见即所得导出（WYSIWYG）**
+  PDF 与栅格导出严格对应画布中的布局与标签位置。
+- **矢量图导入（SVG）**
+  SVG 文件可置入单元格，PDF 导出时以矢量方式渲染。
+- **标签编辑**
+  每个标签均可单独编辑；可通过"应用到全部"按钮将颜色同步到同组所有标签。
 
-Additional highlights:
+## 下载
 
-- **Hierarchical cell splitting**
-  Split cells infinitely in vertical or horizontal stacks with proportional sizing. Label cells can be added above sub-cell groups without disrupting the layout.
-- **WYSIWYG export**
-  PDF and raster exports are designed to match the on-canvas layout and label placement.
-- **Vector image import (SVG)**
-  SVG can be placed into cells and will render as vector graphics in PDF export.
-- **Label editing**
-  Labels are editable per-item. Label color can be applied to a single label, or synced to all labels in the same group via an explicit “Apply to All” button.
+预编译文件附在每个 [GitHub Release](../../releases) 页面中。
 
-## Downloads
-
-Pre-built binaries are attached to each [GitHub Release](../../releases).
-
-| File | Platform | Notes |
+| 文件 | 平台 | 说明 |
 |---|---|---|
-| `ImageLayoutManager_version_Setup.exe` | Windows | **Recommended.** Installer build — extracts once on install, opens instantly every launch. |
-| `ImageLayoutManager_version.exe` | Windows | Portable single-file build — no installation needed, but takes 5-10 s to open on every launch while it self-extracts. |
-| `ImageLayoutManager_version.zip` | macOS | App bundle — unzip and move to Applications. |
+| `ImageLayoutManager_版本_Windows_Setup.exe` | Windows | **推荐。** 安装包版本 — 安装时解压一次，之后每次启动均为即时打开。 |
+| `ImageLayoutManager_版本_Windows.exe` | Windows | 免安装单文件版 — 无需安装，但每次启动需 5–10 秒自解压。 |
+| `ImageLayoutManager_版本_MacOS.zip` | macOS | App Bundle — 解压后拖入"应用程序"文件夹即可。 |
 
-## Getting started
+## 快速开始
 
-### Prerequisites
+### 环境要求
 
-- Python 3.9+ recommended
-- Qt/PyQt6 runtime via pip
+- Python 3.9 及以上
+- 通过 pip 安装 PyQt6
 
-### Install
-
-This repository may be used in two common ways:
-
-1. **Run from source** (recommended during development)
-2. **Package/installer build** (if the project provides one)
-
-Install dependencies:
+### 安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+如需使用干净的独立环境（推荐用于打包构建），可通过提供的 conda 环境文件创建：
 
-Run the app:
+```bash
+conda env create -f environment.yml
+conda activate imagelayout
+```
+
+## 使用方法
+
+启动应用：
 
 ```bash
 python main.py
 ```
 
-Typical workflow:
+典型工作流：
 
-1. **Create a new layout**
-2. **Add images** to cells
-3. **Split cells** into sub-cells via right-click menu (vertical/horizontal stacks with adjustable ratios)
-4. **Adjust spacing/alignment** and sub-cell size ratios in the inspector
-5. **Save the layout** (so it can be reproduced)
-6. **Export** to the target format
+1. **新建布局**
+2. **向单元格中添加图片**
+3. **右键菜单分割单元格**（纵向/横向，支持自定义比例）
+4. **在检查器中调整间距、对齐方式及子单元格比例**
+5. **保存布局文件**（便于后续复现）
+6. **导出**为目标格式
 
-## File types
+## 文件格式
 
-- Layout files are stored as `*.figlayout` (ignored by default in `.gitignore` in this repo).
-- Supported image imports include common raster formats (PNG/JPG/TIFF/...) and SVG.
-- Exports include:
+- 布局文件后缀为 `*.figlayout`（本仓库 `.gitignore` 中已默认忽略）。
+- 支持导入的图片格式：PNG、JPG、TIFF 等常见栅格格式，以及 SVG。
+- 支持导出格式：
   - `*.pdf`
   - `*.tif` / `*.tiff`
   - `*.jpg` / `*.jpeg`
 
-Notes:
+> **DPI 说明**：DPI 主要影响栅格导出（TIFF/JPG）的输出像素尺寸；PDF 导出以页面尺寸为准，DPI 影响内部渲染分辨率，不影响版面物理尺寸。
 
-- **DPI** mainly affects raster exports (TIFF/JPG) by controlling output pixel dimensions.
-- PDF export is page-size based; DPI affects internal rendering resolution but not the intended physical layout size.
+## 支持开发
 
-## Support
+如果这个项目对您有帮助，欢迎通过支付宝打赏支持：
 
-If you find this project useful and would like to support its development, you can buy me a coffee via Alipay:
+<img src="assets/Alipay.jpg" alt="支付宝收款码" width="200"/>
 
-<img src="assets/Alipay.jpg" alt="Alipay QR code" width="200"/>
+## 许可证
 
-## License
-
-Apache-2.0 license. See `LICENSE`.
+Apache-2.0 许可证，详见 `LICENSE`。
