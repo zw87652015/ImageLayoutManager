@@ -26,6 +26,16 @@ Additional highlights:
 - **Label editing**
   Labels are editable per-item. Label color can be applied to a single label, or synced to all labels in the same group via an explicit “Apply to All” button.
 
+## Downloads
+
+Pre-built binaries are attached to each [GitHub Release](../../releases).
+
+| File | Platform | Notes |
+|---|---|---|
+| `ImageLayoutManager_version_Setup.exe` | Windows | **Recommended.** Installer build — extracts once on install, opens instantly every launch. |
+| `ImageLayoutManager_version.exe` | Windows | Portable single-file build — no installation needed, but takes 5-10 s to open on every launch while it self-extracts. |
+| `ImageLayoutManager_version.zip` | macOS | App bundle — unzip and move to Applications. |
+
 ## Getting started
 
 ### Prerequisites
