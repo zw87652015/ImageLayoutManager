@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsView
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap
 from PyQt6.QtCore import (QObject, QEvent, QTimer, QPointF, QRectF,
+                          QElapsedTimer,
                           pyqtSignal, Qt, QVariantAnimation, QEasingCurve)
 
 
@@ -19,9 +20,9 @@ class DragManager(QObject):
     multi_swap_requested = pyqtSignal(list, list)  # source_ids, target_ids
 
     # Tuning constants
-    SPRING_FACTOR = 0.18        # 0-1, ghost catch-up speed per tick
+    SPRING_SMOOTH_TIME = 0.07   # seconds; lower = tighter follow
     GHOST_OPACITY = 0.82
-    GHOST_SCALE = 1.05          # Slight lift enlargement
+    GHOST_SCALE = 1.05          # Slight lift enlargement (target)
     GHOST_PX_WIDTH = 300        # Capture resolution
     HIGHLIGHT_FILL = QColor(0, 122, 204, 60)
     HIGHLIGHT_BORDER = QColor(0, 122, 204, 180)
@@ -30,6 +31,12 @@ class DragManager(QObject):
     TICK_MS = 16                # ~60 fps
     DROP_DURATION_MS = 180
     CANCEL_DURATION_MS = 250
+    LIFT_DURATION_MS = 140      # pickup: scale + opacity fade
+    SOURCE_DIM_OPACITY = 0.3
+    ROTATION_MAX_DEG = 5.0
+    ROTATION_VELOCITY_SCALE = 0.008   # deg per (px/s)
+    ROTATION_SMOOTH_FACTOR = 0.18     # per-tick rotation lerp
+    HIGHLIGHT_FADE_MS = 140
 
     def __init__(self, scene):
         super().__init__(scene)
@@ -49,9 +56,23 @@ class DragManager(QObject):
         self._ghost_scene_pos = QPointF()
         self._ghost_display_w = 0.0
         self._ghost_display_h = 0.0
+        self._base_scale = 1.0
+        self._ghost_scale_factor = 1.0  # multiplier animated during lift
 
         # Mouse
         self._mouse_scene_pos = QPointF()
+        self._last_mouse_scene_pos = QPointF()
+
+        # Spring physics state
+        self._velocity = QPointF(0.0, 0.0)
+        self._current_rotation = 0.0
+        self._tick_timer = QElapsedTimer()
+
+        # Transient animations (keep refs so GC doesn't kill them)
+        self._lift_anims: list = []
+        self._highlight_anims: list = []
+        self._swap_slide_anims: list = []   # target-cell slide during drop
+        self._swap_slide_pairs: list = []   # (item, final_QPointF) to snap on finish
 
         # Target highlight
         self._highlights = []       # list of QGraphicsRectItems
@@ -111,9 +132,8 @@ class DragManager(QObject):
         # Create ghost BEFORE dimming sources (so capture is at full opacity)
         self._create_ghost(cell_item, scene_pos)
 
-        # Dim all source cells
-        for item in self._source_cells:
-            item.setOpacity(0.3)
+        # Animate: fade sources, lift ghost (scale + opacity)
+        self._start_lift_animations()
 
         # Release any implicit mouse grab the cell item may hold
         cell_item.ungrabMouse()
@@ -129,6 +149,10 @@ class DragManager(QObject):
             vp.installEventFilter(self)
             self._view.setCursor(Qt.CursorShape.ClosedHandCursor)
 
+        self._tick_timer.start()
+        self._last_mouse_scene_pos = QPointF(scene_pos)
+        self._velocity = QPointF(0.0, 0.0)
+        self._current_rotation = 0.0
         self._timer.start()
 
     # ------------------------------------------------------------------
@@ -160,19 +184,27 @@ class DragManager(QObject):
 
         self._ghost = QGraphicsPixmapItem(pixmap)
         self._ghost.setZValue(1000)
-        self._ghost.setOpacity(self.GHOST_OPACITY)
+        # Start at full opacity; lift animation will fade to GHOST_OPACITY
+        self._ghost.setOpacity(1.0)
 
-        # Scale so the ghost matches cell size * GHOST_SCALE
-        base_scale = cell_w / cap_w
-        self._ghost.setScale(base_scale * self.GHOST_SCALE)
+        # Scale so the ghost matches cell size (pre-lift, scale_factor=1.0)
+        self._base_scale = cell_w / cap_w
+        self._ghost_scale_factor = 1.0
+        self._ghost.setScale(self._base_scale * self._ghost_scale_factor)
+
+        # Rotate/scale about ghost center (for tilt + lift).
+        # NOTE: origin is in LOCAL pixmap units (pre-scale). Visible center in
+        # scene coords = pos + (cap_w/2, cap_h/2) regardless of scale.
+        self._ghost_origin_offset = QPointF(cap_w / 2.0, cap_h / 2.0)
+        self._ghost.setTransformOriginPoint(self._ghost_origin_offset)
 
         self._ghost_display_w = cell_w * self.GHOST_SCALE
         self._ghost_display_h = cell_h * self.GHOST_SCALE
 
-        # Centre on mouse
+        # Centre on mouse: pos = mouse - origin_offset (in local pixmap units)
         self._ghost_scene_pos = QPointF(
-            scene_pos.x() - self._ghost_display_w / 2,
-            scene_pos.y() - self._ghost_display_h / 2,
+            scene_pos.x() - self._ghost_origin_offset.x(),
+            scene_pos.y() - self._ghost_origin_offset.y(),
         )
         self._ghost.setPos(self._ghost_scene_pos)
 
@@ -186,26 +218,118 @@ class DragManager(QObject):
         self.scene.addItem(self._ghost)
 
     # ------------------------------------------------------------------
-    # Spring physics (timer-driven)
+    # Lift (pickup) animation
+    # ------------------------------------------------------------------
+
+    def _start_lift_animations(self):
+        # Ghost scale: 1.0 -> GHOST_SCALE
+        scale_anim = QVariantAnimation(self)
+        scale_anim.setDuration(self.LIFT_DURATION_MS)
+        scale_anim.setStartValue(1.0)
+        scale_anim.setEndValue(self.GHOST_SCALE)
+        scale_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        scale_anim.valueChanged.connect(self._on_lift_scale)
+        scale_anim.finished.connect(lambda a=scale_anim: self._discard_lift_anim(a))
+        scale_anim.start()
+        self._lift_anims.append(scale_anim)
+
+        # Ghost opacity: 1.0 -> GHOST_OPACITY
+        op_anim = QVariantAnimation(self)
+        op_anim.setDuration(self.LIFT_DURATION_MS)
+        op_anim.setStartValue(1.0)
+        op_anim.setEndValue(self.GHOST_OPACITY)
+        op_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        op_anim.valueChanged.connect(
+            lambda v: self._ghost and self._ghost.setOpacity(float(v))
+        )
+        op_anim.finished.connect(lambda a=op_anim: self._discard_lift_anim(a))
+        op_anim.start()
+        self._lift_anims.append(op_anim)
+
+        # Source cells opacity: 1.0 -> SOURCE_DIM_OPACITY
+        for item in self._source_cells:
+            src_anim = QVariantAnimation(self)
+            src_anim.setDuration(self.LIFT_DURATION_MS)
+            src_anim.setStartValue(1.0)
+            src_anim.setEndValue(self.SOURCE_DIM_OPACITY)
+            src_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            src_anim.valueChanged.connect(
+                lambda v, it=item: self._safe_set_opacity(it, float(v))
+            )
+            src_anim.finished.connect(lambda a=src_anim: self._discard_lift_anim(a))
+            src_anim.start()
+            self._lift_anims.append(src_anim)
+
+    def _on_lift_scale(self, v):
+        if not self._ghost:
+            return
+        self._ghost_scale_factor = float(v)
+        self._ghost.setScale(self._base_scale * self._ghost_scale_factor)
+
+    def _discard_lift_anim(self, anim):
+        try:
+            self._lift_anims.remove(anim)
+        except ValueError:
+            pass
+        anim.deleteLater()
+
+    @staticmethod
+    def _safe_set_opacity(item, v):
+        try:
+            item.setOpacity(v)
+        except RuntimeError:
+            pass
+
+    # ------------------------------------------------------------------
+    # Spring physics (timer-driven) — critically damped + rotation tilt
     # ------------------------------------------------------------------
 
     def _spring_tick(self):
         if not self._ghost or not self._active or self._animating:
             return
 
+        # Real dt in seconds (clamped)
+        dt_ms = self._tick_timer.restart()
+        dt = dt_ms / 1000.0
+        if dt <= 0 or dt > 0.1:
+            dt = self.TICK_MS / 1000.0
+
         target = QPointF(
-            self._mouse_scene_pos.x() - self._ghost_display_w / 2,
-            self._mouse_scene_pos.y() - self._ghost_display_h / 2,
+            self._mouse_scene_pos.x() - self._ghost_origin_offset.x(),
+            self._mouse_scene_pos.y() - self._ghost_origin_offset.y(),
         )
 
-        dx = (target.x() - self._ghost_scene_pos.x()) * self.SPRING_FACTOR
-        dy = (target.y() - self._ghost_scene_pos.y()) * self.SPRING_FACTOR
+        # Critically damped spring (Game Programming Gems 4, Ch 1.10)
+        omega = 2.0 / max(self.SPRING_SMOOTH_TIME, 1e-4)
+        x = omega * dt
+        exp_factor = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
 
-        self._ghost_scene_pos = QPointF(
-            self._ghost_scene_pos.x() + dx,
-            self._ghost_scene_pos.y() + dy,
-        )
+        change_x = self._ghost_scene_pos.x() - target.x()
+        change_y = self._ghost_scene_pos.y() - target.y()
+        temp_x = (self._velocity.x() + omega * change_x) * dt
+        temp_y = (self._velocity.y() + omega * change_y) * dt
+
+        new_vx = (self._velocity.x() - omega * temp_x) * exp_factor
+        new_vy = (self._velocity.y() - omega * temp_y) * exp_factor
+        new_x = target.x() + (change_x + temp_x) * exp_factor
+        new_y = target.y() + (change_y + temp_y) * exp_factor
+
+        self._velocity = QPointF(new_vx, new_vy)
+        self._ghost_scene_pos = QPointF(new_x, new_y)
         self._ghost.setPos(self._ghost_scene_pos)
+
+        # Mouse velocity (px/s) for tilt
+        mvx = (self._mouse_scene_pos.x() - self._last_mouse_scene_pos.x()) / dt
+        self._last_mouse_scene_pos = QPointF(self._mouse_scene_pos)
+
+        # Target rotation clamped, smoothed toward target
+        target_rot = mvx * self.ROTATION_VELOCITY_SCALE
+        if target_rot > self.ROTATION_MAX_DEG:
+            target_rot = self.ROTATION_MAX_DEG
+        elif target_rot < -self.ROTATION_MAX_DEG:
+            target_rot = -self.ROTATION_MAX_DEG
+        self._current_rotation += (target_rot - self._current_rotation) * self.ROTATION_SMOOTH_FACTOR
+        self._ghost.setRotation(self._current_rotation)
 
     # ------------------------------------------------------------------
     # Target detection & highlighting
@@ -365,15 +489,15 @@ class DragManager(QObject):
         return targets, True
 
     def _update_highlights(self, targets, valid):
-        """Show highlight rectangles on target cells. Blue=valid, Red=invalid."""
+        """Show highlight rectangles on target cells with a smooth crossfade."""
         new_ids = [t.cell_id for t in targets]
         if new_ids == self._target_ids:
             return
         self._target_ids = new_ids
 
-        # Remove old highlights
+        # Fade out old highlights
         for h in self._highlights:
-            self.scene.removeItem(h)
+            self._fade_highlight(h, h.opacity(), 0.0, remove_on_finish=True)
         self._highlights.clear()
 
         fill = self.HIGHLIGHT_FILL if valid else self.REJECT_FILL
@@ -387,8 +511,36 @@ class DragManager(QObject):
             pen = QPen(border, 2)
             pen.setCosmetic(True)
             h.setPen(pen)
+            h.setOpacity(0.0)
             self.scene.addItem(h)
             self._highlights.append(h)
+            self._fade_highlight(h, 0.0, 1.0, remove_on_finish=False)
+
+    def _fade_highlight(self, item, v_from, v_to, remove_on_finish):
+        anim = QVariantAnimation(self)
+        anim.setDuration(self.HIGHLIGHT_FADE_MS)
+        anim.setStartValue(float(v_from))
+        anim.setEndValue(float(v_to))
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(
+            lambda v, it=item: self._safe_set_opacity(it, float(v))
+        )
+
+        def _finish(it=item, a=anim):
+            if remove_on_finish:
+                try:
+                    self.scene.removeItem(it)
+                except RuntimeError:
+                    pass
+            try:
+                self._highlight_anims.remove(a)
+            except ValueError:
+                pass
+            a.deleteLater()
+
+        anim.finished.connect(_finish)
+        self._highlight_anims.append(anim)
+        anim.start()
 
     # ------------------------------------------------------------------
     # Mouse event handlers (called via eventFilter)
@@ -425,11 +577,43 @@ class DragManager(QObject):
 
     def _animate_drop(self, target_cells):
         first_target_cell = target_cells[0]
+        # Target: ghost visible center lands on target cell center.
+        # With center origin, pos = target_center - origin_offset.
+        tw = first_target_cell.rect().width()
+        th = first_target_cell.rect().height()
+        tx = first_target_cell.pos().x() + tw / 2.0
+        ty = first_target_cell.pos().y() + th / 2.0
         self._anim_start = QPointF(self._ghost_scene_pos)
-        self._anim_end = QPointF(first_target_cell.pos().x(), first_target_cell.pos().y())
+        self._anim_end = QPointF(
+            tx - self._ghost_origin_offset.x(),
+            ty - self._ghost_origin_offset.y(),
+        )
 
         source_ids = list(self._source_ids)
         target_ids = [t.cell_id for t in target_cells]
+
+        # Animate each target cell sliding to the matching source cell's position
+        # (the "other half" of the swap). Source cells themselves stay dimmed in
+        # place — the ghost represents them visually until drop finishes.
+        self._swap_slide_anims = []
+        self._swap_slide_pairs = []
+        for src_cell, tgt_cell in zip(self._source_cells, target_cells):
+            start_pos = QPointF(tgt_cell.pos())
+            end_pos = QPointF(src_cell.pos())
+            self._swap_slide_pairs.append((tgt_cell, end_pos))
+
+            slide = QVariantAnimation(self)
+            slide.setDuration(self.DROP_DURATION_MS)
+            slide.setStartValue(0.0)
+            slide.setEndValue(1.0)
+            slide.setEasingCurve(QEasingCurve.Type.OutCubic)
+            slide.valueChanged.connect(
+                lambda v, it=tgt_cell, s=start_pos, e=end_pos:
+                self._safe_set_pos(it, s.x() + (e.x() - s.x()) * float(v),
+                                       s.y() + (e.y() - s.y()) * float(v))
+            )
+            slide.start()
+            self._swap_slide_anims.append(slide)
 
         self._anim = QVariantAnimation(self)
         self._anim.setStartValue(0.0)
@@ -440,9 +624,22 @@ class DragManager(QObject):
         self._anim.finished.connect(lambda: self._on_drop_finished(source_ids, target_ids))
         self._anim.start()
 
+    @staticmethod
+    def _safe_set_pos(item, x, y):
+        try:
+            item.setPos(x, y)
+        except RuntimeError:
+            pass
+
     def _animate_cancel(self):
+        # Return ghost visible center to source cell center.
+        sx = self._source_scene_rect.x() + self._source_scene_rect.width() / 2.0
+        sy = self._source_scene_rect.y() + self._source_scene_rect.height() / 2.0
         self._anim_start = QPointF(self._ghost_scene_pos)
-        self._anim_end = QPointF(self._source_scene_rect.x(), self._source_scene_rect.y())
+        self._anim_end = QPointF(
+            sx - self._ghost_origin_offset.x(),
+            sy - self._ghost_origin_offset.y(),
+        )
 
         self._anim = QVariantAnimation(self)
         self._anim.setStartValue(0.0)
@@ -460,6 +657,10 @@ class DragManager(QObject):
             self._ghost.setPos(x, y)
 
     def _on_drop_finished(self, source_ids, target_ids):
+        # Snap each target cell to its exact final slide position before the
+        # data-level swap fires, so refresh doesn't cause a visible blink.
+        for item, final_pos in self._swap_slide_pairs:
+            self._safe_set_pos(item, final_pos.x(), final_pos.y())
         self._cleanup()
         if len(source_ids) == 1 and len(target_ids) == 1:
             self.swap_requested.emit(source_ids[0], target_ids[0])
@@ -478,12 +679,34 @@ class DragManager(QObject):
             self._anim.deleteLater()
             self._anim = None
 
+        # Stop any in-flight lift animations
+        for a in list(self._lift_anims):
+            a.stop()
+            a.deleteLater()
+        self._lift_anims.clear()
+
+        # Stop any in-flight highlight animations
+        for a in list(self._highlight_anims):
+            a.stop()
+            a.deleteLater()
+        self._highlight_anims.clear()
+
+        # Stop any in-flight target-slide animations
+        for a in list(self._swap_slide_anims):
+            a.stop()
+            a.deleteLater()
+        self._swap_slide_anims.clear()
+        self._swap_slide_pairs.clear()
+
         if self._ghost:
             self.scene.removeItem(self._ghost)
             self._ghost = None
 
         for h in self._highlights:
-            self.scene.removeItem(h)
+            try:
+                self.scene.removeItem(h)
+            except RuntimeError:
+                pass
         self._highlights.clear()
 
         # Restore opacity on all source cells

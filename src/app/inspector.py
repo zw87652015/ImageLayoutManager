@@ -99,15 +99,13 @@ class Inspector(QWidget):
         self.project_layout.addRow(self._sec_grid)
         
         self.grid_mode = QComboBox()
-        self.grid_mode.addItems(["Stretch Rows to Page", "Fixed Cell Width"])
-        self.grid_mode.currentTextChanged.connect(self._on_grid_mode_changed)
+        self.grid_mode.addItems([tr("opt_grid_stretch"), tr("opt_grid_fixed")])
+        self.grid_mode.currentIndexChanged.connect(self._on_grid_mode_changed)
         self.project_layout.addRow(self._fl("lbl_grid_mode"), self.grid_mode)
-        
+
         self.row_alignment = QComboBox()
-        self.row_alignment.addItems(["left", "center", "right"])
-        self.row_alignment.currentTextChanged.connect(
-            lambda t: self.project_property_changed.emit({"row_alignment": t})
-        )
+        self.row_alignment.addItems([tr("opt_row_left"), tr("opt_row_center"), tr("opt_row_right")])
+        self.row_alignment.currentIndexChanged.connect(self._on_row_alignment_changed)
         self.project_layout.addRow(self._fl("lbl_row_align"), self.row_alignment)
         
         # Corner Label Settings
@@ -130,8 +128,8 @@ class Inspector(QWidget):
         self.project_layout.addRow(self._fl("lbl_size"), self.corner_label_size)
         
         self.corner_label_color = QComboBox()
-        self.corner_label_color.addItems(["Black", "White"])
-        self.corner_label_color.currentTextChanged.connect(self._on_corner_label_color_changed)
+        self.corner_label_color.addItems([tr("opt_color_black"), tr("opt_color_white")])
+        self.corner_label_color.currentIndexChanged.connect(self._on_corner_label_color_changed)
         self.project_layout.addRow(self._fl("lbl_color"), self.corner_label_color)
         
         # Gap between cells
@@ -265,8 +263,8 @@ class Inspector(QWidget):
         self.cell_layout.addRow(self._fl("lbl_length"), self.scale_bar_length)
         
         self.scale_bar_color = QComboBox()
-        self.scale_bar_color.addItems(["White", "Black"])
-        self.scale_bar_color.currentTextChanged.connect(self._emit_scale_bar)
+        self.scale_bar_color.addItems([tr("opt_color_white"), tr("opt_color_black")])
+        self.scale_bar_color.currentIndexChanged.connect(self._emit_scale_bar)
         self.cell_layout.addRow(self._fl("lbl_color"), self.scale_bar_color)
         
         self.scale_bar_show_text = QCheckBox("Show Text")
@@ -354,13 +352,13 @@ class Inspector(QWidget):
         self.label_cell_layout.addRow("", self.label_bold)
 
         self.label_color = QComboBox()
-        self.label_color.addItems(["Black", "White"])
-        self.label_color.currentTextChanged.connect(self._on_label_color_changed)
+        self.label_color.addItems([tr("opt_color_black"), tr("opt_color_white")])
+        self.label_color.currentIndexChanged.connect(self._on_label_color_changed)
         self.label_cell_layout.addRow(self._fl("lbl_color"), self.label_color)
 
         self.label_align = QComboBox()
-        self.label_align.addItems(["Left", "Center", "Right"])
-        self.label_align.currentTextChanged.connect(self._on_label_align_preset_changed)
+        self.label_align.addItems([tr("opt_align_left"), tr("opt_align_center"), tr("opt_align_right")])
+        self.label_align.currentIndexChanged.connect(self._on_label_align_preset_changed)
         self.label_cell_layout.addRow(self._fl("lbl_align"), self.label_align)
 
         self.label_offset_x = QDoubleSpinBox()
@@ -487,8 +485,8 @@ class Inspector(QWidget):
         # Color control for individual text item
         color_row = QHBoxLayout()
         self.text_color = QComboBox()
-        self.text_color.addItems(["Black", "White"])
-        self.text_color.currentTextChanged.connect(self._on_text_color_changed)
+        self.text_color.addItems([tr("opt_color_black"), tr("opt_color_white")])
+        self.text_color.currentIndexChanged.connect(self._on_text_color_changed)
         color_row.addWidget(self.text_color)
         
         self.apply_color_btn = QPushButton("Apply to All")
@@ -527,7 +525,7 @@ class Inspector(QWidget):
         self.text_group.hide()
         
         # --- No Selection ---
-        self.no_selection_label = QLabel("No Selection")
+        self.no_selection_label = QLabel(tr("no_selection"))
         self.no_selection_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.layout.addWidget(self.no_selection_label)
 
@@ -567,13 +565,40 @@ class Inspector(QWidget):
 
         self.scale_bar_enabled.setText(tr("chk_scale_enabled"))
         self.scale_bar_show_text.setText(tr("chk_scale_text"))
-        self.apply_color_btn.setText(tr("btn_apply_all"))
         self.label_bold.setText(tr("chk_bold"))
         self.is_bold.setText(tr("chk_bold"))
         self._subcell_fixed_size_label.setText(tr("lbl_fixed_width"))
 
         for key, lbl in self._lbl_registry:
             lbl.setText(tr(key))
+
+        self.no_selection_label.setText(tr("no_selection"))
+
+        # Retranslate combo-box items (block signals so no spurious property changes)
+        def _retranslate_combo(combo, items):
+            idx = combo.currentIndex()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(items)
+            combo.setCurrentIndex(max(0, idx))
+            combo.blockSignals(False)
+
+        _retranslate_combo(self.grid_mode,         [tr("opt_grid_stretch"), tr("opt_grid_fixed")])
+        _retranslate_combo(self.row_alignment,      [tr("opt_row_left"),     tr("opt_row_center"),    tr("opt_row_right")])
+        _retranslate_combo(self.corner_label_color, [tr("opt_color_black"),  tr("opt_color_white")])
+        _retranslate_combo(self.scale_bar_color,    [tr("opt_color_white"),  tr("opt_color_black")])
+        _retranslate_combo(self.label_color,        [tr("opt_color_black"),  tr("opt_color_white")])
+        _retranslate_combo(self.label_align,        [tr("opt_align_left"),   tr("opt_align_center"),  tr("opt_align_right")])
+        _retranslate_combo(self.text_color,         [tr("opt_color_black"),  tr("opt_color_white")])
+
+        # Refresh dynamic apply-button text if a text item is currently selected
+        if self.text_group.isVisible():
+            if self._current_text_subtype == "corner":
+                self.apply_color_btn.setText(tr("btn_apply_all_corner"))
+            else:
+                self.apply_color_btn.setText(tr("btn_apply_all_numbering"))
+        else:
+            self.apply_color_btn.setText(tr("btn_apply_all"))
 
     def _emit_project_margins(self):
         self.project_property_changed.emit({
@@ -589,11 +614,14 @@ class Inspector(QWidget):
         sb.valueChanged.connect(callback)
         return sb
 
-    def _on_grid_mode_changed(self, text):
-        mode = "stretch" if text == "Stretch Rows to Page" else "fixed"
-        # Enable/disable row alignment based on mode
+    def _on_grid_mode_changed(self, index: int):
+        mode = "stretch" if index == 0 else "fixed"
         self.row_alignment.setEnabled(mode == "fixed")
         self.project_property_changed.emit({"grid_mode": mode})
+
+    def _on_row_alignment_changed(self, index: int):
+        values = ["left", "center", "right"]
+        self.project_property_changed.emit({"row_alignment": values[index]})
 
     def _make_collapsible(self, group_box: QGroupBox):
         group_box.setCheckable(True)
@@ -648,8 +676,7 @@ class Inspector(QWidget):
     def _emit_scale_bar(self):
         """Emit all scale bar properties as a single cell property change."""
         from src.app.scale_bar_mappings import get_um_per_px
-        color_text = self.scale_bar_color.currentText()
-        color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
+        color_hex = "#FFFFFF" if self.scale_bar_color.currentIndex() == 0 else "#000000"
         # Custom text: empty string means use auto-generated text
         custom_text = self.scale_bar_custom_text.text().strip()
         mapping_name = self.scale_bar_mode.currentText()
@@ -724,16 +751,16 @@ class Inspector(QWidget):
             self.blockSignals(False)
             self.project_property_changed.emit({"page_width_mm": w, "page_height_mm": h})
 
-    def _on_label_color_changed(self, color_text: str):
-        color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
+    def _on_label_color_changed(self, index: int = None):
+        color_hex = "#000000" if self.label_color.currentIndex() == 0 else "#FFFFFF"
         self.project_property_changed.emit({"label_color": color_hex})
 
-    def _on_corner_label_color_changed(self, color_text: str):
-        color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
+    def _on_corner_label_color_changed(self, index: int = None):
+        color_hex = "#000000" if self.corner_label_color.currentIndex() == 0 else "#FFFFFF"
         self.project_property_changed.emit({"corner_label_color": color_hex})
 
-    def _on_label_align_preset_changed(self, text: str):
-        align = text.lower()
+    def _on_label_align_preset_changed(self, index: int = None):
+        align = ["left", "center", "right"][self.label_align.currentIndex()]
         # Reset offsets to 0 when a preset is selected
         self.label_offset_x.blockSignals(True)
         self.label_offset_y.blockSignals(True)
@@ -747,15 +774,14 @@ class Inspector(QWidget):
             "label_offset_y": 0.0,
         })
 
-    def _on_text_color_changed(self, color_text: str):
+    def _on_text_color_changed(self, index: int = None):
         """Handle individual text item color change."""
-        color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
+        color_hex = "#000000" if self.text_color.currentIndex() == 0 else "#FFFFFF"
         self.text_property_changed.emit({"color": color_hex})
 
     def _on_apply_color_to_group(self):
         """Apply current color to all labels in the same group (numbering or corner)."""
-        color_text = self.text_color.currentText()
-        color_hex = "#000000" if color_text == "Black" else "#FFFFFF"
+        color_hex = "#000000" if self.text_color.currentIndex() == 0 else "#FFFFFF"
         # Emit signal with subtype and color
         # subtype is None for numbering labels, "corner" for corner labels
         self.apply_color_to_group.emit(self._current_text_subtype or "numbering", color_hex)
@@ -782,7 +808,9 @@ class Inspector(QWidget):
             self.row_group.hide()
             self.subcell_group.hide()
             count = data.get('count', 0) if data else 0
-            self.multi_label.setText(f"<b>{count} cells selected</b>\nChanges apply to all selected cells.")
+            self.multi_label.setText(
+                f"<b>{tr('multi_cells_selected').format(n=count)}</b>\n{tr('multi_cells_desc')}"
+            )
             self.multi_label.show()
             # Show cell group for bulk editing
             self.cell_group.show()
@@ -822,9 +850,10 @@ class Inspector(QWidget):
                 self.label_size.setValue(data.get("label_font_size", 12))
                 self.label_bold.setChecked(data.get("label_font_weight", "bold") == "bold")
                 label_color_hex = data.get("label_color", "#000000")
-                self.label_color.setCurrentText("White" if label_color_hex == "#FFFFFF" else "Black")
+                self.label_color.setCurrentIndex(1 if label_color_hex == "#FFFFFF" else 0)
                 label_align = data.get("label_align", "center")
-                self.label_align.setCurrentText(label_align.capitalize())
+                align_map = {"left": 0, "center": 1, "right": 2}
+                self.label_align.setCurrentIndex(align_map.get(label_align, 1))
                 self.label_offset_x.setValue(data.get("label_offset_x", 0.0))
                 self.label_offset_y.setValue(data.get("label_offset_y", 0.0))
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
@@ -912,7 +941,7 @@ class Inspector(QWidget):
             self.scale_bar_mode.setCurrentIndex(idx if idx >= 0 else 0)
             self.scale_bar_length.setValue(data.get("scale_bar_length_um", 10.0))
             sb_color = data.get("scale_bar_color", "#FFFFFF")
-            self.scale_bar_color.setCurrentText("Black" if sb_color == "#000000" else "White")
+            self.scale_bar_color.setCurrentIndex(0 if sb_color == "#FFFFFF" else 1)
             self.scale_bar_show_text.setChecked(data.get("scale_bar_show_text", True))
             self.scale_bar_custom_text.setText(data.get("scale_bar_custom_text", "") or "")
             self.scale_bar_text_size.setValue(data.get("scale_bar_text_size_mm", 2.0))
@@ -939,16 +968,16 @@ class Inspector(QWidget):
             
             # Set text color
             color_hex = data.get("color", "#000000")
-            self.text_color.setCurrentText("White" if color_hex == "#FFFFFF" else "Black")
+            self.text_color.setCurrentIndex(1 if color_hex == "#FFFFFF" else 0)
             
             # Store subtype for apply-to-group functionality
             self._current_text_subtype = data.get("subtype")
             
             # Update apply button text based on subtype
             if self._current_text_subtype == "corner":
-                self.apply_color_btn.setText("Apply to All Corner")
+                self.apply_color_btn.setText(tr("btn_apply_all_corner"))
             else:
-                self.apply_color_btn.setText("Apply to All Numbering")
+                self.apply_color_btn.setText(tr("btn_apply_all_numbering"))
             
             # Show offset controls only for cell-scoped labels
             is_cell_scoped = data.get("scope") == "cell"
@@ -985,15 +1014,16 @@ class Inspector(QWidget):
                 
                 # Grid Settings
                 grid_mode = effective_project_data.get("grid_mode", "stretch")
-                self.grid_mode.setCurrentText("Fixed Cell Width" if grid_mode == "fixed" else "Stretch Rows to Page")
+                self.grid_mode.setCurrentIndex(1 if grid_mode == "fixed" else 0)
                 self.row_alignment.setEnabled(grid_mode == "fixed")
-                self.row_alignment.setCurrentText(effective_project_data.get("row_alignment", "center"))
-                
+                row_align_map = {"left": 0, "center": 1, "right": 2}
+                self.row_alignment.setCurrentIndex(row_align_map.get(effective_project_data.get("row_alignment", "center"), 1))
+
                 # Corner Labels
                 self.corner_label_font.setCurrentText(effective_project_data.get("corner_label_font_family", "Arial"))
                 self.corner_label_size.setValue(effective_project_data.get("corner_label_font_size", 12))
                 corner_label_color_hex = effective_project_data.get("corner_label_color", "#000000")
-                self.corner_label_color.setCurrentText("White" if corner_label_color_hex == "#FFFFFF" else "Black")
+                self.corner_label_color.setCurrentIndex(1 if corner_label_color_hex == "#FFFFFF" else 0)
 
                 self.gap_spin.setValue(effective_project_data.get("gap_mm", 2.0))
                 

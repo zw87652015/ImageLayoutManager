@@ -13,6 +13,8 @@ def _assets_dir() -> str:
     return os.path.join(base, "assets").replace("\\", "/")
 
 _CHECK_ON = f"{_assets_dir()}/check_on.svg"
+_ARROW_DOWN_DARK = f"{_assets_dir()}/arrow_down_dark.svg"
+_ARROW_DOWN_LIGHT = f"{_assets_dir()}/arrow_down_light.svg"
 
 DARK = "dark"
 LIGHT = "light"
@@ -55,7 +57,7 @@ _DARK_QSS = """
     QMainWindow, QWidget {
         background-color: #1E1E1E;
         color: #E0E0E0;
-        font-family: -apple-system, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        font-family: system-ui, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
         font-size: 13px;
     }
     QSplitter::handle {
@@ -106,7 +108,8 @@ _DARK_QSS = """
     }
     QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover { border: 1px solid #4A90E2; }
     QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #4A90E2; background: #1A1A1A; }
-    QComboBox::drop-down { border: none; width: 20px; }
+    QComboBox::drop-down { border: none; width: 20px; subcontrol-origin: padding; subcontrol-position: top right; }
+    QComboBox::down-arrow { image: url(__ARROW_DOWN__); width: 10px; height: 10px; }
     QComboBox QAbstractItemView {
         background-color: #121212; border: 1px solid #333333;
         selection-background-color: #4A90E2;
@@ -153,6 +156,10 @@ _DARK_QSS = """
         border: 2px solid #555555; border-radius: 3px;
         background-color: #2D2D2D;
     }
+    QGroupBox::indicator:unchecked {
+        border: 2px solid #555555; border-radius: 3px;
+        background-color: #2D2D2D;
+    }
     QGroupBox::indicator:checked {
         border: none;
         image: url(__CHECK_ON__);
@@ -165,8 +172,8 @@ _DARK_QSS = """
 _LIGHT_QSS = """
     QMainWindow, QWidget {
         background-color: #F5F5F5;
-        color: #1A1A1A;
-        font-family: -apple-system, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+        color: #333333;
+        font-family: system-ui, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
         font-size: 13px;
     }
     QSplitter::handle { background: #DDDDDD; width: 2px; }
@@ -214,7 +221,8 @@ _LIGHT_QSS = """
     }
     QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover { border: 1px solid #1A6EC7; }
     QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #1A6EC7; background: #F8F8FF; }
-    QComboBox::drop-down { border: none; width: 20px; }
+    QComboBox::drop-down { border: none; width: 20px; subcontrol-origin: padding; subcontrol-position: top right; }
+    QComboBox::down-arrow { image: url(__ARROW_DOWN__); width: 10px; height: 10px; }
     QComboBox QAbstractItemView {
         background-color: #FFFFFF; border: 1px solid #CCCCCC;
         selection-background-color: #1A6EC7; selection-color: #FFFFFF;
@@ -261,6 +269,10 @@ _LIGHT_QSS = """
         border: 2px solid #BBBBBB; border-radius: 3px;
         background-color: #FFFFFF;
     }
+    QGroupBox::indicator:unchecked {
+        border: 2px solid #BBBBBB; border-radius: 3px;
+        background-color: #FFFFFF;
+    }
     QGroupBox::indicator:checked {
         border: none;
         image: url(__CHECK_ON__);
@@ -296,8 +308,13 @@ def build_palette(theme: str) -> QPalette:
 
 
 def get_stylesheet(theme: str) -> str:
-    raw = _DARK_QSS if theme == DARK else _LIGHT_QSS
-    return raw.replace("__CHECK_ON__", _CHECK_ON)
+    if theme == DARK:
+        raw = _DARK_QSS
+        arrow = _ARROW_DOWN_DARK
+    else:
+        raw = _LIGHT_QSS
+        arrow = _ARROW_DOWN_LIGHT
+    return raw.replace("__CHECK_ON__", _CHECK_ON).replace("__ARROW_DOWN__", arrow)
 
 
 def get_layers_tree_stylesheet(theme: str) -> str:

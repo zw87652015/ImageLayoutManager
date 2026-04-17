@@ -420,13 +420,22 @@ class DeleteRowCommand(QUndoCommand):
         # Delta storage: save what we're deleting
         self.deleted_row = None
         self.deleted_cells = []
+        self.deleted_text_items = []
 
     def redo(self):
         # Save deleted items on first execution
         if self.deleted_row is None:
             self.deleted_row = next((r for r in self.project.rows if r.index == self.row_index), None)
             self.deleted_cells = [c for c in self.project.cells if c.row_index == self.row_index]
-        
+            # Collect all leaf-cell IDs in this row (including sub-cells)
+            deleted_ids = set()
+            for cell in self.deleted_cells:
+                for leaf in cell.get_all_leaves():
+                    deleted_ids.add(leaf.id)
+            self.deleted_text_items = [
+                t for t in self.project.text_items if t.parent_id in deleted_ids
+            ]
+
         # Remove the row template
         if self.deleted_row in self.project.rows:
             self.project.rows.remove(self.deleted_row)
@@ -434,6 +443,10 @@ class DeleteRowCommand(QUndoCommand):
         for cell in self.deleted_cells:
             if cell in self.project.cells:
                 self.project.cells.remove(cell)
+        # Remove orphaned text items belonging to deleted cells
+        for t in self.deleted_text_items:
+            if t in self.project.text_items:
+                self.project.text_items.remove(t)
         # Shift subsequent rows and cells up
         for r in self.project.rows:
             if r.index > self.row_index:
@@ -460,6 +473,10 @@ class DeleteRowCommand(QUndoCommand):
         for cell in self.deleted_cells:
             cell.row_index = self.row_index
             self.project.cells.append(cell)
+        # Restore orphaned text items
+        for t in self.deleted_text_items:
+            if t not in self.project.text_items:
+                self.project.text_items.append(t)
         if self.update_callback:
             self.update_callback()
 
@@ -475,6 +492,17 @@ class DeleteCellCommand(QUndoCommand):
         import copy
         self.old_rows = copy.deepcopy(project.rows)
         self.old_cells = copy.deepcopy(project.cells)
+        # Collect orphaned text items for the deleted cell (and its sub-cell leaves)
+        deleted_cell = next(
+            (c for c in project.cells if c.row_index == row_index and c.col_index == col_index), None
+        )
+        deleted_ids = set()
+        if deleted_cell:
+            for leaf in deleted_cell.get_all_leaves():
+                deleted_ids.add(leaf.id)
+        self.deleted_text_items = [
+            t for t in project.text_items if t.parent_id in deleted_ids
+        ]
 
     def redo(self):
         row = next((r for r in self.project.rows if r.index == self.row_index), None)
@@ -490,6 +518,10 @@ class DeleteCellCommand(QUndoCommand):
             if c.row_index == self.row_index and c.col_index > self.col_index:
                 c.col_index -= 1
         row.column_count -= 1
+        # Remove orphaned text items
+        for t in self.deleted_text_items:
+            if t in self.project.text_items:
+                self.project.text_items.remove(t)
         if self.update_callback:
             self.update_callback()
 
@@ -497,6 +529,10 @@ class DeleteCellCommand(QUndoCommand):
         import copy
         self.project.rows[:] = copy.deepcopy(self.old_rows)
         self.project.cells[:] = copy.deepcopy(self.old_cells)
+        # Restore orphaned text items
+        for t in self.deleted_text_items:
+            if t not in self.project.text_items:
+                self.project.text_items.append(t)
         if self.update_callback:
             self.update_callback()
 
@@ -874,11 +910,66 @@ class ChangeSubCellRatioCommand(QUndoCommand):
             self.update_callback()
 
 
+class ChangeLabelSchemeCommand(QUndoCommand):
+    """Change the label scheme and re-apply it to all existing numbering labels."""
+    def __init__(self, project, new_scheme: str, update_callback=None):
+        super().__init__("Change Label Scheme")
+        self.project = project
+        self.old_scheme = project.label_scheme
+        self.new_scheme = new_scheme
+        self.update_callback = update_callback
+
+        self.old_texts = {
+            t.id: t.text for t in project.text_items
+            if t.scope == "cell" and t.subtype != "corner"
+        }
+        self.new_texts = self._compute_texts(new_scheme)
+
+    def _compute_texts(self, scheme: str) -> dict:
+        sorted_cells = sorted(
+            self.project.get_all_leaf_cells(),
+            key=lambda c: (c.row_index, c.col_index)
+        )
+        start_char = 'A' if 'A' in scheme else 'a'
+        use_parens = '(' in scheme
+        label_by_cell = {
+            t.parent_id: t for t in self.project.text_items
+            if t.scope == "cell" and t.subtype != "corner"
+        }
+        result = {}
+        for i, cell in enumerate(sorted_cells):
+            if cell.id in label_by_cell:
+                char_code = ord(start_char) + i
+                label_text = chr(char_code)
+                if use_parens:
+                    label_text = f"({label_text})"
+                result[label_by_cell[cell.id].id] = label_text
+        return result
+
+    def redo(self):
+        self.project.label_scheme = self.new_scheme
+        for t in self.project.text_items:
+            if t.id in self.new_texts:
+                t.text = self.new_texts[t.id]
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.project.label_scheme = self.old_scheme
+        for t in self.project.text_items:
+            if t.id in self.old_texts:
+                t.text = self.old_texts[t.id]
+        if self.update_callback:
+            self.update_callback()
+
+
 class AutoLabelCommand(QUndoCommand):
     def __init__(self, project, update_callback=None):
         super().__init__("Auto Label")
         self.project = project
         self.update_callback = update_callback
+        # Always produces in-cell labels regardless of current label_placement
+        self.old_label_placement = getattr(project, 'label_placement', 'in_cell')
         # Delta storage: save only existing numbering labels (will be replaced)
         self.old_numbering_labels = [
             t for t in project.text_items 
@@ -888,19 +979,21 @@ class AutoLabelCommand(QUndoCommand):
 
     def redo(self):
         from src.utils.auto_label import AutoLabel
-        # Remove old numbering labels
-        for label in self.old_numbering_labels:
-            if label in self.project.text_items:
-                self.project.text_items.remove(label)
-        
+        # Sweep ALL numbering labels out (defensive — prevents any stale duplicates)
+        self.project.text_items[:] = [
+            t for t in self.project.text_items
+            if not (t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner')
+        ]
+
+        # Always reset to in_cell so auto-label is predictable
+        self.project.label_placement = 'in_cell'
+
         # Generate new labels (save on first execution)
         if not self.new_labels:
             AutoLabel.generate_labels(self.project)
-            # Capture the newly generated labels
             self.new_labels = [
-                t for t in self.project.text_items 
+                t for t in self.project.text_items
                 if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner'
-                and t not in self.old_numbering_labels
             ]
         else:
             # Re-add previously generated labels
@@ -914,10 +1007,56 @@ class AutoLabelCommand(QUndoCommand):
         for label in self.new_labels:
             if label in self.project.text_items:
                 self.project.text_items.remove(label)
-        # Restore old labels
+        # Restore old labels and previous placement mode
         self.project.text_items.extend(self.old_numbering_labels)
+        self.project.label_placement = self.old_label_placement
         if self.update_callback:
             self.update_callback()
+
+class AutoLabelOutCellCommand(QUndoCommand):
+    """Auto-label all cells using a dedicated label row above each picture row."""
+    def __init__(self, project, update_callback=None):
+        super().__init__("Auto Label Row")
+        self.project = project
+        self.update_callback = update_callback
+        self.old_label_placement = getattr(project, 'label_placement', 'in_cell')
+        self.old_numbering_labels = [
+            t for t in project.text_items
+            if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner'
+        ]
+        self.new_labels = []
+
+    def redo(self):
+        from src.utils.auto_label import AutoLabel
+        # Sweep ALL numbering labels out (defensive — prevents any stale duplicates)
+        self.project.text_items[:] = [
+            t for t in self.project.text_items
+            if not (t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner')
+        ]
+
+        self.project.label_placement = 'label_row_above'
+
+        if not self.new_labels:
+            AutoLabel.generate_labels(self.project)
+            self.new_labels = [
+                t for t in self.project.text_items
+                if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner'
+            ]
+        else:
+            self.project.text_items.extend(self.new_labels)
+
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for label in self.new_labels:
+            if label in self.project.text_items:
+                self.project.text_items.remove(label)
+        self.project.text_items.extend(self.old_numbering_labels)
+        self.project.label_placement = self.old_label_placement
+        if self.update_callback:
+            self.update_callback()
+
 
 class AutoLayoutCommand(QUndoCommand):
     def __init__(self, project, update_callback=None):

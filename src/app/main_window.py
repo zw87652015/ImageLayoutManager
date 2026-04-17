@@ -35,7 +35,7 @@ from src.app.commands import (
     PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, MultiSwapCellsCommand,
     DropImageCommand, ChangeRowCountCommand, InsertRowCommand, InsertCellCommand,
     DeleteRowCommand, DeleteCellCommand,
-    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLayoutCommand,
+    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, ChangeLabelSchemeCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
     FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand,
@@ -93,6 +93,8 @@ class MainWindow(QMainWindow):
         self.toolbar.setIconSize(QSize(16, 16))
         self.toolbar.setMovable(False)
         self.addToolBar(self.toolbar)
+        self.toolbar.toggleViewAction().setEnabled(False)
+        self.toolbar.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
 
         # ── Menu Bar ──
         self._file_menu   = self.menuBar().addMenu(tr("menu_file"))
@@ -106,6 +108,14 @@ class MainWindow(QMainWindow):
         help_menu   = self._help_menu
 
         # ── View menu (theme + language toggles) ──
+        self._act_toggle_layers = QAction(tr("action_toggle_layers"), self)
+        self._act_toggle_layers.setShortcut(QKeySequence("Ctrl+\\"))
+        self._act_toggle_layers.setCheckable(True)
+        self._act_toggle_layers.setChecked(True)
+        self._act_toggle_layers.triggered.connect(self._on_toggle_layers_panel)
+        self._view_menu.addAction(self._act_toggle_layers)
+        self._view_menu.addSeparator()
+
         self._theme_action = QAction(tr("action_switch_light"), self)
         self._theme_action.setShortcut("Ctrl+Shift+T")
         self._theme_action.triggered.connect(self._on_toggle_theme)
@@ -128,19 +138,28 @@ class MainWindow(QMainWindow):
         help_menu.addAction(self._help_guide_action)
 
         # ── Undo / Redo ──
-        undo_action = self.undo_stack.createUndoAction(self, "Undo")
-        undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        undo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
-        redo_action = self.undo_stack.createRedoAction(self, "Redo")
-        redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        redo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
+        self._undo_action = QAction(tr("action_undo"), self)
+        self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self._undo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
+        self._undo_action.setEnabled(False)
+        self._undo_action.triggered.connect(self.undo_stack.undo)
+        self.undo_stack.canUndoChanged.connect(self._undo_action.setEnabled)
+        self.undo_stack.undoTextChanged.connect(self._on_undo_text_changed)
 
-        edit_menu.addAction(undo_action)
-        edit_menu.addAction(redo_action)
+        self._redo_action = QAction(tr("action_redo"), self)
+        self._redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self._redo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
+        self._redo_action.setEnabled(False)
+        self._redo_action.triggered.connect(self.undo_stack.redo)
+        self.undo_stack.canRedoChanged.connect(self._redo_action.setEnabled)
+        self.undo_stack.redoTextChanged.connect(self._on_redo_text_changed)
+
+        edit_menu.addAction(self._undo_action)
+        edit_menu.addAction(self._redo_action)
         edit_menu.addSeparator()
 
-        self.toolbar.addAction(undo_action)
-        self.toolbar.addAction(redo_action)
+        self.toolbar.addAction(self._undo_action)
+        self.toolbar.addAction(self._redo_action)
         self.toolbar.addSeparator()
 
         # ── File Actions ──
@@ -234,11 +253,17 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
-        auto_label_action = QAction(tr("action_auto_label"), self)
-        auto_label_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
-        auto_label_action.triggered.connect(self._on_auto_label)
-        edit_menu.addAction(auto_label_action)
-        self._act_auto_label = auto_label_action
+        auto_label_incell_action = QAction(tr("action_auto_label_incell"), self)
+        auto_label_incell_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        auto_label_incell_action.triggered.connect(self._on_auto_label_incell)
+        edit_menu.addAction(auto_label_incell_action)
+        self._act_auto_label_incell = auto_label_incell_action
+
+        auto_label_outcell_action = QAction(tr("action_auto_label_outcell"), self)
+        auto_label_outcell_action.setShortcut(QKeySequence("Ctrl+Shift+K"))
+        auto_label_outcell_action.triggered.connect(self._on_auto_label_outcell)
+        edit_menu.addAction(auto_label_outcell_action)
+        self._act_auto_label_outcell = auto_label_outcell_action
 
         auto_layout_action = QAction(tr("action_auto_layout"), self)
         auto_layout_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
@@ -276,7 +301,8 @@ class MainWindow(QMainWindow):
         self._act_send_back = send_back_action
 
         # ── Toolbar — quick actions ──
-        self.toolbar.addAction(auto_label_action)
+        self.toolbar.addAction(auto_label_incell_action)
+        self.toolbar.addAction(auto_label_outcell_action)
         self.toolbar.addAction(auto_layout_action)
         self.toolbar.addSeparator()
 
@@ -304,6 +330,7 @@ class MainWindow(QMainWindow):
 
         # Splitter for Layers | Content | Inspector
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter = splitter
         main_layout.addWidget(splitter)
         
         # Left Panel (Layers)
@@ -377,7 +404,23 @@ class MainWindow(QMainWindow):
         self.undo_stack.cleanChanged.connect(self._on_undo_clean_changed)
         
         # Layers Panel signals
-        self.layers_panel.item_selected.connect(self._select_cell_by_id)
+        self.layers_panel.items_selected.connect(self._select_cells_by_ids)
+        self.layers_panel.context_menu_requested.connect(self._on_layers_context_menu)
+
+    def _on_toggle_layers_panel(self):
+        sizes = self.splitter.sizes()
+        if sizes[0] > 0:
+            self._layers_panel_saved_width = sizes[0]
+            sizes[1] += sizes[0]
+            sizes[0] = 0
+            self.splitter.setSizes(sizes)
+            self._act_toggle_layers.setChecked(False)
+        else:
+            w = getattr(self, '_layers_panel_saved_width', 200)
+            sizes[1] = max(0, sizes[1] - w)
+            sizes[0] = w
+            self.splitter.setSizes(sizes)
+            self._act_toggle_layers.setChecked(True)
 
     def _on_toggle_theme(self):
         new_theme = LIGHT if self._current_theme == DARK else DARK
@@ -404,8 +447,18 @@ class MainWindow(QMainWindow):
         set_language(new_lang)
         self.retranslate_ui()
 
+    def _on_undo_text_changed(self, text: str):
+        prefix = tr("action_undo")
+        self._undo_action.setText(f"{prefix} {text}" if text else prefix)
+
+    def _on_redo_text_changed(self, text: str):
+        prefix = tr("action_redo")
+        self._redo_action.setText(f"{prefix} {text}" if text else prefix)
+
     def retranslate_ui(self):
         """Update all UI text to the current language."""
+        self._on_undo_text_changed(self.undo_stack.undoText())
+        self._on_redo_text_changed(self.undo_stack.redoText())
         self._file_menu.setTitle(tr("menu_file"))
         self._edit_menu.setTitle(tr("menu_edit"))
         self._layout_menu_ref.setTitle(tr("menu_layout"))
@@ -425,7 +478,8 @@ class MainWindow(QMainWindow):
         self._act_add_text.setText(tr("action_add_text"))
         self._act_delete_sel.setText(tr("action_delete_sel"))
         self._act_delete_img.setText(tr("action_delete_img"))
-        self._act_auto_label.setText(tr("action_auto_label"))
+        self._act_auto_label_incell.setText(tr("action_auto_label_incell"))
+        self._act_auto_label_outcell.setText(tr("action_auto_label_outcell"))
         self._act_auto_layout.setText(tr("action_auto_layout"))
         self._act_bake.setText(tr("action_bake"))
         self._act_grid_mode.setText(tr("action_grid_mode"))
@@ -438,6 +492,7 @@ class MainWindow(QMainWindow):
         # Language toggle shows what you'd switch TO
         self._lang_action.setText(tr("action_switch_zh"))
 
+        self._act_toggle_layers.setText(tr("action_toggle_layers"))
         self._update_theme_labels()
         self.inspector.retranslate_ui()
         self.layers_panel.retranslate_ui()
@@ -524,13 +579,21 @@ class MainWindow(QMainWindow):
         return next((c for c in self.project.cells
                      if c.row_index == target_row and c.col_index == target_col), None)
 
-    def _select_cell_by_id(self, cell_id):
-        """Select a cell on the canvas by its ID."""
+    def _select_cells_by_ids(self, cell_ids: list):
+        """Select one or more cells on the canvas by their IDs."""
+        self.scene.blockSignals(True)
         self.scene.clearSelection()
-        item = self.scene.cell_items.get(cell_id)
-        if item:
-            item.setSelected(True)
-            self.view.centerOn(item)
+        first_item = None
+        for cell_id in cell_ids:
+            item = self.scene.cell_items.get(cell_id)
+            if item:
+                item.setSelected(True)
+                if first_item is None:
+                    first_item = item
+        self.scene.blockSignals(False)
+        self._on_selection_changed()  # sync inspector once
+        if first_item:
+            self.view.centerOn(first_item)
 
     def _on_navigate_cell(self, direction):
         cell, _ = self._get_selected_cell()
@@ -538,11 +601,11 @@ class MainWindow(QMainWindow):
             # If nothing selected, select the first cell
             if self.project.cells:
                 first = sorted(self.project.cells, key=lambda c: (c.row_index, c.col_index))[0]
-                self._select_cell_by_id(first.id)
+                self._select_cells_by_ids([first.id])
             return
         neighbor = self._find_neighbor_cell(cell, direction)
         if neighbor:
-            self._select_cell_by_id(neighbor.id)
+            self._select_cells_by_ids([neighbor.id])
 
     def _on_swap_cell_direction(self, direction):
         cell, _ = self._get_selected_cell()
@@ -553,7 +616,7 @@ class MainWindow(QMainWindow):
             cmd = SwapCellsCommand(cell, neighbor, self._refresh_and_update)
             self.undo_stack.push(cmd)
             # Keep the moved cell selected
-            self._select_cell_by_id(cell.id)
+            self._select_cells_by_ids([cell.id])
 
     def _ensure_cells_exist(self):
         # Simple logic: ensure every slot in defined rows has a cell
@@ -1081,7 +1144,12 @@ class MainWindow(QMainWindow):
         # We need to handle PageSizePreset conversion for the command to work if we pass raw dict
         # or do it inside the command. PropertyChangeCommand simply sets attributes.
         # So we should convert values before passing to command if needed.
-        
+
+        if "label_scheme" in changes:
+            cmd = ChangeLabelSchemeCommand(self.project, changes["label_scheme"], self._refresh_and_update)
+            self.undo_stack.push(cmd)
+            return
+
         processed_changes = {}
         for k, v in changes.items():
             if k == "page_size_preset":
@@ -1197,6 +1265,87 @@ class MainWindow(QMainWindow):
                 "Delete Image",
             )
             self.undo_stack.push(cmd)
+
+    def _on_layers_context_menu(self, cell_ids: list, global_pos):
+        """Right-click context menu from the layers panel tree."""
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtCore import QPoint
+
+        if not cell_ids:
+            return
+
+        if len(cell_ids) == 1:
+            self._on_cell_context_menu(cell_ids[0], False, global_pos)
+            return
+
+        menu = QMenu(self)
+
+        cells = [self.project.find_cell_by_id(cid) for cid in cell_ids]
+        cells = [c for c in cells if c]
+
+        cells_with_images = [c for c in cells if c.image_path and not c.is_placeholder]
+        if cells_with_images:
+            def _del_images():
+                from src.app.commands import MultiPropertyChangeCommand
+                for c in cells_with_images:
+                    cmd = PropertyChangeCommand(
+                        c, {"image_path": None, "is_placeholder": True},
+                        None, "Delete Image"
+                    )
+                    self.undo_stack.push(cmd)
+                self._refresh_and_update()
+            act = menu.addAction(f"Delete Images ({len(cells_with_images)} cells)")
+            act.triggered.connect(_del_images)
+            menu.addSeparator()
+
+        # Label operations
+        labeled = [
+            c for c in cells
+            if any(t for t in self.project.text_items
+                   if t.scope == "cell" and t.subtype != "corner" and t.parent_id == c.id)
+        ]
+        unlabeled = [c for c in cells if c not in labeled]
+
+        if unlabeled:
+            def _add_labels():
+                for c in unlabeled:
+                    self._ctx_add_numbering_label(c.id)
+            act = menu.addAction(f"Add Label Cell ({len(unlabeled)} cells)")
+            act.triggered.connect(_add_labels)
+
+        if labeled:
+            def _del_labels():
+                for c in labeled:
+                    self._ctx_delete_numbering_label(c.id)
+            act = menu.addAction(f"Delete Label Cell ({len(labeled)} cells)")
+            act.triggered.connect(_del_labels)
+
+        # Delete rows/columns for the selected cells
+        menu.addSeparator()
+        top_cells = []
+        seen_ids = set()
+        for c in cells:
+            top = c
+            par = self.project.find_parent_of(c.id)
+            while par:
+                top = par
+                par = self.project.find_parent_of(par.id)
+            if top.id not in seen_ids:
+                top_cells.append(top)
+                seen_ids.add(top.id)
+
+        row_indices = sorted({c.row_index for c in top_cells})
+        col_indices = sorted({(c.row_index, c.col_index) for c in top_cells})
+
+        if len(row_indices) > 0 and len(self.project.rows) > len(row_indices):
+            def _del_rows():
+                for ri in sorted(row_indices, reverse=True):
+                    self._on_delete_row(ri)
+            act = menu.addAction(f"Delete {len(row_indices)} Row(s)")
+            act.triggered.connect(_del_rows)
+
+        menu.exec(global_pos if isinstance(global_pos, QPoint) else
+                  QPoint(int(global_pos.x()), int(global_pos.y())))
 
     def _on_cell_context_menu(self, cell_id: str, is_label_cell: bool, screen_pos):
         """Build and show context menu for a cell or label cell."""
@@ -1613,8 +1762,12 @@ class MainWindow(QMainWindow):
             cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Change Cell Property")
             self.undo_stack.push(cmd)
 
-    def _on_auto_label(self):
+    def _on_auto_label_incell(self):
         cmd = AutoLabelCommand(self.project, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_auto_label_outcell(self):
+        cmd = AutoLabelOutCellCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
     def _on_auto_layout(self):

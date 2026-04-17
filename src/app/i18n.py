@@ -10,6 +10,8 @@ _T: dict[str, dict[str, str]] = {
     "menu_view":            {"en": "View",              "zh": "视图"},
     "menu_help":            {"en": "Help",              "zh": "帮助"},
 
+    "action_undo":          {"en": "Undo",              "zh": "撤销"},
+    "action_redo":          {"en": "Redo",              "zh": "重做"},
     "action_new":           {"en": "New",               "zh": "新建"},
     "action_open":          {"en": "Open",              "zh": "打开"},
     "action_save":          {"en": "Save",              "zh": "保存"},
@@ -23,7 +25,9 @@ _T: dict[str, dict[str, str]] = {
     "action_add_text":      {"en": "Add Text",          "zh": "添加文字"},
     "action_delete_sel":    {"en": "Delete Selected",   "zh": "删除所选"},
     "action_delete_img":    {"en": "Delete Image",      "zh": "删除图片"},
-    "action_auto_label":    {"en": "Auto Label",        "zh": "自动标注"},
+    "action_auto_label":          {"en": "Auto Label",                "zh": "自动标注"},
+    "action_auto_label_incell":   {"en": "Auto In-Cell Labels",       "zh": "自动内嵌标注"},
+    "action_auto_label_outcell":  {"en": "Auto Label Row",            "zh": "自动标注行"},
     "action_auto_layout":   {"en": "Auto Layout",       "zh": "自动布局"},
     "action_bake":          {"en": "Convert Grid → Freeform", "zh": "网格转自由布局"},
     "action_grid_mode":     {"en": "Switch to Grid Mode",     "zh": "切换至网格模式"},
@@ -34,6 +38,7 @@ _T: dict[str, dict[str, str]] = {
     "action_switch_light":  {"en": "Switch to Light Theme", "zh": "切换至浅色主题"},
     "action_switch_dark":   {"en": "Switch to Dark Theme",  "zh": "切换至深色主题"},
     "action_switch_zh":     {"en": "切换到中文",         "zh": "Switch to English"},
+    "action_toggle_layers": {"en": "Layers Panel",       "zh": "图层面板"},
     "action_about":         {"en": "About Academic Figure Layout", "zh": "关于学术图排版工具"},
     "action_user_guide":    {"en": "User Guide…",       "zh": "使用指南…"},
     "toolbar_export":       {"en": "Export",            "zh": "导出"},
@@ -63,6 +68,25 @@ _T: dict[str, dict[str, str]] = {
     "btn_manage":           {"en": "Manage…",           "zh": "管理…"},
     "lbl_fixed_width":      {"en": "Fixed Width:",      "zh": "固定宽度:"},
     "lbl_fixed_height":     {"en": "Fixed Height:",     "zh": "固定高度:"},
+
+    # ── Inspector combo-box options ───────────────────────────────
+    "opt_grid_stretch":     {"en": "Stretch Rows to Page",  "zh": "行填充页面"},
+    "opt_grid_fixed":       {"en": "Fixed Cell Width",      "zh": "固定单元格宽度"},
+    "opt_color_black":      {"en": "Black",                 "zh": "黑色"},
+    "opt_color_white":      {"en": "White",                 "zh": "白色"},
+    "opt_align_left":       {"en": "Left",                  "zh": "左"},
+    "opt_align_center":     {"en": "Center",                "zh": "居中"},
+    "opt_align_right":      {"en": "Right",                 "zh": "右"},
+    "opt_row_left":         {"en": "left",                  "zh": "左"},
+    "opt_row_center":       {"en": "center",                "zh": "居中"},
+    "opt_row_right":        {"en": "right",                 "zh": "右"},
+
+    # ── Inspector misc labels ──────────────────────────────────────
+    "no_selection":              {"en": "No Selection",             "zh": "未选中任何内容"},
+    "multi_cells_selected":      {"en": "{n} cells selected",       "zh": "已选中 {n} 个单元格"},
+    "multi_cells_desc":          {"en": "Changes apply to all selected cells.", "zh": "更改将应用到所有选中的单元格。"},
+    "btn_apply_all_corner":      {"en": "Apply to All Corner",      "zh": "应用到全部角标"},
+    "btn_apply_all_numbering":   {"en": "Apply to All Numbering",   "zh": "应用到全部编号"},
 
     # ── Layers panel ──────────────────────────────────────────────
     "layers_header":        {"en": "LAYERS",            "zh": "图层"},

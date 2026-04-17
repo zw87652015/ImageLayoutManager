@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QGraphicsView
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF
-from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF
+from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterPath, QPen, QBrush, QColor
 
 
 class CanvasView(QGraphicsView):
@@ -17,10 +17,14 @@ class CanvasView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         
-        # Interaction
-        self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        # Interaction — NoDrag: custom rubber band avoids QMacCGContext/OpenGL conflict
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+
+        # Custom rubber-band state (viewport coords)
+        self._rb_origin: QPoint | None = None
+        self._rb_current: QPoint | None = None
         
         # Scrollbars
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
@@ -35,6 +39,9 @@ class CanvasView(QGraphicsView):
 
         # Mouse tracking for status bar coordinates
         self.setMouseTracking(True)
+        from PyQt6.QtCore import QElapsedTimer
+        self._last_mouse_emit = QElapsedTimer()
+        self._last_mouse_emit.start()
 
     # ------------------------------------------------------------------
     # Zoom helpers
@@ -88,16 +95,57 @@ class CanvasView(QGraphicsView):
                 event.modifiers()
             )
             super().mousePressEvent(synthetic_event)
+        elif event.button() == Qt.MouseButton.LeftButton:
+            from PyQt6.QtWidgets import QGraphicsItem
+            scene_pos = self.mapToScene(event.position().toPoint())
+            selectable = [
+                i for i in (self.scene().items(scene_pos) or [])
+                if i.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            ]
+            if not selectable:
+                # Click on empty space: start custom rubber band
+                self._rb_origin = event.position().toPoint()
+                self._rb_current = self._rb_origin
+                if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+                    self.scene().clearSelection()
+                event.accept()
+            else:
+                self._rb_origin = None
+                super().mousePressEvent(event)
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        # Emit scene coordinates for status bar
-        scene_pos = self.mapToScene(event.position().toPoint())
-        self.mouse_scene_pos_changed.emit(scene_pos.x(), scene_pos.y())
-        super().mouseMoveEvent(event)
+        # Emit scene coordinates for status bar (throttled to ~30fps)
+        if self._last_mouse_emit.elapsed() > 33:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            self.mouse_scene_pos_changed.emit(scene_pos.x(), scene_pos.y())
+            self._last_mouse_emit.restart()
+
+        if self._rb_origin is not None:
+            self._rb_current = event.position().toPoint()
+            rb_start = self.mapToScene(self._rb_origin)
+            rb_end = self.mapToScene(self._rb_current)
+            rb_rect = QRectF(rb_start, rb_end).normalized()
+            path = QPainterPath()
+            path.addRect(rb_rect)
+            op = (Qt.ItemSelectionOperation.AddToSelection
+                  if event.modifiers() & Qt.KeyboardModifier.ControlModifier
+                  else Qt.ItemSelectionOperation.ReplaceSelection)
+            self.scene().setSelectionArea(
+                path, op, Qt.ItemSelectionMode.IntersectsItemShape
+            )
+            self.viewport().update()
+        else:
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.MouseButton.LeftButton and self._rb_origin is not None:
+            self._rb_origin = None
+            self._rb_current = None
+            self.viewport().update()
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.MiddleButton or (self._space_held and event.button() == Qt.MouseButton.LeftButton):
             synthetic_event = QMouseEvent(
                 event.type(),
@@ -108,11 +156,23 @@ class CanvasView(QGraphicsView):
                 event.modifiers()
             )
             super().mouseReleaseEvent(synthetic_event)
-            mode = self._pre_space_drag_mode if self._pre_space_drag_mode is not None else QGraphicsView.DragMode.RubberBandDrag
+            mode = self._pre_space_drag_mode if self._pre_space_drag_mode is not None else QGraphicsView.DragMode.NoDrag
             self.setDragMode(mode)
             self._pre_space_drag_mode = None
         else:
             super().mouseReleaseEvent(event)
+
+    def drawForeground(self, painter: QPainter, rect):
+        super().drawForeground(painter, rect)
+        if self._rb_origin is not None and self._rb_current is not None:
+            rb_start = self.mapToScene(self._rb_origin)
+            rb_end = self.mapToScene(self._rb_current)
+            rb_rect = QRectF(rb_start, rb_end).normalized()
+            painter.save()
+            painter.setPen(QPen(QColor(74, 144, 226), 0))
+            painter.setBrush(QBrush(QColor(74, 144, 226, 40)))
+            painter.drawRect(rb_rect)
+            painter.restore()
 
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()

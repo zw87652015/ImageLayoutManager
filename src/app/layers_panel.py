@@ -4,12 +4,14 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTreeWidget, QTreeWidgetItem,
     QTreeWidgetItemIterator
 )
+from PyQt6.QtCore import QPoint
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt, pyqtSignal
 
 
 class LayersPanel(QWidget):
-    item_selected = pyqtSignal(str)  # emits cell_id
+    items_selected = pyqtSignal(list)         # emits [cell_id, ...]
+    context_menu_requested = pyqtSignal(list, object)  # ([cell_ids], QPoint)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -29,7 +31,7 @@ class LayersPanel(QWidget):
         # Tree
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
-        self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setIndentation(14)
         self.tree.setStyleSheet("""
             QTreeWidget {
@@ -54,6 +56,8 @@ class LayersPanel(QWidget):
         """)
 
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._on_context_menu)
         layout.addWidget(self.tree)
 
         self._project = None
@@ -156,7 +160,21 @@ class LayersPanel(QWidget):
         if self._is_updating:
             return
         selected = self.tree.selectedItems()
-        if selected:
-            item_id = selected[0].data(0, Qt.ItemDataRole.UserRole)
-            if item_id:
-                self.item_selected.emit(item_id)
+        ids = [
+            item.data(0, Qt.ItemDataRole.UserRole)
+            for item in selected
+            if item.data(0, Qt.ItemDataRole.UserRole)
+        ]
+        if ids:
+            self.items_selected.emit(ids)
+
+    def _on_context_menu(self, pos):
+        selected = self.tree.selectedItems()
+        ids = [
+            item.data(0, Qt.ItemDataRole.UserRole)
+            for item in selected
+            if item.data(0, Qt.ItemDataRole.UserRole)
+        ]
+        if ids:
+            global_pos = self.tree.viewport().mapToGlobal(pos)
+            self.context_menu_requested.emit(ids, global_pos)
