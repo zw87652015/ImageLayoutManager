@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
-from src.app.i18n import tr
+from src.app.i18n import tr, current_language
 
 
 def _scroll_page(html: str) -> QWidget:
@@ -25,34 +25,58 @@ def _scroll_page(html: str) -> QWidget:
     return scroll
 
 
+_SHORTCUTS_EN = [
+    ("Ctrl + N",          "New project"),
+    ("Ctrl + O",          "Open project"),
+    ("Ctrl + S",          "Save project"),
+    ("Ctrl + Shift+S",    "Save As…"),
+    ("Ctrl + Z",          "Undo"),
+    ("Ctrl + Y",          "Redo"),
+    ("Ctrl + Shift+L",    "Auto Label all cells"),
+    ("Ctrl + Shift+A",    "Auto Layout"),
+    ("Ctrl + ]",          "Bring selected cell to front"),
+    ("Ctrl + [",          "Send selected cell to back"),
+    ("Ctrl + Delete",     "Delete image from selected cell"),
+    ("Delete",            "Delete selected text item"),
+    ("F5",                "Reload all images from disk"),
+    ("Scroll wheel",      "Zoom canvas in / out"),
+    ("Middle-click drag", "Pan canvas"),
+    ("Ctrl + Shift+T",    "Toggle light / dark theme"),
+    ("Arrow keys",        "Nudge selected cell (freeform mode)"),
+    ("Shift + Arrow",     "Navigate between cells"),
+]
+
+_SHORTCUTS_ZH = [
+    ("Ctrl + N",          "新建项目"),
+    ("Ctrl + O",          "打开项目"),
+    ("Ctrl + S",          "保存项目"),
+    ("Ctrl + Shift+S",    "另存为…"),
+    ("Ctrl + Z",          "撤销"),
+    ("Ctrl + Y",          "重做"),
+    ("Ctrl + Shift+L",    "自动标注所有单元格"),
+    ("Ctrl + Shift+A",    "自动布局"),
+    ("Ctrl + ]",          "将选中单元格置于顶层"),
+    ("Ctrl + [",          "将选中单元格置于底层"),
+    ("Ctrl + Delete",     "删除选中单元格的图片"),
+    ("Delete",            "删除选中的文字项"),
+    ("F5",                "从磁盘重新加载所有图片"),
+    ("滚轮",              "缩放画布"),
+    ("中键拖动",          "平移画布"),
+    ("Ctrl + Shift+T",    "切换浅色/深色主题"),
+    ("方向键",            "微移选中单元格（自由布局模式）"),
+    ("Shift + 方向键",    "在单元格间导航"),
+]
+
+
 def _shortcuts_page() -> QWidget:
-    shortcuts = [
-        ("Ctrl + N",       "New project"),
-        ("Ctrl + O",       "Open project"),
-        ("Ctrl + S",       "Save project"),
-        ("Ctrl + Shift+S", "Save As…"),
-        ("Ctrl + Z",       "Undo"),
-        ("Ctrl + Y",       "Redo"),
-        ("Ctrl + Shift+L", "Auto Label all cells"),
-        ("Ctrl + Shift+A", "Auto Layout"),
-        ("Ctrl + ]",       "Bring selected cell to front"),
-        ("Ctrl + [",       "Send selected cell to back"),
-        ("Ctrl + Delete",  "Delete image from selected cell"),
-        ("Delete",         "Delete selected text item"),
-        ("F5",             "Reload all images from disk"),
-        ("Scroll wheel",   "Zoom canvas in / out"),
-        ("Middle-click drag", "Pan canvas"),
-        ("Ctrl + Shift+T", "Toggle light / dark theme"),
-        ("Arrow keys",     "Nudge selected cell (freeform mode)"),
-        ("Shift + Arrow",  "Navigate between cells"),
-    ]
+    shortcuts = _SHORTCUTS_ZH if current_language() == "zh" else _SHORTCUTS_EN
 
     widget = QWidget()
     layout = QVBoxLayout(widget)
     layout.setContentsMargins(16, 16, 16, 16)
 
     table = QTableWidget(len(shortcuts), 2)
-    table.setHorizontalHeaderLabels(["Shortcut", "Action"])
+    table.setHorizontalHeaderLabels([tr("help_shortcut_col"), tr("help_action_col")])
     table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
     table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
     table.verticalHeader().setVisible(False)
@@ -73,7 +97,7 @@ def _shortcuts_page() -> QWidget:
     return widget
 
 
-_GETTING_STARTED_HTML = """
+_GETTING_STARTED_HTML_EN = """
 <h2 style="margin-top:0">Getting Started</h2>
 
 <h3>Creating a New Layout</h3>
@@ -84,7 +108,7 @@ _GETTING_STARTED_HTML = """
 </ol>
 
 <h3>Opening an Existing Layout</h3>
-<p>Go to <b>File → Open</b> (<code>Ctrl+O</code>) and select a <code>.figlayout</code> file. 
+<p>Go to <b>File → Open</b> (<code>Ctrl+O</code>) and select a <code>.figlayout</code> file.
 All images are re-loaded from their original paths; if a path is missing, the cell shows a placeholder.</p>
 
 <h3>Saving</h3>
@@ -102,7 +126,36 @@ All images are re-loaded from their original paths; if a path is missing, the ce
 </ul>
 """
 
-_IMAGES_HTML = """
+_GETTING_STARTED_HTML_ZH = """
+<h2 style="margin-top:0">快速入门</h2>
+
+<h3>新建布局</h3>
+<ol>
+  <li>启动应用后，将自动创建一个默认的 2×2 网格。</li>
+  <li>通过 <b>文件 → 新建</b>（<code>Ctrl+N</code>）可从空白画布开始。</li>
+  <li>使用右侧<b>检查器</b>设置画布尺寸（宽度、高度、分辨率、间距）。</li>
+</ol>
+
+<h3>打开已有布局</h3>
+<p>通过 <b>文件 → 打开</b>（<code>Ctrl+O</code>）选择 <code>.figlayout</code> 文件。
+所有图片将从原始路径重新加载；若路径缺失，单元格将显示占位符。</p>
+
+<h3>保存</h3>
+<ul>
+  <li><b>文件 → 保存</b>（<code>Ctrl+S</code>）— 覆盖当前文件。</li>
+  <li><b>文件 → 另存为…</b> — 保存为新的 <code>.figlayout</code> 文件。</li>
+</ul>
+<p>标题栏显示 <b>[*]</b> 表示有未保存的更改。</p>
+
+<h3>三栏布局</h3>
+<ul>
+  <li><b>左侧 — 图层：</b>显示行/单元格树形结构，点击任意行可选中。</li>
+  <li><b>中间 — 画布：</b>图表的实时预览。</li>
+  <li><b>右侧 — 检查器：</b>显示选中单元格、行或项目的属性。</li>
+</ul>
+"""
+
+_IMAGES_HTML_EN = """
 <h2 style="margin-top:0">Working with Images</h2>
 
 <h3>Importing Images</h3>
@@ -130,16 +183,47 @@ _IMAGES_HTML = """
 <p>Set 0 / 90 / 180 / 270° rotation in the Inspector. Rotation is applied before fit.</p>
 
 <h3>Reloading Images</h3>
-<p>Press <b>F5</b> or <b>File → Reload Images</b> to re-read all source files from disk 
+<p>Press <b>F5</b> or <b>File → Reload Images</b> to re-read all source files from disk
 (useful after external edits).</p>
 """
 
-_CELLS_HTML = """
+_IMAGES_HTML_ZH = """
+<h2 style="margin-top:0">图片操作</h2>
+
+<h3>导入图片</h3>
+<ul>
+  <li><b>拖放</b>图片文件到画布上的单元格中。</li>
+  <li><b>文件 → 导入图片…</b> — 选择一张或多张图片，从左至右、从上至下依次填充空单元格。</li>
+  <li><b>文件 → 以网格打开图片…</b> — 自动创建适合所选图片数量的网格。</li>
+</ul>
+
+<h3>替换与交换</h3>
+<ul>
+  <li>将图片拖放到已有图片的单元格上即可<b>替换</b>。</li>
+  <li>在画布上将一个单元格拖到另一个单元格上即可<b>交换</b>图片。</li>
+  <li>按住 <b>Ctrl</b> 拖动可同时交换多个选中的单元格。</li>
+</ul>
+
+<h3>填充模式（检查器 → 单元格）</h3>
+<ul>
+  <li><b>包含</b> — 图片完整显示在单元格内，保留空白边。</li>
+  <li><b>覆盖</b> — 图片填满单元格，超出部分被裁剪。</li>
+  <li><b>拉伸</b> — 图片被拉伸以完全填充单元格。</li>
+</ul>
+
+<h3>旋转</h3>
+<p>在检查器中设置 0 / 90 / 180 / 270° 旋转。旋转在填充模式之前应用。</p>
+
+<h3>重新加载图片</h3>
+<p>按 <b>F5</b> 或 <b>文件 → 重新加载图片</b>，从磁盘重新读取所有源文件（适合外部编辑后刷新）。</p>
+"""
+
+_CELLS_HTML_EN = """
 <h2 style="margin-top:0">Cells &amp; Splitting</h2>
 
 <h3>Grid Mode</h3>
-<p>By default the canvas is a simple grid of rows and columns. 
-Each row can have a different column count and height ratio 
+<p>By default the canvas is a simple grid of rows and columns.
+Each row can have a different column count and height ratio
 (set in the Inspector when a row is selected).</p>
 
 <h3>Splitting a Cell</h3>
@@ -151,7 +235,7 @@ Each row can have a different column count and height ratio
 </ol>
 
 <h3>Adjusting Split Ratios</h3>
-<p>Select a sub-cell and open the <b>Sub-Cell</b> section in the Inspector. 
+<p>Select a sub-cell and open the <b>Sub-Cell</b> section in the Inspector.
 Drag the ratio slider or type a value to resize proportionally.</p>
 <p>Alternatively, drag the <b>divider bar</b> between sub-cells directly on the canvas.</p>
 
@@ -164,17 +248,48 @@ Drag the ratio slider or type a value to resize proportionally.</p>
 </ul>
 
 <h3>Inserting Rows / Cells</h3>
-<p>Right-click a row header or cell to access <b>Insert Row Above / Below</b> 
+<p>Right-click a row header or cell to access <b>Insert Row Above / Below</b>
 and <b>Insert Column</b> options.</p>
 """
 
-_LABELS_HTML = """
+_CELLS_HTML_ZH = """
+<h2 style="margin-top:0">单元格与分割</h2>
+
+<h3>网格模式</h3>
+<p>默认情况下，画布为简单的行列网格。
+每行可以有不同的列数和高度比例（在检查器中选中行后设置）。</p>
+
+<h3>分割单元格</h3>
+<ol>
+  <li>在画布上<b>右键单击</b>一个单元格。</li>
+  <li>在插入菜单中选择<b>分割/子单元格</b>。</li>
+  <li>在父单元格内生成两个子单元格。</li>
+  <li>可继续分割子单元格，层级无限制。</li>
+</ol>
+
+<h3>调整分割比例</h3>
+<p>选中子单元格后，在检查器的<b>子单元格</b>部分中拖动比例滑块或输入数值进行调整。</p>
+<p>也可以直接在画布上拖动子单元格之间的<b>分隔条</b>。</p>
+
+<h3>自由布局模式</h3>
+<ul>
+  <li>通过 <b>布局 → 切换至自由布局模式</b> 解锁自由定位。</li>
+  <li>可任意拖动单元格，并在检查器中通过 X、Y、W、H（单位 mm）调整大小。</li>
+  <li>使用 <b>置于顶层</b> / <b>置于底层</b>（<code>Ctrl+]</code> / <code>Ctrl+[</code>）控制重叠顺序。</li>
+  <li>通过 <b>布局 → 切换至网格模式</b> 切换回网格模式（位置信息将保留）。</li>
+</ul>
+
+<h3>插入行/列</h3>
+<p>右键单击单元格，选择<b>插入</b>菜单可访问<b>在上方插入行 / 在下方插入行</b>和<b>插入列</b>选项。</p>
+"""
+
+_LABELS_HTML_EN = """
 <h2 style="margin-top:0">Labels &amp; Text</h2>
 
 <h3>Auto Label</h3>
-<p>Press <code>Ctrl+Shift+L</code> or <b>Edit → Auto Label</b> to add panel labels 
+<p>Press <code>Ctrl+Shift+L</code> or <b>Edit → Auto Label</b> to add panel labels
 (a, b, c… or A, B, C…) to all leaf cells automatically.</p>
-<p>The labelling scheme, font, size, colour, and position are all 
+<p>The labelling scheme, font, size, colour, and position are all
 set in the <b>Inspector → Project Settings → Label</b> section.</p>
 
 <h3>Editing a Label</h3>
@@ -186,19 +301,44 @@ set in the <b>Inspector → Project Settings → Label</b> section.</p>
 </ol>
 
 <h3>Adding Free Text</h3>
-<p>Go to <b>Edit → Add Text</b> to insert a free-floating text item. 
+<p>Go to <b>Edit → Add Text</b> to insert a free-floating text item.
 Drag it anywhere on the canvas. Edit its font, size, and colour in the Inspector.</p>
 
 <h3>Corner Labels</h3>
-<p>Select a cell, then use the <b>Corner Labels</b> section in the Inspector 
+<p>Select a cell, then use the <b>Corner Labels</b> section in the Inspector
 to type short annotations at each corner (top-left, top-right, bottom-left, bottom-right).</p>
 
 <h3>Scale Bar (Microscopy)</h3>
-<p>Enable the scale bar in <b>Inspector → Scale Bar</b> for microscopy images. 
+<p>Enable the scale bar in <b>Inspector → Scale Bar</b> for microscopy images.
 Set µm/px calibration, bar length, colour, and position.</p>
 """
 
-_EXPORT_HTML = """
+_LABELS_HTML_ZH = """
+<h2 style="margin-top:0">标注与文字</h2>
+
+<h3>自动标注</h3>
+<p>按 <code>Ctrl+Shift+L</code> 或 <b>编辑 → 自动标注</b>，自动为所有叶子单元格添加面板标签（a、b、c… 或 A、B、C…）。</p>
+<p>标注方案、字体、大小、颜色和位置均在<b>检查器 → 项目设置 → 标注</b>部分设置。</p>
+
+<h3>编辑标注</h3>
+<ol>
+  <li>点击画布上的标注将其选中。</li>
+  <li>检查器将显示<b>标注单元格</b>面板。</li>
+  <li>在<b>标注文字</b>字段中直接编辑文本。</li>
+  <li>使用<b>应用颜色到全部</b>同步整组的颜色。</li>
+</ol>
+
+<h3>添加浮动文字</h3>
+<p>通过 <b>编辑 → 添加浮动文字</b> 插入自由浮动的文字项，可拖放到画布任意位置，并在检查器中编辑字体、大小和颜色。</p>
+
+<h3>角标</h3>
+<p>选中单元格后，在检查器的<b>角标</b>部分可在四个角（左上、右上、左下、右下）输入简短的注释文字。</p>
+
+<h3>比例尺（显微图像）</h3>
+<p>在<b>检查器 → 比例尺</b>中为显微图像启用比例尺，可设置 µm/像素校准值、比例尺长度、颜色和位置。</p>
+"""
+
+_EXPORT_HTML_EN = """
 <h2 style="margin-top:0">Export</h2>
 
 <h3>Supported Formats</h3>
@@ -210,7 +350,7 @@ _EXPORT_HTML = """
 
 <h3>How to Export</h3>
 <ol>
-  <li>Click the <b>Export</b> toolbar button and pick a format, 
+  <li>Click the <b>Export</b> toolbar button and pick a format,
       or use the <b>File</b> menu.</li>
   <li>Choose a destination file in the dialog.</li>
   <li>The exported file matches the canvas layout exactly.</li>
@@ -219,11 +359,11 @@ _EXPORT_HTML = """
 <h3>DPI Setting</h3>
 <p>DPI (dots per inch) controls the pixel dimensions of raster exports:</p>
 <p style="margin-left:16px"><code>pixels = (size_in_mm / 25.4) × DPI</code></p>
-<p>For most journals, <b>300 DPI</b> is sufficient for TIFF/JPG. 
+<p>For most journals, <b>300 DPI</b> is sufficient for TIFF/JPG.
 PDF export resolution is separate from this setting.</p>
 
 <h3>Canvas Size</h3>
-<p>Set <b>Width</b> and <b>Height</b> (in mm) in the Inspector. 
+<p>Set <b>Width</b> and <b>Height</b> (in mm) in the Inspector.
 These define the physical dimensions of the exported figure regardless of DPI.</p>
 
 <h3>Tips for Publication</h3>
@@ -234,6 +374,44 @@ These define the physical dimensions of the exported figure regardless of DPI.</
   <li>Save a <code>.figlayout</code> file alongside your exported figure for reproducibility.</li>
 </ul>
 """
+
+_EXPORT_HTML_ZH = """
+<h2 style="margin-top:0">导出</h2>
+
+<h3>支持的格式</h3>
+<ul>
+  <li><b>PDF</b> — 基于矢量；适合期刊投稿，标注和 SVG 图片保持矢量质量。</li>
+  <li><b>TIFF</b> — 无损光栅，分辨率由检查器 → 项目 → DPI 指定。</li>
+  <li><b>JPG</b> — 压缩光栅，质量固定为 95%。</li>
+</ul>
+
+<h3>导出步骤</h3>
+<ol>
+  <li>点击工具栏的<b>导出</b>按钮并选择格式，或使用<b>文件</b>菜单。</li>
+  <li>在对话框中选择目标文件路径。</li>
+  <li>导出文件与画布布局完全一致。</li>
+</ol>
+
+<h3>DPI 设置</h3>
+<p>DPI（每英寸像素数）决定光栅导出的像素尺寸：</p>
+<p style="margin-left:16px"><code>像素数 = (尺寸_mm / 25.4) × DPI</code></p>
+<p>大多数期刊要求 TIFF/JPG 导出时 <b>300 DPI</b> 即可。PDF 导出分辨率与此设置无关。</p>
+
+<h3>画布尺寸</h3>
+<p>在检查器中设置<b>宽度</b>和<b>高度</b>（单位 mm），这些值决定导出图表的物理尺寸，与 DPI 无关。</p>
+
+<h3>出版建议</h3>
+<ul>
+  <li>间距保持 ≥ 1 mm，避免面板互相接触。</li>
+  <li>尽量使用 SVG 源图片 — PDF 导出时保持清晰。</li>
+  <li>向期刊投稿时，光栅导出 DPI 应 ≥ 300。</li>
+  <li>将 <code>.figlayout</code> 文件与导出图表一同保存，便于复现。</li>
+</ul>
+"""
+
+
+def _html(en: str, zh: str) -> str:
+    return zh if current_language() == "zh" else en
 
 
 class HelpDialog(QDialog):
@@ -251,18 +429,18 @@ class HelpDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.setDocumentMode(True)
-        tabs.addTab(_scroll_page(_GETTING_STARTED_HTML), tr("help_tab_start"))
-        tabs.addTab(_scroll_page(_IMAGES_HTML),          tr("help_tab_images"))
-        tabs.addTab(_scroll_page(_CELLS_HTML),           tr("help_tab_cells"))
-        tabs.addTab(_scroll_page(_LABELS_HTML),          tr("help_tab_labels"))
-        tabs.addTab(_scroll_page(_EXPORT_HTML),          tr("help_tab_export"))
-        tabs.addTab(_shortcuts_page(),                   tr("help_tab_shortcuts"))
+        tabs.addTab(_scroll_page(_html(_GETTING_STARTED_HTML_EN, _GETTING_STARTED_HTML_ZH)), tr("help_tab_start"))
+        tabs.addTab(_scroll_page(_html(_IMAGES_HTML_EN, _IMAGES_HTML_ZH)),                  tr("help_tab_images"))
+        tabs.addTab(_scroll_page(_html(_CELLS_HTML_EN, _CELLS_HTML_ZH)),                    tr("help_tab_cells"))
+        tabs.addTab(_scroll_page(_html(_LABELS_HTML_EN, _LABELS_HTML_ZH)),                  tr("help_tab_labels"))
+        tabs.addTab(_scroll_page(_html(_EXPORT_HTML_EN, _EXPORT_HTML_ZH)),                  tr("help_tab_export"))
+        tabs.addTab(_shortcuts_page(),                                                       tr("help_tab_shortcuts"))
         root.addWidget(tabs)
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(12, 0, 12, 0)
         btn_row.addStretch()
-        close_btn = QPushButton("Close")
+        close_btn = QPushButton(tr("help_close"))
         close_btn.setDefault(True)
         close_btn.clicked.connect(self.accept)
         btn_row.addWidget(close_btn)

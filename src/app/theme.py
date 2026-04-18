@@ -89,8 +89,8 @@ _DARK_QSS = """
 
     QGroupBox {
         font-weight: 600; font-size: 12px; color: #888888;
-        border: 1px solid #333333; border-radius: 8px;
-        margin-top: 14px; padding-top: 12px; background: #252525;
+        border: 1px solid #333333; border-radius: 6px;
+        margin-top: 10px; padding-top: 8px; background: #252525;
     }
     QGroupBox::title {
         subcontrol-origin: margin; subcontrol-position: top left;
@@ -104,7 +104,7 @@ _DARK_QSS = """
 
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
         background: #121212; border: 1px solid #333333;
-        border-radius: 4px; padding: 5px 8px; color: #E0E0E0; min-height: 22px;
+        border-radius: 4px; padding: 2px 6px; color: #E0E0E0; min-height: 20px;
     }
     QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover { border: 1px solid #4A90E2; }
     QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #4A90E2; background: #1A1A1A; }
@@ -117,7 +117,7 @@ _DARK_QSS = """
 
     QPushButton {
         background: #333333; border: 1px solid #444444;
-        border-radius: 4px; padding: 6px 12px; color: #E0E0E0; font-weight: 500;
+        border-radius: 4px; padding: 4px 10px; color: #E0E0E0; font-weight: 500;
     }
     QPushButton:hover  { background: #444444; border-color: #555555; }
     QPushButton:pressed { background: #222222; }
@@ -202,8 +202,8 @@ _LIGHT_QSS = """
 
     QGroupBox {
         font-weight: 600; font-size: 12px; color: #666666;
-        border: 1px solid #DDDDDD; border-radius: 8px;
-        margin-top: 14px; padding-top: 12px; background: #FFFFFF;
+        border: 1px solid #DDDDDD; border-radius: 6px;
+        margin-top: 10px; padding-top: 8px; background: #FFFFFF;
     }
     QGroupBox::title {
         subcontrol-origin: margin; subcontrol-position: top left;
@@ -217,7 +217,7 @@ _LIGHT_QSS = """
 
     QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
         background: #FFFFFF; border: 1px solid #CCCCCC;
-        border-radius: 4px; padding: 5px 8px; color: #1A1A1A; min-height: 22px;
+        border-radius: 4px; padding: 2px 6px; color: #1A1A1A; min-height: 20px;
     }
     QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover { border: 1px solid #1A6EC7; }
     QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border: 1px solid #1A6EC7; background: #F8F8FF; }
@@ -230,7 +230,7 @@ _LIGHT_QSS = """
 
     QPushButton {
         background: #E8E8E8; border: 1px solid #CCCCCC;
-        border-radius: 4px; padding: 6px 12px; color: #1A1A1A; font-weight: 500;
+        border-radius: 4px; padding: 4px 10px; color: #1A1A1A; font-weight: 500;
     }
     QPushButton:hover  { background: #D8D8D8; border-color: #BBBBBB; }
     QPushButton:pressed { background: #C8C8C8; }

@@ -1757,14 +1757,14 @@ class MainWindow(QMainWindow):
             def _add_labels():
                 for c in unlabeled:
                     self._ctx_add_numbering_label(c.id)
-            act = menu.addAction(f"Add Label Cell ({len(unlabeled)} cells)")
+            act = menu.addAction(tr("ctx_add_label_cell_n").format(n=len(unlabeled)))
             act.triggered.connect(_add_labels)
 
         if labeled:
             def _del_labels():
                 for c in labeled:
                     self._ctx_delete_numbering_label(c.id)
-            act = menu.addAction(f"Delete Label Cell ({len(labeled)} cells)")
+            act = menu.addAction(tr("ctx_delete_label_cell_n").format(n=len(labeled)))
             act.triggered.connect(_del_labels)
 
         # Delete rows/columns for the selected cells
@@ -1854,7 +1854,7 @@ class MainWindow(QMainWindow):
                 None
             )
             if text_obj:
-                delete_label_action = menu.addAction("Delete Label")
+                delete_label_action = menu.addAction(tr("ctx_delete_label"))
                 delete_label_action.triggered.connect(
                     lambda: self._ctx_delete_numbering_label(parent_cell_id)
                 )
@@ -1871,27 +1871,27 @@ class MainWindow(QMainWindow):
         # --- Import / Delete Image ---
         has_nested = bool(cell.nested_layout_path)
 
-        import_action = menu.addAction("Import Image...")
+        import_action = menu.addAction(tr("ctx_import_image"))
         import_action.triggered.connect(lambda: self._ctx_import_image(cell_id))
 
         if has_image:
-            delete_img_action = menu.addAction("Delete Image")
+            delete_img_action = menu.addAction(tr("action_delete_img"))
             delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
 
         menu.addSeparator()
 
         # --- Nested Layout ---
-        import_layout_action = menu.addAction("Import Layout...")
+        import_layout_action = menu.addAction(tr("ctx_import_layout"))
         import_layout_action.triggered.connect(lambda: self._ctx_import_layout(cell_id))
 
         if has_nested:
-            delete_layout_action = menu.addAction("Delete Layout")
+            delete_layout_action = menu.addAction(tr("ctx_delete_layout"))
             delete_layout_action.triggered.connect(lambda: self._ctx_delete_layout(cell_id))
 
         menu.addSeparator()
 
         # --- Label submenu ---
-        label_menu = menu.addMenu("Labels")
+        label_menu = menu.addMenu(tr("ctx_labels"))
 
         # Find the top-level ancestor for this cell
         _top_cell = cell
@@ -1907,10 +1907,10 @@ class MainWindow(QMainWindow):
             if t.scope == "cell" and t.subtype != "corner" and t.parent_id == cell_id
         )
         if has_numbering:
-            del_num_action = label_menu.addAction("Delete Label Cell")
+            del_num_action = label_menu.addAction(tr("ctx_delete_label_cell"))
             del_num_action.triggered.connect(lambda: self._ctx_delete_numbering_label(cell_id))
         else:
-            add_num_action = label_menu.addAction("Add Label Cell")
+            add_num_action = label_menu.addAction(tr("ctx_add_label_cell"))
             add_num_action.triggered.connect(lambda: self._ctx_add_numbering_label(cell_id))
 
         # For sub-cells: also offer a label above the whole container box
@@ -1921,11 +1921,11 @@ class MainWindow(QMainWindow):
                 if t.scope == "cell" and t.subtype != "corner" and t.parent_id == _top_cell_id
             )
             if has_box_label:
-                del_box_action = label_menu.addAction("Delete Label Cell Above Box")
+                del_box_action = label_menu.addAction(tr("ctx_delete_label_above_box"))
                 del_box_action.triggered.connect(
                     lambda: self._ctx_delete_numbering_label(_top_cell_id))
             else:
-                add_box_action = label_menu.addAction("Add Label Cell Above Box")
+                add_box_action = label_menu.addAction(tr("ctx_add_label_above_box"))
                 add_box_action.triggered.connect(
                     lambda: self._ctx_add_numbering_label(_top_cell_id))
 
@@ -1933,12 +1933,12 @@ class MainWindow(QMainWindow):
 
         # Corner labels
         corner_anchors = [
-            ("top_left_inside", "Top Left"),
-            ("top_right_inside", "Top Right"),
-            ("bottom_left_inside", "Bottom Left"),
-            ("bottom_right_inside", "Bottom Right"),
+            ("top_left_inside",     "ctx_corner_top_left"),
+            ("top_right_inside",    "ctx_corner_top_right"),
+            ("bottom_left_inside",  "ctx_corner_bottom_left"),
+            ("bottom_right_inside", "ctx_corner_bottom_right"),
         ]
-        for anchor, display_name in corner_anchors:
+        for anchor, name_key in corner_anchors:
             existing = next(
                 (t for t in self.project.text_items
                  if t.scope == "cell" and getattr(t, 'subtype', None) == 'corner'
@@ -1946,12 +1946,14 @@ class MainWindow(QMainWindow):
                 None
             )
             if existing:
-                action = label_menu.addAction(f"Delete {display_name} Label")
+                action = label_menu.addAction(
+                    tr("ctx_delete_corner_label").format(name=tr(name_key)))
                 action.triggered.connect(
                     lambda checked=False, a=anchor: self._ctx_delete_corner_label(cell_id, a)
                 )
             else:
-                action = label_menu.addAction(f"Add {display_name} Label")
+                action = label_menu.addAction(
+                    tr("ctx_add_corner_label").format(name=tr(name_key)))
                 action.triggered.connect(
                     lambda checked=False, a=anchor: self._ctx_add_corner_label(cell_id, a)
                 )
@@ -1961,7 +1963,7 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
 
             # Fit Mode submenu
-            fit_menu = menu.addMenu("Fit Mode")
+            fit_menu = menu.addMenu(tr("ctx_fit_mode"))
             for mode in ["contain", "cover"]:
                 action = fit_menu.addAction(mode.capitalize())
                 action.setCheckable(True)
@@ -1971,7 +1973,7 @@ class MainWindow(QMainWindow):
                 )
 
             # Rotation submenu
-            rot_menu = menu.addMenu("Rotation")
+            rot_menu = menu.addMenu(tr("ctx_rotation"))
             for deg in [0, 90, 180, 270]:
                 action = rot_menu.addAction(f"{deg}°")
                 action.setCheckable(True)
@@ -1982,14 +1984,14 @@ class MainWindow(QMainWindow):
 
             # Scale Bar toggle
             menu.addSeparator()
-            sb_action = menu.addAction("Enable Scale Bar" if not cell.scale_bar_enabled else "Disable Scale Bar")
+            sb_action = menu.addAction(tr("ctx_enable_scale_bar") if not cell.scale_bar_enabled else tr("ctx_disable_scale_bar"))
             sb_action.triggered.connect(
                 lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
             )
 
         # --- Insert Row / Cell ---
         menu.addSeparator()
-        insert_menu = menu.addMenu("Insert")
+        insert_menu = menu.addMenu(tr("ctx_insert"))
 
         # Find top-level cell info for row/column operations
         top_cell = cell
@@ -2002,18 +2004,18 @@ class MainWindow(QMainWindow):
         row_temp = next((r for r in self.project.rows if r.index == ri), None)
         col_count = row_temp.column_count if row_temp else 1
 
-        act_row_above = insert_menu.addAction("Row Above")
+        act_row_above = insert_menu.addAction(tr("ctx_row_above"))
         act_row_above.triggered.connect(lambda: self._on_insert_row(ri))
 
-        act_row_below = insert_menu.addAction("Row Below")
+        act_row_below = insert_menu.addAction(tr("ctx_row_below"))
         act_row_below.triggered.connect(lambda: self._on_insert_row(ri + 1))
 
         insert_menu.addSeparator()
 
-        act_cell_left = insert_menu.addAction("Column Left")
+        act_cell_left = insert_menu.addAction(tr("ctx_col_left"))
         act_cell_left.triggered.connect(lambda: self._on_insert_cell(ri, ci))
 
-        act_cell_right = insert_menu.addAction("Column Right")
+        act_cell_right = insert_menu.addAction(tr("ctx_col_right"))
         act_cell_right.triggered.connect(lambda: self._on_insert_cell(ri, ci + 1))
 
         # --- Sub-cell operations ---
@@ -2021,48 +2023,48 @@ class MainWindow(QMainWindow):
         #   - If parent already splits in the requested direction → insert sibling
         #   - Otherwise → wrap this cell in a new split container
         insert_menu.addSeparator()
-        sub_menu = insert_menu.addMenu("Split / Sub-Cell")
-        act_sub_above = sub_menu.addAction("Cell Above")
+        sub_menu = insert_menu.addMenu(tr("ctx_split_subcell"))
+        act_sub_above = sub_menu.addAction(tr("ctx_cell_above"))
         act_sub_above.triggered.connect(
             lambda: self._ctx_wrap_and_insert(cell_id, "vertical", "before"))
-        act_sub_below = sub_menu.addAction("Cell Below")
+        act_sub_below = sub_menu.addAction(tr("ctx_cell_below"))
         act_sub_below.triggered.connect(
             lambda: self._ctx_wrap_and_insert(cell_id, "vertical", "after"))
-        act_sub_left = sub_menu.addAction("Cell Left")
+        act_sub_left = sub_menu.addAction(tr("ctx_cell_left"))
         act_sub_left.triggered.connect(
             lambda: self._ctx_wrap_and_insert(cell_id, "horizontal", "before"))
-        act_sub_right = sub_menu.addAction("Cell Right")
+        act_sub_right = sub_menu.addAction(tr("ctx_cell_right"))
         act_sub_right.triggered.connect(
             lambda: self._ctx_wrap_and_insert(cell_id, "horizontal", "after"))
 
         if cell.is_leaf:
             sub_menu.addSeparator()
-            act_split_cols = sub_menu.addAction("Split into N Columns...")
+            act_split_cols = sub_menu.addAction(tr("ctx_split_n_cols"))
             act_split_cols.triggered.connect(
                 lambda: self._ctx_split_into_n(cell_id, "horizontal"))
-            act_split_rows = sub_menu.addAction("Split into N Rows...")
+            act_split_rows = sub_menu.addAction(tr("ctx_split_n_rows"))
             act_split_rows.triggered.connect(
                 lambda: self._ctx_split_into_n(cell_id, "vertical"))
 
         cell_parent = self.project.find_parent_of(cell_id)
 
         # --- Delete Row / Cell ---
-        delete_menu = menu.addMenu("Delete")
+        delete_menu = menu.addMenu(tr("ctx_delete"))
 
-        act_del_row = delete_menu.addAction("This Row")
+        act_del_row = delete_menu.addAction(tr("ctx_this_row"))
         if len(self.project.rows) <= 1:
             act_del_row.setEnabled(False)
-            act_del_row.setToolTip("Cannot delete the last row")
+            act_del_row.setToolTip(tr("ctx_cant_delete_last_row"))
         act_del_row.triggered.connect(lambda: self._on_delete_row(ri))
 
-        act_del_cell = delete_menu.addAction("This Column")
+        act_del_cell = delete_menu.addAction(tr("ctx_this_column"))
         if col_count <= 1:
             act_del_cell.setEnabled(False)
-            act_del_cell.setToolTip("Cannot delete the last cell in a row")
+            act_del_cell.setToolTip(tr("ctx_cant_delete_last_cell"))
         act_del_cell.triggered.connect(lambda: self._on_delete_cell(ri, ci))
 
         if cell_parent and len(cell_parent.children) > 1:
-            act_del_sub = delete_menu.addAction("This Sub-Cell")
+            act_del_sub = delete_menu.addAction(tr("ctx_this_subcell"))
             act_del_sub.triggered.connect(
                 lambda: self._ctx_delete_subcell(cell_id))
 
@@ -2227,8 +2229,8 @@ class MainWindow(QMainWindow):
     def _ctx_split_into_n(self, cell_id: str, direction: str):
         """Context menu: split a leaf cell into N equal sub-cells at once."""
         from PyQt6.QtWidgets import QInputDialog
-        label = "Number of columns:" if direction == "horizontal" else "Number of rows:"
-        count, ok = QInputDialog.getInt(self, "Split Cell", label, value=2, min=2, max=64)
+        label = tr("ctx_split_n_cols_label") if direction == "horizontal" else tr("ctx_split_n_rows_label")
+        count, ok = QInputDialog.getInt(self, tr("ctx_split_dialog_title"), label, value=2, min=2, max=64)
         if not ok:
             return
         cmd = SplitCellCommand(self.project, cell_id, direction, count=count,

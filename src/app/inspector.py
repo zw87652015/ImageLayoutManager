@@ -168,6 +168,8 @@ class Inspector(QWidget):
         container = QWidget()
         self.layout = QVBoxLayout(container)
         self.layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.layout.setSpacing(4)
+        self.layout.setContentsMargins(4, 4, 4, 4)
         scroll.setWidget(container)
 
         self.setMinimumWidth(300)
@@ -175,6 +177,8 @@ class Inspector(QWidget):
         # --- Project Settings Group (Default View) ---
         self.project_group = QGroupBox("Project Settings")
         self.project_layout = QFormLayout()
+        self.project_layout.setSpacing(3)
+        self.project_layout.setContentsMargins(8, 4, 8, 6)
         
         self.dpi_spin = QSpinBox()
         self.dpi_spin.setRange(72, 2400)
@@ -281,6 +285,8 @@ class Inspector(QWidget):
         # --- Cell Properties Group ---
         self.cell_group = QGroupBox("Selected Cell")
         self.cell_layout = QFormLayout()
+        self.cell_layout.setSpacing(3)
+        self.cell_layout.setContentsMargins(8, 4, 8, 6)
         
         self.fit_mode_combo = QComboBox()
         self.fit_mode_combo.addItems([m.value for m in FitMode])
@@ -446,6 +452,8 @@ class Inspector(QWidget):
         # --- Label Cell Properties Group ---
         self.label_cell_group = QGroupBox("Label Cell Settings")
         self.label_cell_layout = QFormLayout()
+        self.label_cell_layout.setSpacing(3)
+        self.label_cell_layout.setContentsMargins(8, 4, 8, 6)
 
         self._current_label_text_id = None  # Track which text item is being edited
         self.label_text_edit = QLineEdit()
@@ -532,6 +540,8 @@ class Inspector(QWidget):
         # --- Row Properties Group ---
         self.row_group = QGroupBox("Row Settings")
         self.row_layout = QFormLayout()
+        self.row_layout.setSpacing(3)
+        self.row_layout.setContentsMargins(8, 4, 8, 6)
         
         self.row_height = QDoubleSpinBox()
         self.row_height.setRange(0.1, 10.0)
@@ -554,6 +564,8 @@ class Inspector(QWidget):
         # --- Sub-Cell Settings Group ---
         self.subcell_group = QGroupBox("Sub-Cell Settings")
         self.subcell_layout = QFormLayout()
+        self.subcell_layout.setSpacing(3)
+        self.subcell_layout.setContentsMargins(8, 4, 8, 6)
 
         self._subcell_id = None        # Track which sub-cell is selected
         self._subcell_direction = None  # "horizontal" or "vertical"
@@ -585,6 +597,8 @@ class Inspector(QWidget):
         # --- Text Properties Group ---
         self.text_group = QGroupBox("Selected Text")
         self.text_layout = QFormLayout()
+        self.text_layout.setSpacing(3)
+        self.text_layout.setContentsMargins(8, 4, 8, 6)
         
         self.text_content = QLineEdit()
         self.text_content.editingFinished.connect(
