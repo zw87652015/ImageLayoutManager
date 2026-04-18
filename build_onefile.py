@@ -72,9 +72,16 @@ def main() -> int:
         "PyQt6.QtSql",
         "PyQt6.QtTest",
         "PyQt6.QtXml",
-        # numpy is listed in requirements.txt but never imported by this app
+        # numpy: not used by this app
         "numpy",
+        # imageio / imageio_ffmpeg: scientific packages present in conda envs;
+        # imageio_ffmpeg ships a ~60 MB ffmpeg binary — exclude both.
+        "imageio",
+        "imageio_ffmpeg",
     ]
+
+    assets_dir = project_root / "assets"
+    icon_path = assets_dir / "icon.ico"
 
     args = [
         "--noconfirm",
@@ -91,6 +98,12 @@ def main() -> int:
         # Defender from blocking Qt DLLs written to system temp folders.
         "--runtime-tmpdir=.",
     ]
+
+    if icon_path.exists():
+        args.append(f"--icon={icon_path}")
+
+    if assets_dir.exists():
+        args.append(f"--add-data={assets_dir};assets")
 
     for mod in used_qt_modules:
         args.append(f"--collect-submodules={mod}")

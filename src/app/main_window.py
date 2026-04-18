@@ -3,8 +3,8 @@ import math
 from typing import Optional
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-    QToolBar, QPushButton, QSplitter, QFileDialog,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QToolBar, QPushButton, QToolButton, QSplitter, QSplitterHandle, QFileDialog,
     QMessageBox, QSpinBox, QLabel, QComboBox,
     QLabel, QStyle, QMenu
 )
@@ -43,12 +43,102 @@ from src.app.commands import (
 )
 from src.utils.image_proxy import get_image_proxy
 
+class _CollapseHandle(QSplitterHandle):
+    """Splitter handle with a bookmark-style button to collapse/expand the side panel."""
+
+    _BTN_W, _BTN_H = 14, 48
+
+    def __init__(self, orientation, parent: QSplitter):
+        super().__init__(orientation, parent)
+        self._saved: dict[int, int] = {}
+
+        btn = QToolButton(self)
+        btn.setFixedSize(self._BTN_W, self._BTN_H)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setStyleSheet(
+            "QToolButton { border: 1px solid #AAAAAA; background: #E0E0E0;"
+            " border-radius: 3px; font-size: 9px; color: #333333; }"
+            "QToolButton:hover { background: #C8C8C8; }"
+        )
+        btn.clicked.connect(self._toggle)
+        self._btn = btn
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addStretch(1)
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        lay.addStretch(1)
+
+        # splitterMoved fires on user drag; setSizes() override handles programmatic changes.
+        parent.splitterMoved.connect(lambda *_: self._refresh_arrow())
+
+    def _handle_idx(self) -> int:
+        sp = self.splitter()
+        for i in range(1, sp.count()):
+            if sp.handle(i) is self:
+                return i
+        return 1
+
+    def _panel_idx(self) -> int:
+        hi = self._handle_idx()
+        sp = self.splitter()
+        # First handle → collapse left outer panel; last handle → collapse right outer panel.
+        return sp.count() - 1 if hi == sp.count() - 1 else hi - 1
+
+    def _toggle(self):
+        sp = self.splitter()
+        pi = self._panel_idx()
+        sizes = list(sp.sizes())
+        if sizes[pi] > 0:
+            self._saved[pi] = sizes[pi]
+            sizes[pi] = 0
+        else:
+            sizes[pi] = self._saved.get(pi, 200)
+        sp.setSizes(sizes)   # CollapsibleSplitter.setSizes refreshes all arrows
+
+    def refresh_arrow(self):
+        sp = self.splitter()
+        if sp is None:
+            return
+        pi = self._panel_idx()
+        hi = self._handle_idx()
+        collapsed = sp.sizes()[pi] == 0
+        # Arrow points toward the hidden panel so the user knows where it went.
+        if pi < hi:   # left panel
+            self._btn.setText("▶" if collapsed else "◀")
+        else:         # right panel
+            self._btn.setText("◀" if collapsed else "▶")
+
+    # Keep old name as alias so the splitterMoved lambda still works
+    _refresh_arrow = refresh_arrow
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh_arrow()
+
+
+class CollapsibleSplitter(QSplitter):
+    """QSplitter whose handles each carry a small collapse/expand bookmark button."""
+
+    def createHandle(self) -> _CollapseHandle:
+        return _CollapseHandle(self.orientation(), self)
+
+    def setSizes(self, sizes: list[int]) -> None:
+        super().setSizes(sizes)
+        # Refresh every handle arrow after any programmatic size change.
+        for i in range(1, self.count()):
+            h = self.handle(i)
+            if isinstance(h, _CollapseHandle):
+                h.refresh_arrow()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
         self._current_project_path = None
-        self._current_theme = DARK
+        self._current_theme = LIGHT
         from src.version import APP_VERSION
         self._app_version = APP_VERSION
         self.setWindowTitle(f"Academic Figure Layout v{APP_VERSION}[*]")
@@ -78,6 +168,7 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
         self._update_window_title()
+        self._update_theme_labels()
 
     def _setup_ui(self):
         # Central Widget
@@ -307,7 +398,6 @@ class MainWindow(QMainWindow):
         self.toolbar.addSeparator()
 
         # ── Toolbar — Export dropdown button ──
-        from PyQt6.QtWidgets import QToolButton
         export_button = QToolButton(self)
         export_button.setText(tr("toolbar_export"))
         self._export_button = export_button
@@ -329,7 +419,8 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(self._theme_toolbar_action)
 
         # Splitter for Layers | Content | Inspector
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter = CollapsibleSplitter(Qt.Orientation.Horizontal)
+        splitter.setHandleWidth(16)
         self.splitter = splitter
         main_layout.addWidget(splitter)
         
@@ -353,7 +444,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self.inspector)
         
         # Set initial sizes and stretch factors (3-columns)
-        splitter.setSizes([200, 900, 300])
+        splitter.setSizes([180, 720, 400])
         splitter.setStretchFactor(0, 0)   # Layers keeps its size
         splitter.setStretchFactor(1, 1)   # Canvas stretches
         splitter.setStretchFactor(2, 0)   # Inspector keeps its size
@@ -379,6 +470,7 @@ class MainWindow(QMainWindow):
         self.scene.text_item_changed.connect(self._on_text_item_drag_changed)
         self.scene.selectionChanged.connect(self._on_selection_changed)
         self.scene.cell_context_menu.connect(self._on_cell_context_menu)
+        self.scene.empty_context_menu.connect(self._on_empty_context_menu)
         self.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
         self.scene.insert_row_requested.connect(self._on_insert_row)
         self.scene.insert_cell_requested.connect(self._on_insert_cell)
@@ -1060,15 +1152,14 @@ class MainWindow(QMainWindow):
         style_changes = {k: v for k, v in changes.items() if k in style_keys}
         other_changes = {k: v for k, v in changes.items() if k not in style_keys}
 
-        # If the selected text item is a label (cell-scoped), treat style edits as GLOBAL label style edits.
+        # Cell-scoped labels: style edits propagate globally to the project's label style settings.
         if text_obj.scope == "cell" and style_changes:
             project_style_changes = {}
-            
-            # Determine prefix based on subtype
+
             prefix = "label_"
             if text_obj.subtype == "corner":
                 prefix = "corner_label_"
-            
+
             if "font_family" in style_changes:
                 project_style_changes[f"{prefix}font_family"] = style_changes["font_family"]
             if "font_size_pt" in style_changes:
@@ -1080,16 +1171,17 @@ class MainWindow(QMainWindow):
                 callback = self._refresh_and_sync_labels
                 if text_obj.subtype == "corner":
                     callback = self._refresh_and_sync_corner_labels
-                
                 cmd = PropertyChangeCommand(
-                    self.project,
-                    project_style_changes,
-                    callback,
-                    "Change Label Style"
+                    self.project, project_style_changes, callback, "Change Label Style"
                 )
                 self.undo_stack.push(cmd)
 
-        # Non-style changes remain per-item (e.g. label color, text content, x/y, etc.)
+        # Floating (global) text items: style changes apply directly to the item.
+        elif text_obj.scope == "global" and style_changes:
+            cmd = PropertyChangeCommand(text_obj, style_changes, self._refresh_and_update, "Change Text Style")
+            self.undo_stack.push(cmd)
+
+        # Non-style changes (color, position, content, etc.) always apply per-item.
         if other_changes:
             cmd = PropertyChangeCommand(text_obj, other_changes, self._refresh_and_update, "Change Text Property")
             self.undo_stack.push(cmd)
@@ -1161,7 +1253,7 @@ class MainWindow(QMainWindow):
         label_props = {"label_font_family", "label_font_size", "label_font_weight"}
         is_label_change = bool(label_props & set(changes.keys()))
 
-        corner_label_props = {"corner_label_font_family", "corner_label_font_size", "corner_label_font_weight"}
+        corner_label_props = {"corner_label_font_family", "corner_label_font_size", "corner_label_font_weight", "corner_label_color"}
         is_corner_label_change = bool(corner_label_props & set(changes.keys()))
         
         if is_label_change:
@@ -1186,13 +1278,13 @@ class MainWindow(QMainWindow):
         self._refresh_and_update()
 
     def _refresh_and_sync_corner_labels(self):
-        """Refresh and also sync all cell-scoped corner labels to project settings (excluding color)"""
+        """Refresh and also sync all cell-scoped corner labels to project settings."""
         for text_item in self.project.text_items:
             if text_item.scope == "cell" and text_item.subtype == "corner":
                 text_item.font_family = self.project.corner_label_font_family
                 text_item.font_size_pt = self.project.corner_label_font_size
                 text_item.font_weight = self.project.corner_label_font_weight
-                # Color is now per-label, not auto-synced
+                text_item.color = self.project.corner_label_color
         self._refresh_and_update()
 
     def _on_apply_color_to_group(self, subtype: str, color_hex: str):
@@ -1206,7 +1298,23 @@ class MainWindow(QMainWindow):
         self._refresh_and_update()
 
     def _on_add_text(self):
-        item = TextItem(text="New Text", x=10, y=10, scope="global")
+        """Create a floating (canvas-anchored) text item. Position is in mm,
+        absolute to canvas (0,0), so it survives page/DPI changes."""
+        # Default near top-left inside the content margins, stagger each add
+        # so consecutive items don't pile up on top of each other.
+        base_x = float(getattr(self.project, "margin_left_mm", 10.0)) + 2.0
+        base_y = float(getattr(self.project, "margin_top_mm", 10.0)) + 2.0
+        existing_floating = sum(
+            1 for t in self.project.text_items if t.scope == "global"
+        )
+        stagger = 4.0  # mm
+        item = TextItem(
+            text="Text",
+            x=base_x + existing_floating * stagger,
+            y=base_y + existing_floating * stagger,
+            scope="global",
+            rotation=0.0,
+        )
         cmd = AddTextCommand(self.project, item, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
@@ -1346,6 +1454,51 @@ class MainWindow(QMainWindow):
 
         menu.exec(global_pos if isinstance(global_pos, QPoint) else
                   QPoint(int(global_pos.x()), int(global_pos.y())))
+
+    def _on_empty_context_menu(self, scene_pos, screen_pos):
+        """Right-click on empty canvas area (page background or grey margin)."""
+        from PyQt6.QtCore import QPoint
+        menu = QMenu(self)
+
+        # ── Text ──────────────────────────────────────────────────────
+        add_action = menu.addAction(tr("ctx_add_floating_text_here"))
+        # Place text at click; clamp to page so it stays visible in exports.
+        page_w = float(getattr(self.project, "page_width_mm", 210.0))
+        page_h = float(getattr(self.project, "page_height_mm", 297.0))
+        x_mm = max(0.0, min(float(scene_pos.x()), page_w - 5.0))
+        y_mm = max(0.0, min(float(scene_pos.y()), page_h - 5.0))
+        add_action.triggered.connect(lambda: self._ctx_add_floating_text_at(x_mm, y_mm))
+
+        # ── Labels & layout ───────────────────────────────────────────
+        menu.addSeparator()
+        menu.addAction(self._act_auto_label_incell)
+        menu.addAction(self._act_auto_label_outcell)
+        menu.addAction(self._act_auto_layout)
+
+        # ── Export ────────────────────────────────────────────────────
+        menu.addSeparator()
+        menu.addAction(self._act_export_pdf)
+        menu.addAction(self._act_export_tiff)
+        menu.addAction(self._act_export_jpg)
+
+        # ── Undo / Redo ───────────────────────────────────────────────
+        menu.addSeparator()
+        menu.addAction(self._undo_action)
+        menu.addAction(self._redo_action)
+
+        menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+
+    def _ctx_add_floating_text_at(self, x_mm: float, y_mm: float):
+        """Create a floating text item at the given canvas (mm) position."""
+        item = TextItem(
+            text="Text",
+            x=x_mm,
+            y=y_mm,
+            scope="global",
+            rotation=0.0,
+        )
+        cmd = AddTextCommand(self.project, item, self._refresh_and_update)
+        self.undo_stack.push(cmd)
 
     def _on_cell_context_menu(self, cell_id: str, is_label_cell: bool, screen_pos):
         """Build and show context menu for a cell or label cell."""

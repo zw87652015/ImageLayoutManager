@@ -70,6 +70,9 @@ def main() -> int:
         # stdlib modules that PyInstaller can miss in --windowed mode
         "--hidden-import=encodings",
         "--hidden-import=codecs",
+        # imageio_ffmpeg ships a ~60 MB ffmpeg binary not used by this app
+        "--exclude-module=imageio",
+        "--exclude-module=imageio_ffmpeg",
         *add_data_args,
         str(entry),
     ]

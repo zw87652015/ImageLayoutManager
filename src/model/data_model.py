@@ -1,7 +1,7 @@
 import json
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import List, Optional, Dict, Any
 from .enums import FitMode, LabelPosition, PageSizePreset
 from src.version import APP_VERSION
@@ -20,10 +20,16 @@ class TextItem:
     subtype: Optional[str] = None # numbering, corner, or None
     parent_id: Optional[str] = None # if scope is cell
     
-    # For global text or manual positioning
+    # For global/floating text: absolute canvas position in MILLIMETRES.
+    # Scene coordinates are in mm (page_rect is in mm), so these values are
+    # DPI-independent and stable across canvas resizes.
     x: float = 0.0
     y: float = 0.0
-    
+
+    # Rotation in degrees, applied around the text's visual centre.
+    # 0 = upright, 90 = reads top-to-bottom, etc. Arbitrary values allowed.
+    rotation: float = 0.0
+
     # For anchored text (e.g. labels)
     anchor: Optional[str] = None # top_left, etc.
     offset_x: float = 0.0
@@ -42,6 +48,7 @@ class TextItem:
             "parent_id": self.parent_id,
             "x": self.x,
             "y": self.y,
+            "rotation": self.rotation,
             "anchor": self.anchor,
             "offset_x": self.offset_x,
             "offset_y": self.offset_y,
@@ -49,7 +56,10 @@ class TextItem:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'TextItem':
-        return cls(**data)
+        # Filter to known fields so older/newer saves don't crash the loader.
+        allowed = {f.name for f in fields(cls)}
+        clean = {k: v for k, v in data.items() if k in allowed}
+        return cls(**clean)
 
 @dataclass
 class Cell:

@@ -20,6 +20,7 @@ class CanvasScene(QGraphicsScene):
     text_item_changed = pyqtSignal(str, dict) # text_item_id, changes_dict
     selection_changed_custom = pyqtSignal(list) # list of selected item ids
     cell_context_menu = pyqtSignal(str, bool, object) # cell_id, is_label_cell, QPointF(screen_pos)
+    empty_context_menu = pyqtSignal(object, object)   # scene_pos (QPointF, in mm), screen_pos (QPoint)
     nested_layout_open_requested = pyqtSignal(str, str) # cell_id, figlayout_path
     insert_row_requested = pyqtSignal(int)   # insert at row_index
     insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
@@ -277,7 +278,8 @@ class CanvasScene(QGraphicsScene):
                         tx = cx + (cw - text_width) / 2
                     
                     t_item.setPos(tx, ty)
-                    
+                    t_item.setRotation(0.0)  # cell-scoped labels are never rotated
+
                     # Store cell bounds and anchor info for constrained dragging
                     t_item.cell_bounds = (cx, cy, cw, ch)
                     t_item.anchor = anchor
@@ -286,8 +288,14 @@ class CanvasScene(QGraphicsScene):
                     t_item.setPos(text_model.x, text_model.y)
                     t_item.scope = "cell"
             else:
-                # Global text: use absolute x,y
+                # Global (floating) text: absolute canvas position in mm.
+                # Rotation is applied around the text's visual centre so that
+                # setPos() still represents the unrotated top-left origin,
+                # keeping drag-save math simple.
                 t_item.setPos(text_model.x, text_model.y)
+                br = t_item.boundingRect()
+                t_item.setTransformOriginPoint(br.width() / 2, br.height() / 2)
+                t_item.setRotation(getattr(text_model, "rotation", 0.0))
                 t_item.scope = "global"
 
         # Place add-row / add-cell buttons and dividers around the layout
@@ -632,3 +640,13 @@ class CanvasScene(QGraphicsScene):
     def _on_text_item_changed(self, text_item_id: str, changes: dict):
         """Forward text item changes to MainWindow via signal"""
         self.text_item_changed.emit(text_item_id, changes)
+
+    def contextMenuEvent(self, event):
+        """Right-click on empty scene area (not on a CellItem or TextGraphicsItem).
+        Qt only calls this on the scene when no item accepts the event, so reaching
+        here means the click was on blank workspace, the page background, or margins."""
+        super().contextMenuEvent(event)
+        if event.isAccepted():
+            return  # an item handled it after all
+        self.empty_context_menu.emit(event.scenePos(), event.screenPos())
+        event.accept()

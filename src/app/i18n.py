@@ -1,6 +1,6 @@
 """Lightweight dictionary-based i18n. Supports 'en' and 'zh' (Simplified Chinese)."""
 
-_lang = "en"
+_lang = "zh"
 
 _T: dict[str, dict[str, str]] = {
     # ── Menus ────────────────────────────────────────────────────────
@@ -22,7 +22,11 @@ _T: dict[str, dict[str, str]] = {
     "action_export_pdf":    {"en": "Export PDF…",       "zh": "导出 PDF…"},
     "action_export_tiff":   {"en": "Export TIFF…",      "zh": "导出 TIFF…"},
     "action_export_jpg":    {"en": "Export JPG…",       "zh": "导出 JPG…"},
-    "action_add_text":      {"en": "Add Text",          "zh": "添加文字"},
+    "action_add_text":      {"en": "Add Floating Text", "zh": "添加浮动文字"},
+    "ctx_add_floating_text_here": {"en": "Add Floating Text Here", "zh": "在此处添加浮动文字"},
+    "opt_color_custom":      {"en": "Custom…",             "zh": "自定义…"},
+    "color_custom_tooltip":  {"en": "Custom color…",      "zh": "自定义颜色…"},
+    "color_dialog_title":    {"en": "Pick Color",          "zh": "选取颜色"},
     "action_delete_sel":    {"en": "Delete Selected",   "zh": "删除所选"},
     "action_delete_img":    {"en": "Delete Image",      "zh": "删除图片"},
     "action_auto_label":          {"en": "Auto Label",                "zh": "自动标注"},

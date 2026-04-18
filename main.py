@@ -7,7 +7,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QSurfaceFormat
 from src.app.main_window import MainWindow
-from src.app.theme import build_palette, get_stylesheet, DARK
+from src.app.theme import build_palette, get_stylesheet, LIGHT
 
 def main():
     fmt = QSurfaceFormat()
@@ -18,9 +18,9 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Academic Figure Layout")
 
-    # Apply initial theme (dark)
-    app.setPalette(build_palette(DARK))
-    app.setStyleSheet(get_stylesheet(DARK))
+    # Apply initial theme (light)
+    app.setPalette(build_palette(LIGHT))
+    app.setStyleSheet(get_stylesheet(LIGHT))
     
     window = MainWindow()
     window.show()
