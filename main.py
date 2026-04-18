@@ -23,8 +23,16 @@ def main():
     app.setStyleSheet(get_stylesheet(LIGHT))
     
     window = MainWindow()
+
+    # Open a .figlayout file passed as a command-line argument.
+    # Windows Explorer calls: ImageLayoutManager.exe "C:\path\to\file.figlayout"
+    if len(sys.argv) > 1:
+        cli_path = sys.argv[1]
+        if os.path.isfile(cli_path):
+            window.open_file_from_cli(cli_path)
+
     window.show()
-    
+
     sys.exit(app.exec())
 
 if __name__ == "__main__":

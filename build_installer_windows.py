@@ -231,6 +231,7 @@ def main() -> int:
         AppName=ImageLayoutManager
         AppVersion={app_version}
         AppPublisher=Meow
+        AppId={{{{8F3A1C2D-4E5B-6F7A-8B9C-0D1E2F3A4B5C}}}}
         DefaultDirName={{autopf}}\\ImageLayoutManager
         DefaultGroupName=ImageLayoutManager
         OutputDir={project_root / "dist"}
@@ -240,13 +241,26 @@ def main() -> int:
         PrivilegesRequired=admin
         ArchitecturesAllowed=x64compatible
         ArchitecturesInstallIn64BitMode=x64compatible
+        ChangesAssociations=yes
+        ShowLanguageDialog=yes
         {icon_lines}
 
         [Languages]
-        Name: "english"; MessagesFile: "compiler:Default.isl"
+        Name: "english";    MessagesFile: "compiler:Default.isl"
+        Name: "french";     MessagesFile: "compiler:Languages\\French.isl"
+        Name: "german";     MessagesFile: "compiler:Languages\\German.isl"
+        Name: "spanish";    MessagesFile: "compiler:Languages\\Spanish.isl"
+        Name: "italian";    MessagesFile: "compiler:Languages\\Italian.isl"
+        Name: "japanese";   MessagesFile: "compiler:Languages\\Japanese.isl"
+        Name: "korean";     MessagesFile: "compiler:Languages\\Korean.isl"
+        Name: "chinesesimplified";  MessagesFile: "compiler:Languages\\ChineseSimplified.isl"
+        Name: "chinesetraditional"; MessagesFile: "compiler:Languages\\ChineseTraditional.isl"
+        Name: "portuguese"; MessagesFile: "compiler:Languages\\BrazilianPortuguese.isl"
+        Name: "russian";    MessagesFile: "compiler:Languages\\Russian.isl"
 
         [Tasks]
         Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"
+        Name: "assoc"; Description: "Associate .figlayout files with ImageLayoutManager"; GroupDescription: "File associations:"; Flags: checkedonce
 
         [Files]
         Source: "{dist_dir}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -256,8 +270,38 @@ def main() -> int:
         Name: "{{group}}\\Uninstall ImageLayoutManager"; Filename: "{{uninstallexe}}"
         Name: "{{userdesktop}}\\ImageLayoutManager"; Filename: "{{app}}\\ImageLayoutManager.exe"; Tasks: desktopicon
 
+        [Registry]
+        ; .figlayout extension → ProgID
+        Root: HKCR; Subkey: ".figlayout";                                      ValueType: string; ValueName: "";              ValueData: "FigLayout.Document"; Flags: uninsdeletevalue; Tasks: assoc
+        Root: HKCR; Subkey: ".figlayout";                                      ValueType: string; ValueName: "Content Type";  ValueData: "application/x-figlayout"; Tasks: assoc
+
+        ; ProgID definition
+        Root: HKCR; Subkey: "FigLayout.Document";                              ValueType: string; ValueName: "";              ValueData: "Academic Figure Layout File"; Flags: uninsdeletekey; Tasks: assoc
+        Root: HKCR; Subkey: "FigLayout.Document\\DefaultIcon";                 ValueType: string; ValueName: "";              ValueData: "{{app}}\\ImageLayoutManager.exe,0"; Tasks: assoc
+        Root: HKCR; Subkey: "FigLayout.Document\\shell\\open";                 ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Academic Figure Layout"; Tasks: assoc
+        Root: HKCR; Subkey: "FigLayout.Document\\shell\\open\\command";        ValueType: string; ValueName: "";              ValueData: \"\"\"{{app}}\\ImageLayoutManager.exe\"\" \"\"%1\"\"\"; Tasks: assoc
+
+        ; App Capabilities (powers the "Open with" dialog and Default Programs)
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager";                    ValueType: string; ValueName: "";              ValueData: "Academic Figure Layout"; Flags: uninsdeletekey
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities";      ValueType: string; ValueName: "ApplicationName"; ValueData: "Academic Figure Layout"
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities";      ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Multi-panel academic figure editor"
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities\\FileAssociations"; ValueType: string; ValueName: ".figlayout"; ValueData: "FigLayout.Document"
+        Root: HKLM; Subkey: "SOFTWARE\\RegisteredApplications";                ValueType: string; ValueName: "ImageLayoutManager"; ValueData: "SOFTWARE\\ImageLayoutManager\\Capabilities"; Flags: uninsdeletevalue
+
         [Run]
         Filename: "{{app}}\\ImageLayoutManager.exe"; Description: "{{cm:LaunchProgram,ImageLayoutManager}}"; Flags: nowait postinstall skipifsilent
+
+        [Code]
+        // Notify Windows Shell that file associations changed so Explorer
+        // refreshes icons and context menus without requiring a reboot.
+        procedure SHChangeNotify(wEventId: Integer; uFlags: Cardinal; dwItem1: Longword; dwItem2: Longword);
+          external 'SHChangeNotify@shell32.dll stdcall';
+
+        procedure CurStepChanged(CurStep: TSetupStep);
+        begin
+          if CurStep = ssPostInstall then
+            SHChangeNotify($08000000, $0000, 0, 0);
+        end;
     """)
 
     iss_path.write_text(iss_content, encoding="utf-8")

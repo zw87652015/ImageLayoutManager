@@ -55,6 +55,19 @@ class CanvasScene(QGraphicsScene):
         self._snap_line_items = []
         self._divider_items = []  # list of DividerItem
 
+        self.preview_mode = False  # hides cell borders for export preview
+
+    def set_preview_mode(self, enabled: bool):
+        if self.preview_mode == enabled:
+            return
+        self.preview_mode = enabled
+        for btn in self._add_buttons:
+            btn.setVisible(not enabled)
+        # scene.update() only marks the background dirty; items must be
+        # explicitly invalidated so Qt calls their paint() again.
+        for item in list(self.cell_items.values()) + list(self.label_cell_items.values()):
+            item.update()
+
     def set_project(self, project: Project):
         self.project = project
         

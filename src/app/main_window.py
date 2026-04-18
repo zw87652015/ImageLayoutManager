@@ -6,10 +6,11 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QToolBar, QPushButton, QToolButton, QSplitter, QSplitterHandle, QFileDialog,
     QMessageBox, QSpinBox, QLabel, QComboBox,
-    QLabel, QStyle, QMenu
+    QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox
 )
-from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtCore import Qt, QTimer, QSize, QSettings
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack
+from PyQt6.QtWidgets import QUndoView
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, DARK, LIGHT
 from src.app.i18n import tr, set_language, current_language
 
@@ -133,46 +134,64 @@ class CollapsibleSplitter(QSplitter):
                 h.refresh_arrow()
 
 
+class ProjectTabState:
+    """Holds all per-tab state: project, undo stack, canvas scene/view, and file path."""
+    def __init__(self, project, path: Optional[str] = None):
+        self.project = project
+        self.path = path
+        self.undo_stack = QUndoStack()
+        self.scene = CanvasScene()
+        self.view = CanvasView(self.scene)
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self._current_project_path = None
-        self._current_theme = LIGHT
         from src.version import APP_VERSION
         self._app_version = APP_VERSION
         self.setWindowTitle(f"Academic Figure Layout v{APP_VERSION}[*]")
         self.resize(1400, 850)
-        
-        # Undo Stack
-        self.undo_stack = QUndoStack(self)
-        
-        # Model
-        self.project = Project()
-        # Initialize with some default grid: 2 rows
-        self.project.rows = [
+
+        # Persistent settings
+        self._settings = QSettings("AcademicFigureLayout", "ImageLayoutManager")
+
+        # Tab management — these attributes always reflect the active tab
+        self._tabs: list[ProjectTabState] = []
+        self._active_tab_idx: int = -1
+        self.project = None
+        self.undo_stack = None
+        self.scene = None
+        self.view = None
+        self._current_project_path = None
+        self._current_theme = LIGHT
+
+        # UI Components (tab_widget, layers panel, inspector created here)
+        self._setup_ui()
+
+        # Connect inspector / layers panel signals (once, not per-tab)
+        self._connect_static_signals()
+
+        # Create the first tab with a default project
+        initial_project = Project()
+        initial_project.rows = [
             RowTemplate(index=0, column_count=2, height_ratio=1.0),
             RowTemplate(index=1, column_count=2, height_ratio=1.0)
         ]
-        # Create initial cells for these rows
-        self._ensure_cells_exist()
-        
-        # UI Components
-        self._setup_ui()
-        
-        # Initialize Scene
-        self.scene.set_project(self.project)
-        self.layers_panel.set_project(self.project)
-        
-        # Connect Signals
-        self._connect_signals()
+        self._create_tab(initial_project, path=None)
+
+        # Apply persisted theme and language
+        saved_theme = self._settings.value("theme", LIGHT)
+        self._apply_theme(saved_theme)
+        saved_lang = self._settings.value("language", "zh")
+        if saved_lang != current_language():
+            set_language(saved_lang)
+            self.retranslate_ui()
 
         self._update_window_title()
         self._update_theme_labels()
 
-        # Silent update check: runs ~1.5 s after startup so it never blocks
-        # the UI. If a newer release is found, a small clickable banner is
-        # shown in the status bar pointing users to the About dialog.
+        # Silent update check
         self._update_checker: StartupUpdateChecker | None = None
         QTimer.singleShot(1500, self._start_update_check)
 
@@ -258,17 +277,13 @@ class MainWindow(QMainWindow):
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self._undo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
         self._undo_action.setEnabled(False)
-        self._undo_action.triggered.connect(self.undo_stack.undo)
-        self.undo_stack.canUndoChanged.connect(self._undo_action.setEnabled)
-        self.undo_stack.undoTextChanged.connect(self._on_undo_text_changed)
+        self._undo_action.triggered.connect(lambda: self.undo_stack.undo())
 
         self._redo_action = QAction(tr("action_redo"), self)
         self._redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self._redo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
         self._redo_action.setEnabled(False)
-        self._redo_action.triggered.connect(self.undo_stack.redo)
-        self.undo_stack.canRedoChanged.connect(self._redo_action.setEnabled)
-        self.undo_stack.redoTextChanged.connect(self._on_redo_text_changed)
+        self._redo_action.triggered.connect(lambda: self.undo_stack.redo())
 
         edit_menu.addAction(self._undo_action)
         edit_menu.addAction(self._redo_action)
@@ -443,31 +458,61 @@ class MainWindow(QMainWindow):
         self._theme_toolbar_action.triggered.connect(self._on_toggle_theme)
         self.toolbar.addAction(self._theme_toolbar_action)
 
-        # Splitter for Layers | Content | Inspector
+        # ── Preview-mode toggle ──
+        self._act_preview_mode = QAction(tr("action_preview_mode"), self)
+        self._act_preview_mode.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self._act_preview_mode.setCheckable(True)
+        self._act_preview_mode.triggered.connect(self._on_toggle_preview_mode)
+        self._view_menu.addSeparator()
+        self._view_menu.addAction(self._act_preview_mode)
+
+        # ── History settings ──
+        self._act_history_settings = QAction(tr("action_history_settings"), self)
+        self._act_history_settings.triggered.connect(self._on_history_settings)
+        self._view_menu.addAction(self._act_history_settings)
+
+        # ── Tab actions ──
+        self._act_new_tab = QAction(tr("action_new_tab"), self)
+        self._act_new_tab.setShortcut(QKeySequence("Ctrl+T"))
+        self._act_new_tab.triggered.connect(self._on_new_tab)
+
+        self._act_close_tab = QAction(tr("action_close_tab"), self)
+        self._act_close_tab.setShortcut(QKeySequence("Ctrl+W"))
+        self._act_close_tab.triggered.connect(self._on_close_current_tab)
+
+        file_menu.addSeparator()
+        file_menu.addAction(self._act_new_tab)
+        file_menu.addAction(self._act_close_tab)
+
+        # Splitter for Layers+History | Content Tabs | Inspector
         splitter = CollapsibleSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(16)
         self.splitter = splitter
         main_layout.addWidget(splitter)
-        
-        # Left Panel (Layers)
+
+        # ── Left Panel: Layers + History tabs ──
+        self.left_tabs = QTabWidget()
+        self.left_tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.layers_panel = LayersPanel()
-        splitter.addWidget(self.layers_panel)
-        
-        # Canvas Area
-        self.scene = CanvasScene()
-        self.view = CanvasView(self.scene)
-        
-        # GPU Acceleration
-        if HAS_OPENGL:
-            self.view.setViewport(QOpenGLWidget())
-            print("GPU Acceleration Enabled (QOpenGLWidget)")
-        
-        splitter.addWidget(self.view)
-        
+        self.history_view = QUndoView()
+        self.history_view.setCleanIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        self.left_tabs.addTab(self.layers_panel, tr("tab_layers"))
+        self.left_tabs.addTab(self.history_view, tr("tab_history"))
+        splitter.addWidget(self.left_tabs)
+
+        # ── Centre: Tab widget for multiple open files ──
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabsClosable(True)
+        self.tab_widget.setMovable(True)
+        self.tab_widget.setDocumentMode(True)
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
+        self.tab_widget.tabCloseRequested.connect(self._on_close_tab_by_index)
+        splitter.addWidget(self.tab_widget)
+
         # Inspector Area
         self.inspector = Inspector()
         splitter.addWidget(self.inspector)
-        
+
         # Set initial sizes and stretch factors (3-columns)
         splitter.setSizes([180, 720, 400])
         splitter.setStretchFactor(0, 0)   # Layers keeps its size
@@ -499,30 +544,8 @@ class MainWindow(QMainWindow):
         self.statusbar.addPermanentWidget(self.canvas_size_label)
         self.statusbar.addPermanentWidget(self.zoom_label)
 
-    def _connect_signals(self):
-        # Scene signals
-        self.scene.cell_dropped.connect(self._on_cell_image_dropped)
-        self.scene.cell_swapped.connect(self._on_cell_swapped)
-        self.scene.multi_cells_swapped.connect(self._on_multi_cells_swapped)
-        self.scene.new_image_dropped.connect(self._on_new_image_dropped)
-        self.scene.project_file_dropped.connect(self._on_project_file_dropped)
-        self.scene.text_item_changed.connect(self._on_text_item_drag_changed)
-        self.scene.selectionChanged.connect(self._on_selection_changed)
-        self.scene.cell_context_menu.connect(self._on_cell_context_menu)
-        self.scene.empty_context_menu.connect(self._on_empty_context_menu)
-        self.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
-        self.scene.insert_row_requested.connect(self._on_insert_row)
-        self.scene.insert_cell_requested.connect(self._on_insert_cell)
-        self.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
-        self.scene.divider_drag_finished.connect(self._on_divider_drag_finished)
-        
-        # View signals
-        self.view.zoom_changed.connect(self._on_zoom_changed)
-        self.view.mouse_scene_pos_changed.connect(self._on_mouse_pos_changed)
-        self.view.navigate_cell.connect(self._on_navigate_cell)
-        self.view.swap_cell.connect(self._on_swap_cell_direction)
-        
-        # Inspector signals
+    def _connect_static_signals(self):
+        """Connect once-only signals: inspector, layers panel."""
         self.inspector.cell_property_changed.connect(self._on_cell_property_changed)
         self.inspector.text_property_changed.connect(self._on_text_property_changed)
         self.inspector.row_property_changed.connect(self._on_row_property_changed)
@@ -531,12 +554,229 @@ class MainWindow(QMainWindow):
         self.inspector.apply_color_to_group.connect(self._on_apply_color_to_group)
         self.inspector.label_text_changed.connect(self._on_label_text_changed)
         self.inspector.subcell_ratio_changed.connect(self._on_subcell_ratio_changed)
-
-        self.undo_stack.cleanChanged.connect(self._on_undo_clean_changed)
-        
-        # Layers Panel signals
         self.layers_panel.items_selected.connect(self._select_cells_by_ids)
         self.layers_panel.context_menu_requested.connect(self._on_layers_context_menu)
+
+    def _connect_tab_signals(self, tab: ProjectTabState):
+        """Connect per-tab scene/view/undostack signals."""
+        tab.scene.cell_dropped.connect(self._on_cell_image_dropped)
+        tab.scene.cell_swapped.connect(self._on_cell_swapped)
+        tab.scene.multi_cells_swapped.connect(self._on_multi_cells_swapped)
+        tab.scene.new_image_dropped.connect(self._on_new_image_dropped)
+        tab.scene.project_file_dropped.connect(self._on_project_file_dropped)
+        tab.scene.text_item_changed.connect(self._on_text_item_drag_changed)
+        tab.scene.selectionChanged.connect(self._on_selection_changed)
+        tab.scene.cell_context_menu.connect(self._on_cell_context_menu)
+        tab.scene.empty_context_menu.connect(self._on_empty_context_menu)
+        tab.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
+        tab.scene.insert_row_requested.connect(self._on_insert_row)
+        tab.scene.insert_cell_requested.connect(self._on_insert_cell)
+        tab.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
+        tab.scene.divider_drag_finished.connect(self._on_divider_drag_finished)
+        tab.view.zoom_changed.connect(self._on_zoom_changed)
+        tab.view.mouse_scene_pos_changed.connect(self._on_mouse_pos_changed)
+        tab.view.navigate_cell.connect(self._on_navigate_cell)
+        tab.view.swap_cell.connect(self._on_swap_cell_direction)
+        tab.undo_stack.cleanChanged.connect(self._on_undo_clean_changed)
+        tab.undo_stack.canUndoChanged.connect(self._undo_action.setEnabled)
+        tab.undo_stack.canRedoChanged.connect(self._redo_action.setEnabled)
+        tab.undo_stack.undoTextChanged.connect(self._on_undo_text_changed)
+        tab.undo_stack.redoTextChanged.connect(self._on_redo_text_changed)
+
+    def _disconnect_tab_signals(self, tab: ProjectTabState):
+        """Disconnect per-tab signals before switching away."""
+        try:
+            tab.scene.cell_dropped.disconnect(self._on_cell_image_dropped)
+            tab.scene.cell_swapped.disconnect(self._on_cell_swapped)
+            tab.scene.multi_cells_swapped.disconnect(self._on_multi_cells_swapped)
+            tab.scene.new_image_dropped.disconnect(self._on_new_image_dropped)
+            tab.scene.project_file_dropped.disconnect(self._on_project_file_dropped)
+            tab.scene.text_item_changed.disconnect(self._on_text_item_drag_changed)
+            tab.scene.selectionChanged.disconnect(self._on_selection_changed)
+            tab.scene.cell_context_menu.disconnect(self._on_cell_context_menu)
+            tab.scene.empty_context_menu.disconnect(self._on_empty_context_menu)
+            tab.scene.nested_layout_open_requested.disconnect(self._on_open_nested_layout)
+            tab.scene.insert_row_requested.disconnect(self._on_insert_row)
+            tab.scene.insert_cell_requested.disconnect(self._on_insert_cell)
+            tab.scene.cell_freeform_geometry_changed.disconnect(self._on_cell_freeform_geometry_changed)
+            tab.scene.divider_drag_finished.disconnect(self._on_divider_drag_finished)
+            tab.view.zoom_changed.disconnect(self._on_zoom_changed)
+            tab.view.mouse_scene_pos_changed.disconnect(self._on_mouse_pos_changed)
+            tab.view.navigate_cell.disconnect(self._on_navigate_cell)
+            tab.view.swap_cell.disconnect(self._on_swap_cell_direction)
+            tab.undo_stack.cleanChanged.disconnect(self._on_undo_clean_changed)
+            tab.undo_stack.canUndoChanged.disconnect(self._undo_action.setEnabled)
+            tab.undo_stack.canRedoChanged.disconnect(self._redo_action.setEnabled)
+            tab.undo_stack.undoTextChanged.disconnect(self._on_undo_text_changed)
+            tab.undo_stack.redoTextChanged.disconnect(self._on_redo_text_changed)
+        except RuntimeError:
+            pass  # already disconnected
+
+    # ------------------------------------------------------------------
+    # Tab management
+    # ------------------------------------------------------------------
+
+    def _tab_title(self, tab: ProjectTabState) -> str:
+        if tab.path:
+            return os.path.basename(tab.path)
+        return "Untitled"
+
+    def _create_tab(self, project: Project, path: Optional[str] = None) -> ProjectTabState:
+        """Create a new tab, add it to the tab widget, and activate it."""
+        tab = ProjectTabState(project, path)
+
+        # Apply GPU acceleration if available
+        if HAS_OPENGL:
+            tab.view.setViewport(QOpenGLWidget())
+
+        # Apply current undo limit from settings
+        limit = int(self._settings.value("max_history", 200))
+        tab.undo_stack.setUndoLimit(limit)
+
+        self._tabs.append(tab)
+        idx = self.tab_widget.addTab(tab.view, self._tab_title(tab))
+        self._activate_tab(idx)
+        return tab
+
+    def _activate_tab(self, idx: int):
+        """Switch to an existing tab by index."""
+        if idx < 0 or idx >= len(self._tabs):
+            return
+
+        # Disconnect old tab signals
+        if self._active_tab_idx >= 0 and self._active_tab_idx < len(self._tabs):
+            self._disconnect_tab_signals(self._tabs[self._active_tab_idx])
+
+        self._active_tab_idx = idx
+        tab = self._tabs[idx]
+
+        # Sync main-window attribute references to the new active tab
+        self.project = tab.project
+        self.undo_stack = tab.undo_stack
+        self.scene = tab.scene
+        self.view = tab.view
+        self._current_project_path = tab.path
+
+        # Wire up new tab's project to the scene (first time only)
+        if tab.scene.project is None:
+            tab.scene.set_project(tab.project)
+            self._ensure_cells_exist()
+            tab.scene.set_project(tab.project)
+
+        self._connect_tab_signals(tab)
+
+        # Update shared UI panels
+        self.layers_panel.set_project(tab.project)
+        self.history_view.setStack(tab.undo_stack)
+        self._refresh_and_update()
+        self._on_selection_changed()
+        self._update_window_title()
+
+        # Sync undo/redo action states for this tab
+        self._undo_action.setEnabled(tab.undo_stack.canUndo())
+        self._redo_action.setEnabled(tab.undo_stack.canRedo())
+        self._on_undo_text_changed(tab.undo_stack.undoText())
+        self._on_redo_text_changed(tab.undo_stack.redoText())
+
+        # Sync preview mode toggle to this scene's state
+        if hasattr(self, '_act_preview_mode'):
+            self._act_preview_mode.setChecked(tab.scene.preview_mode)
+
+        # Make sure the tab widget shows the right index (in case we called
+        # _activate_tab directly, not via tab click)
+        if self.tab_widget.currentIndex() != idx:
+            self.tab_widget.blockSignals(True)
+            self.tab_widget.setCurrentIndex(idx)
+            self.tab_widget.blockSignals(False)
+
+    def _on_tab_changed(self, idx: int):
+        """Slot: user clicked a different tab."""
+        if idx < 0 or idx >= len(self._tabs):
+            return
+        if idx == self._active_tab_idx:
+            return
+        self._activate_tab(idx)
+
+    def _on_new_tab(self):
+        """File > New Tab — opens a blank project in a new tab."""
+        project = Project()
+        project.rows = [
+            RowTemplate(index=0, column_count=2, height_ratio=1.0),
+            RowTemplate(index=1, column_count=2, height_ratio=1.0)
+        ]
+        self._create_tab(project, path=None)
+
+    def _on_close_current_tab(self):
+        self._on_close_tab_by_index(self._active_tab_idx)
+
+    def _on_close_tab_by_index(self, idx: int):
+        """Close a tab; prompt to save if dirty. Don't close the last tab."""
+        if len(self._tabs) <= 1:
+            # Last tab: just replace with a blank project instead of closing
+            if not self._maybe_save():
+                return
+            self._on_new_tab()
+            # Remove the old tab (now at idx 0 if we're closing idx 0)
+            old_idx = 0 if idx == 1 else idx
+            self._remove_tab(old_idx)
+            return
+
+        # Save the active tab if needed before closing
+        if idx == self._active_tab_idx:
+            old_project = self.project
+            old_stack = self.undo_stack
+            if not old_stack.isClean():
+                ret = QMessageBox.question(
+                    self, "Unsaved Changes",
+                    f"'{self._tab_title(self._tabs[idx])}' has unsaved changes. Save now?",
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Save,
+                )
+                if ret == QMessageBox.StandardButton.Cancel:
+                    return
+                if ret == QMessageBox.StandardButton.Save:
+                    if not self._on_save_project():
+                        return
+        else:
+            tab = self._tabs[idx]
+            if not tab.undo_stack.isClean():
+                ret = QMessageBox.question(
+                    self, "Unsaved Changes",
+                    f"'{self._tab_title(tab)}' has unsaved changes. Save now?",
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Save,
+                )
+                if ret == QMessageBox.StandardButton.Cancel:
+                    return
+                if ret == QMessageBox.StandardButton.Save:
+                    # Temporarily activate the tab to save it
+                    prev = self._active_tab_idx
+                    self._activate_tab(idx)
+                    if not self._on_save_project():
+                        self._activate_tab(prev)
+                        return
+                    self._activate_tab(prev)
+
+        self._remove_tab(idx)
+
+    def _remove_tab(self, idx: int):
+        """Remove tab at idx without save checks."""
+        if idx < 0 or idx >= len(self._tabs):
+            return
+        tab = self._tabs[idx]
+        # Only disconnect if this is the currently-connected (active) tab
+        if idx == self._active_tab_idx:
+            self._disconnect_tab_signals(tab)
+        self._tabs.pop(idx)
+        self.tab_widget.removeTab(idx)
+
+        # Repoint active index
+        if len(self._tabs) == 0:
+            self._active_tab_idx = -1
+            return
+        new_idx = min(idx, len(self._tabs) - 1)
+        self._active_tab_idx = -1  # force _activate_tab to reconnect
+        self._activate_tab(new_idx)
 
     def _on_toggle_layers_panel(self):
         sizes = self.splitter.sizes()
@@ -559,6 +799,7 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, theme: str):
         self._current_theme = theme
+        self._settings.setValue("theme", theme)
         app = QApplication.instance()
         app.setPalette(build_palette(theme))
         app.setStyleSheet(get_stylesheet(theme))
@@ -576,7 +817,33 @@ class MainWindow(QMainWindow):
     def _on_toggle_language(self):
         new_lang = "zh" if current_language() == "en" else "en"
         set_language(new_lang)
+        self._settings.setValue("language", new_lang)
         self.retranslate_ui()
+
+    def _on_toggle_preview_mode(self, checked: bool):
+        if self.scene:
+            self.scene.set_preview_mode(checked)
+
+    def _on_history_settings(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr("history_settings_title"))
+        dlg.setFixedWidth(320)
+        layout = QFormLayout(dlg)
+        spin = QSpinBox()
+        spin.setRange(100, 1000)
+        spin.setSingleStep(50)
+        current_limit = int(self._settings.value("max_history", 200))
+        spin.setValue(current_limit if current_limit > 0 else 200)
+        layout.addRow(tr("history_settings_label"), spin)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        layout.addRow(btns)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            limit = spin.value()
+            self._settings.setValue("max_history", limit)
+            for tab in self._tabs:
+                tab.undo_stack.setUndoLimit(limit)
 
     def _on_undo_text_changed(self, text: str):
         prefix = tr("action_undo")
@@ -588,8 +855,9 @@ class MainWindow(QMainWindow):
 
     def retranslate_ui(self):
         """Update all UI text to the current language."""
-        self._on_undo_text_changed(self.undo_stack.undoText())
-        self._on_redo_text_changed(self.undo_stack.redoText())
+        if self.undo_stack:
+            self._on_undo_text_changed(self.undo_stack.undoText())
+            self._on_redo_text_changed(self.undo_stack.redoText())
         self._file_menu.setTitle(tr("menu_file"))
         self._edit_menu.setTitle(tr("menu_edit"))
         self._layout_menu_ref.setTitle(tr("menu_layout"))
@@ -624,6 +892,13 @@ class MainWindow(QMainWindow):
         self._lang_action.setText(tr("action_switch_zh"))
 
         self._act_toggle_layers.setText(tr("action_toggle_layers"))
+        self._act_preview_mode.setText(tr("action_preview_mode"))
+        self._act_history_settings.setText(tr("action_history_settings"))
+        self._act_new_tab.setText(tr("action_new_tab"))
+        self._act_close_tab.setText(tr("action_close_tab"))
+        # Update left-panel tab labels
+        self.left_tabs.setTabText(0, tr("tab_layers"))
+        self.left_tabs.setTabText(1, tr("tab_history"))
         self._update_theme_labels()
         self.inspector.retranslate_ui()
         self.layers_panel.retranslate_ui()
@@ -785,6 +1060,13 @@ class MainWindow(QMainWindow):
     def _on_undo_clean_changed(self, clean: bool):
         self.setWindowModified(not clean)
         self._update_window_title()
+        # Reflect dirty state in tab title
+        if 0 <= self._active_tab_idx < len(self._tabs):
+            tab = self._tabs[self._active_tab_idx]
+            title = self._tab_title(tab)
+            if not clean:
+                title += " •"
+            self.tab_widget.setTabText(self._active_tab_idx, title)
 
     def _update_window_title(self):
         if self._current_project_path:
@@ -798,13 +1080,14 @@ class MainWindow(QMainWindow):
             self.setWindowModified(True)
 
     def _maybe_save(self) -> bool:
-        if self.undo_stack.isClean():
+        """Check active tab for unsaved changes; returns True if safe to proceed."""
+        if self.undo_stack is None or self.undo_stack.isClean():
             return True
-
+        tab = self._tabs[self._active_tab_idx]
         ret = QMessageBox.question(
             self,
             "Unsaved Changes",
-            "The project has unsaved changes. Save now?",
+            f"'{self._tab_title(tab)}' has unsaved changes. Save now?",
             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Save,
         )
@@ -815,19 +1098,36 @@ class MainWindow(QMainWindow):
         return False
 
     def _set_project(self, project: Project, path: Optional[str] = None):
+        """Replace the active tab's project (e.g. on open/new)."""
+        tab = self._tabs[self._active_tab_idx]
+        tab.project = project
+        tab.path = path
         self.project = project
+        self._current_project_path = path
+
         self._ensure_cells_exist()
         self.scene.set_project(self.project)
-        
         self.undo_stack.clear()
-        self._current_project_path = path
         self.setWindowModified(False)
         self._update_window_title()
         self._refresh_and_update()
         self._check_image_resolution()
-        
-        # Update selection to refresh Inspector
         self._on_selection_changed()
+
+        # Update tab title
+        self.tab_widget.setTabText(self._active_tab_idx, self._tab_title(tab))
+
+    def open_file_from_cli(self, path: str):
+        """Open a .figlayout file supplied as a command-line argument at startup.
+
+        Called by main.py before the window is shown, so the initial blank tab
+        is still clean and untitled — we simply replace it.
+        """
+        try:
+            project = Project.load_from_file(path)
+            self._set_project(project, path)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open '{os.path.basename(path)}':\n{e}")
 
     def _build_project_from_images(self, paths):
         project = Project()
@@ -2089,9 +2389,24 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Error", f"Failed to open nested layout: {e}")
 
     def closeEvent(self, event):
-        if not self._maybe_save():
-            event.ignore()
-            return
+        # Check every tab for unsaved changes
+        for i, tab in enumerate(self._tabs):
+            if not tab.undo_stack.isClean():
+                # Activate the tab so the user sees it
+                self._activate_tab(i)
+                ret = QMessageBox.question(
+                    self, "Unsaved Changes",
+                    f"'{self._tab_title(tab)}' has unsaved changes. Save now?",
+                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Save,
+                )
+                if ret == QMessageBox.StandardButton.Cancel:
+                    event.ignore()
+                    return
+                if ret == QMessageBox.StandardButton.Save:
+                    if not self._on_save_project():
+                        event.ignore()
+                        return
         try:
             get_image_proxy().shutdown()
         except Exception:
@@ -2110,13 +2425,22 @@ class MainWindow(QMainWindow):
         self._set_project(project, None)
 
     def _on_open_project(self):
-        if not self._maybe_save():
-            return
         path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Figure Layout (*.figlayout);;JSON (*.json)")
-        if path:
+        if not path:
+            return
+        # If active tab is clean and untitled, reuse it; otherwise open a new tab
+        active_tab = self._tabs[self._active_tab_idx]
+        if active_tab.undo_stack.isClean() and active_tab.path is None:
             try:
                 project = Project.load_from_file(path)
                 self._set_project(project, path)
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to open project: {e}")
+        else:
+            try:
+                project = Project.load_from_file(path)
+                self._create_tab(project, path)
+                self._check_image_resolution()
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to open project: {e}")
 
@@ -2136,6 +2460,11 @@ class MainWindow(QMainWindow):
             self.project.name = os.path.splitext(os.path.basename(path))[0]
             self.project.save_to_file(path)
             self._current_project_path = path
+            # Keep active tab's path in sync
+            if 0 <= self._active_tab_idx < len(self._tabs):
+                self._tabs[self._active_tab_idx].path = path
+                self.tab_widget.setTabText(self._active_tab_idx,
+                                           self._tab_title(self._tabs[self._active_tab_idx]))
             self.undo_stack.setClean()
             self.setWindowModified(False)
             self._update_window_title()
@@ -2195,12 +2524,11 @@ class MainWindow(QMainWindow):
         self._refresh_and_update()
 
     def _on_project_file_dropped(self, file_path: str):
-        """Handle drag and drop of .figlayout project files."""
-        if not self._maybe_save():
-            return
+        """Handle drag and drop of .figlayout — opens in a new tab."""
         try:
             project = Project.load_from_file(file_path)
-            self._set_project(project, file_path)
+            self._create_tab(project, file_path)
+            self._check_image_resolution()
         except Exception as e:
             from PyQt6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Error", f"Failed to open project: {e}")

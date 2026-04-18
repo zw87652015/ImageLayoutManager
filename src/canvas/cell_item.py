@@ -493,19 +493,23 @@ class CellItem(QGraphicsRectItem):
         if self.scale_bar_enabled and self._pixmap and not self._pixmap.isNull():
             self._draw_scale_bar(painter, rect)
 
-        # Draw Border
-        if self.isSelected():
-            painter.setPen(self.selected_pen)
-            painter.drawRect(rect)
-        else:
-            painter.setPen(self.border_pen)
-            painter.drawRect(rect)
+        # Draw Border (suppressed in preview mode)
+        scene = self.scene()
+        if not (scene and getattr(scene, 'preview_mode', False)):
+            if self.isSelected():
+                painter.setPen(self.selected_pen)
+                painter.drawRect(rect)
+            else:
+                painter.setPen(self.border_pen)
+                painter.drawRect(rect)
 
     def _draw_label_cell(self, painter: QPainter, rect: QRectF):
         """Draw a label-only cell with centered text."""
         painter.fillRect(rect, self.normal_brush)
-        painter.setPen(self.border_pen)
-        painter.drawRect(rect)
+        scene = self.scene()
+        if not (scene and getattr(scene, 'preview_mode', False)):
+            painter.setPen(self.border_pen)
+            painter.drawRect(rect)
         
         if self.label_text:
             # QGraphicsTextItem uses 72 DPI internally, so 1pt = 1 scene unit.

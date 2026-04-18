@@ -33,7 +33,7 @@ _T: dict[str, dict[str, str]] = {
     "action_auto_label_incell":   {"en": "Auto In-Cell Labels",       "zh": "自动内嵌标注"},
     "action_auto_label_outcell":  {"en": "Auto Label Row",            "zh": "自动标注行"},
     "action_auto_layout":   {"en": "Auto Layout",       "zh": "自动布局"},
-    "action_bake":          {"en": "Convert Grid → Freeform", "zh": "网格转自由布局"},
+    "action_bake":          {"en": "Convert Grid → Freeform", "zh": "切换至自由布局模式"},
     "action_grid_mode":     {"en": "Switch to Grid Mode",     "zh": "切换至网格模式"},
     "action_bring_front":   {"en": "Bring to Front",    "zh": "置于顶层"},
     "action_send_back":     {"en": "Send to Back",      "zh": "置于底层"},
@@ -183,6 +183,20 @@ _T: dict[str, dict[str, str]] = {
     "about_pre":            {"en": "✔ You are running a pre-release version.", "zh": "✔ 当前运行的是预发布版本。"},
     "about_no_conn":        {"en": "⚠ Could not reach GitHub. Check your connection.", "zh": "⚠ 无法连接 GitHub，请检查网络连接。"},
     "about_click_check":    {"en": "Click \"Check for Updates\" to check.", "zh": "点击「检查更新」以检查新版本。"},
+
+    # ── Tabs ─────────────────────────────────────────────────────
+    "action_new_tab":          {"en": "New Tab",            "zh": "新建标签页"},
+    "action_close_tab":        {"en": "Close Tab",          "zh": "关闭标签页"},
+    "tab_layers":              {"en": "Layers",             "zh": "图层"},
+    "tab_history":             {"en": "History",            "zh": "历史"},
+
+    # ── Export preview ────────────────────────────────────────────
+    "action_preview_mode":     {"en": "Export Preview",     "zh": "导出预览"},
+
+    # ── History settings ──────────────────────────────────────────
+    "action_history_settings": {"en": "History Settings…",  "zh": "历史设置…"},
+    "history_settings_title":  {"en": "History Settings",   "zh": "历史设置"},
+    "history_settings_label":  {"en": "Max History Items:",  "zh": "最大历史步数:"},
 
     # ── Status bar / misc ─────────────────────────────────────────
     "zoom_label":           {"en": "Zoom:",             "zh": "缩放:"},
