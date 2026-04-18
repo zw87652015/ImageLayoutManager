@@ -16,6 +16,7 @@ GITHUB_OWNER = "zw87652015"
 GITHUB_REPO  = "ImageLayoutManager"
 GITHUB_URL   = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
 RELEASES_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
+WEBSITE_URL  = "https://luojiajiang.uk/image-layout-manager"
 
 
 def _parse_version(v: str):
@@ -25,6 +26,35 @@ def _parse_version(v: str):
         return tuple(int(x) for x in v.split("."))
     except ValueError:
         return (0,)
+
+
+class StartupUpdateChecker(QThread):
+    """Silent background update check used at app startup.
+
+    Emits `update_available(latest_tag, url)` only when a strictly newer
+    release exists on GitHub. Stays silent on network failures, parse errors,
+    same version, or pre-releases — so it never nags users.
+    """
+    update_available = pyqtSignal(str, str)  # latest_tag, url
+
+    def run(self):
+        try:
+            req = urllib.request.Request(
+                RELEASES_API,
+                headers={"User-Agent": "AcademicFigureLayout-UpdateChecker"}
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode())
+            latest_tag = data.get("tag_name", "")
+            latest_url = data.get("html_url", WEBSITE_URL)
+            if not latest_tag:
+                return
+            from src.version import APP_VERSION
+            if _parse_version(latest_tag) > _parse_version(APP_VERSION):
+                self.update_available.emit(latest_tag, latest_url)
+        except Exception:
+            # Silent on all failures: user can still check manually via About.
+            pass
 
 
 class _UpdateChecker(QThread):
@@ -51,7 +81,9 @@ class _UpdateChecker(QThread):
             if latest > current:
                 self.result_ready.emit(
                     f'🔔 New version <b>{latest_tag}</b> is available!  '
-                    f'<a href="{latest_url}" style="color:#4A90E2;">Download</a>'
+                    f'<a href="{WEBSITE_URL}" style="color:#4A90E2;">{tr("about_download")}</a>'
+                    f' &middot; '
+                    f'<a href="{latest_url}" style="color:#4A90E2;">GitHub</a>'
                 )
             elif latest == current:
                 self.result_ready.emit(tr("about_latest"))
@@ -71,7 +103,7 @@ class AboutDialog(QDialog):
         self._checker: _UpdateChecker | None = None
 
         self.setWindowTitle(tr("about_title"))
-        self.setFixedWidth(440)
+        self.setFixedWidth(520)
         self.setModal(True)
         self._build_ui()
 
@@ -133,6 +165,7 @@ class AboutDialog(QDialog):
 
         info_row(tr("about_developer"), f'<a href="https://github.com/{GITHUB_OWNER}" '
                               f'style="color:#4A90E2;">@{GITHUB_OWNER}</a>')
+        info_row(tr("about_website"),    "luojiajiang.uk", link=WEBSITE_URL)
         info_row(tr("about_repository"), "GitHub", link=GITHUB_URL)
         info_row(tr("about_license"),    "Apache-2.0")
 
@@ -155,6 +188,12 @@ class AboutDialog(QDialog):
         self._check_btn = QPushButton(tr("about_check_btn"))
         self._check_btn.clicked.connect(self._on_check_updates)
         btn_row.addWidget(self._check_btn)
+
+        dl_btn = QPushButton(tr("about_download"))
+        dl_btn.setToolTip(WEBSITE_URL)
+        dl_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(WEBSITE_URL)))
+        btn_row.addWidget(dl_btn)
+        self._dl_btn = dl_btn
 
         gh_btn = QPushButton(tr("about_open_github"))
         gh_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(GITHUB_URL)))

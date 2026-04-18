@@ -54,6 +54,15 @@ class ColorPickerWidget(QWidget):
         self._sync_combo()
         self._refresh_swatch()
 
+    def retranslate_ui(self):
+        """Re-apply translated labels to preset items, preserving current color."""
+        self._combo.blockSignals(True)
+        for i, (_, key) in enumerate(self._PRESETS):
+            self._combo.setItemText(i, tr(key))
+        self._combo.setItemText(len(self._PRESETS), tr("opt_color_custom"))
+        self._combo.blockSignals(False)
+        self._sync_combo()
+
     # ── internals ───────────────────────────────────────────────────
 
     def _sync_combo(self):
@@ -739,11 +748,11 @@ class Inspector(QWidget):
 
         _retranslate_combo(self.grid_mode,         [tr("opt_grid_stretch"), tr("opt_grid_fixed")])
         _retranslate_combo(self.row_alignment,      [tr("opt_row_left"),     tr("opt_row_center"),    tr("opt_row_right")])
-        _retranslate_combo(self.corner_label_color, [tr("opt_color_black"),  tr("opt_color_white")])
-        _retranslate_combo(self.scale_bar_color,    [tr("opt_color_white"),  tr("opt_color_black")])
-        _retranslate_combo(self.label_color,        [tr("opt_color_black"),  tr("opt_color_white")])
         _retranslate_combo(self.label_align,        [tr("opt_align_left"),   tr("opt_align_center"),  tr("opt_align_right")])
-        _retranslate_combo(self.text_color,         [tr("opt_color_black"),  tr("opt_color_white")])
+        self.corner_label_color.retranslate_ui()
+        self.scale_bar_color.retranslate_ui()
+        self.label_color.retranslate_ui()
+        self.text_color.retranslate_ui()
 
         # Refresh dynamic apply-button text if a text item is currently selected
         if self.text_group.isVisible():

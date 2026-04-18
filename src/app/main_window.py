@@ -25,7 +25,7 @@ from src.canvas.canvas_scene import CanvasScene
 from src.canvas.canvas_view import CanvasView
 from src.app.inspector import Inspector
 from src.app.layers_panel import LayersPanel
-from src.app.about_dialog import AboutDialog
+from src.app.about_dialog import AboutDialog, StartupUpdateChecker
 from src.app.help_dialog import HelpDialog
 from src.model.enums import PageSizePreset
 from src.export.pdf_exporter import PdfExporter
@@ -169,6 +169,31 @@ class MainWindow(QMainWindow):
 
         self._update_window_title()
         self._update_theme_labels()
+
+        # Silent update check: runs ~1.5 s after startup so it never blocks
+        # the UI. If a newer release is found, a small clickable banner is
+        # shown in the status bar pointing users to the About dialog.
+        self._update_checker: StartupUpdateChecker | None = None
+        QTimer.singleShot(1500, self._start_update_check)
+
+    def _start_update_check(self):
+        self._update_checker = StartupUpdateChecker(self)
+        self._update_checker.update_available.connect(self._on_update_available)
+        self._update_checker.start()
+
+    def _on_update_available(self, latest_tag: str, _url: str):
+        """Show a clickable hint in the status bar; clicking opens About."""
+        msg = tr("status_update_available").format(tag=latest_tag)
+        # Wrap in an <a> so QLabel.linkActivated fires; href is a sentinel.
+        self.update_available_label.setText(
+            f'<a href="about" style="color:#4A90E2; text-decoration:none;">🔔 {msg}</a>'
+        )
+        self.update_available_label.setToolTip(tr("status_update_tooltip"))
+        self.update_available_label.show()
+
+    def _on_update_banner_clicked(self, _href: str):
+        """Open the About dialog when the user clicks the update banner."""
+        self._on_show_about()
 
     def _setup_ui(self):
         # Central Widget
@@ -457,6 +482,20 @@ class MainWindow(QMainWindow):
         self.zoom_label = QLabel("Zoom: 100%")
         self.statusbar.addWidget(self.mouse_pos_label)
         self.statusbar.addWidget(self.selection_info_label)
+
+        # Update-available banner (hidden unless a newer release is detected
+        # during the silent startup check). Clicking opens the About dialog.
+        self.update_available_label = QLabel("")
+        self.update_available_label.setTextFormat(Qt.TextFormat.RichText)
+        self.update_available_label.setOpenExternalLinks(False)
+        self.update_available_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.update_available_label.setStyleSheet(
+            "color: #4A90E2; font-size: 12px; padding: 0 8px;"
+        )
+        self.update_available_label.linkActivated.connect(self._on_update_banner_clicked)
+        self.update_available_label.hide()
+        self.statusbar.addPermanentWidget(self.update_available_label)
+
         self.statusbar.addPermanentWidget(self.canvas_size_label)
         self.statusbar.addPermanentWidget(self.zoom_label)
 
