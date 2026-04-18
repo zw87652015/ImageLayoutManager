@@ -102,7 +102,7 @@ class DragManager(QObject):
 
     def start_drag(self, cell_item, scene_pos):
         """Begin a drag operation on *cell_item* (and all other selected cells)."""
-        if self._active:
+        if self._active or self._animating:
             return
 
         from src.canvas.cell_item import CellItem
@@ -745,13 +745,10 @@ class DragManager(QObject):
 
         etype = event.type()
 
-        # During animation, consume mouse events to prevent interference
+        # During animation, only block moves — press/release pass through so
+        # other items (add-row/column buttons, etc.) remain clickable.
         if self._animating:
-            if etype in (QEvent.Type.MouseMove,
-                         QEvent.Type.MouseButtonPress,
-                         QEvent.Type.MouseButtonRelease):
-                return True
-            return False
+            return etype == QEvent.Type.MouseMove
 
         if etype == QEvent.Type.MouseMove:
             if self._view:

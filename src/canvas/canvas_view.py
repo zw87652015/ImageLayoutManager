@@ -98,12 +98,17 @@ class CanvasView(QGraphicsView):
         elif event.button() == Qt.MouseButton.LeftButton:
             from PyQt6.QtWidgets import QGraphicsItem
             scene_pos = self.mapToScene(event.position().toPoint())
-            selectable = [
-                i for i in (self.scene().items(scene_pos) or [])
-                if i.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
-            ]
-            if not selectable:
-                # Click on empty space: start custom rubber band
+            # Deliver to the scene if there are selectable items OR interactive
+            # non-selectable items (add buttons, dividers) that accept hover events.
+            # Background-only items (page rect, margin rect) have no hover events
+            # and are intentionally excluded so rubber-band can start over them.
+            interactive = any(
+                (i.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+                or i.acceptHoverEvents()
+                for i in (self.scene().items(scene_pos) or [])
+            )
+            if not interactive:
+                # Click on empty / background space: start custom rubber band
                 self._rb_origin = event.position().toPoint()
                 self._rb_current = self._rb_origin
                 if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
