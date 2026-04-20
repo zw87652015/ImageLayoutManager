@@ -661,5 +661,8 @@ class CanvasScene(QGraphicsScene):
         super().contextMenuEvent(event)
         if event.isAccepted():
             return  # an item handled it after all
-        self.empty_context_menu.emit(event.scenePos(), event.screenPos())
+        # Accept the event BEFORE emitting so that any nested event loop
+        # (started by the menu the slot will show) can't cause Qt to
+        # re-dispatch this unaccepted event and pop up the menu twice.
         event.accept()
+        self.empty_context_menu.emit(event.scenePos(), event.screenPos())

@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphicsItem
+from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsTextItem
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QCursor
 from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 
@@ -816,28 +816,34 @@ class CellItem(QGraphicsRectItem):
                 text = self.scale_bar_custom_text
             else:
                 text = f"{self.scale_bar_length_um:.0f} µm" if self.scale_bar_length_um >= 1 else f"{self.scale_bar_length_um:.2f} µm"
-            
-            transform = painter.transform()
-            m11 = transform.m11()
-            m22 = abs(transform.m22())
 
-            device_font_size = max(1, int(self.scale_bar_text_size_mm * m11))
-            font = QFont("Arial")
-            font.setPixelSize(device_font_size)
-            
-            # Use a wide text rect centered on the bar to avoid clipping
-            text_rect_w = max(bar_length_mm, content_rect.width())
-            text_rect_x = bar_x + bar_length_mm / 2 - text_rect_w / 2
-            text_height = self.scale_bar_text_size_mm * 3
-            text_rect = QRectF(text_rect_x, bar_y - text_height, text_rect_w, text_height)
+            # Render via QGraphicsTextItem at a large base point size and then
+            # scale DOWN to the target mm size. This matches how labels render
+            # in the exporters and avoids Qt's minimum-rendered-pixel-size floor
+            # (~6-8 px) that would otherwise make the small scale-bar text
+            # appear oversized relative to the bar at normal zoom levels.
+            base_pt = 24
+            text_scale = self.scale_bar_text_size_mm / base_pt
 
-            # Draw in device-pixel space for zoom-independent sizing
-            dev_text_rect = transform.mapRect(text_rect)
+            temp_item = QGraphicsTextItem()
+            temp_item.setPlainText(text)
+            font = QFont("Arial", base_pt)
+            temp_item.setFont(font)
+            temp_item.setDefaultTextColor(QColor(self.scale_bar_color))
+
+            br = temp_item.boundingRect()
+            tw_mm = br.width() * text_scale
+            th_mm = br.height() * text_scale
+
+            # Horizontally centre the text on the bar; sit it just above the bar.
+            tx_mm = bar_x + (bar_length_mm - tw_mm) / 2
+            ty_mm = bar_y - th_mm
+
             painter.save()
-            painter.resetTransform()
-            painter.setFont(font)
-            painter.setPen(QPen(QColor(self.scale_bar_color)))
-            painter.drawText(dev_text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, text)
+            painter.translate(tx_mm, ty_mm)
+            painter.scale(text_scale, text_scale)
+            option = QStyleOptionGraphicsItem()
+            temp_item.paint(painter, option, None)
             painter.restore()
 
     def _update_tooltip(self):

@@ -651,17 +651,30 @@ class ImageExporter:
                 text = custom_text
             else:
                 text = f"{cell.scale_bar_length_um:.0f} µm" if cell.scale_bar_length_um >= 1 else f"{cell.scale_bar_length_um:.2f} µm"
-            
+
+            # WYSIWYG: render with the same QGraphicsTextItem + painter.scale()
+            # pattern used by the canvas and the label exporter, so the text
+            # size matches the canvas preview pixel-for-pixel.
             text_size_mm = getattr(cell, 'scale_bar_text_size_mm', 2.0)
-            font_size_px = max(8, int(text_size_mm * scale))
-            font = QFont("Arial")
-            font.setPixelSize(font_size_px)
-            painter.setFont(font)
-            painter.setPen(QColor(cell.scale_bar_color))
-            
-            # Use a wide text rect centered on the bar to avoid clipping
-            text_rect_w = max(bar_length_out, content_rect.width())
-            text_rect_x = bar_x + bar_length_out / 2 - text_rect_w / 2
-            text_height = font_size_px * 3
-            text_rect = QRectF(text_rect_x, bar_y - text_height, text_rect_w, text_height)
-            painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom, text)
+            base_pt = 24
+            text_scale = text_size_mm / base_pt  # 1 local unit → text_scale mm
+            render_scale = text_scale * scale    # 1 local unit → render_scale output-pixels
+
+            temp_item = QGraphicsTextItem()
+            temp_item.setPlainText(text)
+            temp_item.setFont(QFont("Arial", base_pt))
+            temp_item.setDefaultTextColor(QColor(cell.scale_bar_color))
+
+            br = temp_item.boundingRect()
+            tw_out = br.width() * render_scale
+            th_out = br.height() * render_scale
+
+            tx_out = bar_x + (bar_length_out - tw_out) / 2
+            ty_out = bar_y - th_out
+
+            painter.save()
+            painter.translate(tx_out, ty_out)
+            painter.scale(render_scale, render_scale)
+            option = QStyleOptionGraphicsItem()
+            temp_item.paint(painter, option, None)
+            painter.restore()

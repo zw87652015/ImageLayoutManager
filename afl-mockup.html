@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Academic Figure Layout — Redesign Mockup</title>
+<style>
+  :root {
+    /* Light theme (default) */
+    --chrome: #ECECEC;
+    --panel: #F5F5F5;
+    --panel-alt: #FAFAFA;
+    --canvas-bg: #E8E8E8;
+    --surface: #FFFFFF;
+    --border: #D8D8D8;
+    --border-strong: #C4C4C4;
+    --divider: #E4E4E4;
+    --text: #1D1D1F;
+    --text-sec: #6E6E73;
+    --text-tert: #8E8E93;
+    --label-caps: #86868B;
+    --hover: rgba(0,0,0,0.05);
+    --active: rgba(0,0,0,0.09);
+    --accent: #0891B2;
+    --accent-hover: #0E7490;
+    --accent-tint: rgba(8, 145, 178, 0.10);
+    --accent-ring: rgba(8, 145, 178, 0.35);
+    --danger: #DC2626;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 2px 8px rgba(0,0,0,0.08);
+    --shadow-window: 0 20px 60px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08);
+    --placeholder: #AEAEB2;
+    --radius-panel: 6px;
+    --radius-button: 4px;
+    --radius-input: 3px;
+    --grid-line: #C7C7CC;
+  }
+
+  [data-theme="dark"] {
+    --chrome: #2C2C2E;
+    --panel: #242426;
+    --panel-alt: #1F1F21;
+    --canvas-bg: #1A1A1C;
+    --surface: #2F2F31;
+    --border: #3A3A3C;
+    --border-strong: #48484A;
+    --divider: #323234;
+    --text: #F5F5F7;
+    --text-sec: #A1A1A6;
+    --text-tert: #6E6E73;
+    --label-caps: #8E8E93;
+    --hover: rgba(255,255,255,0.06);
+    --active: rgba(255,255,255,0.10);
+    --accent: #22D3EE;
+    --accent-hover: #06B6D4;
+    --accent-tint: rgba(34, 211, 238, 0.14);
+    --accent-ring: rgba(34, 211, 238, 0.40);
+    --placeholder: #636366;
+    --grid-line: #48484A;
+    --shadow-window: 0 20px 60px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.30);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    font-size: 13px;
+    color: var(--text);
+    background: linear-gradient(135deg, #d9dde3 0%, #b8c0cc 100%);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+    transition: background 0.3s ease;
+  }
+  [data-theme="dark"] body {
+    background: linear-gradient(135deg, #1c1c1e 0%, #0a0a0c 100%);
+  }
+
+  /* Window chrome */
+  .window {
+    position: absolute;
+    inset: 16px;
+    background: var(--chrome);
+    border-radius: 10px;
+    box-shadow: var(--shadow-window);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 0.5px solid var(--border);
+  }
+
+  .titlebar {
+    height: 38px;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    background: var(--chrome);
+    border-bottom: 0.5px solid var(--divider);
+    position: relative;
+    -webkit-app-region: drag;
+  }
+
+  .traffic-lights { display: flex; gap: 8px; }
+  .tl {
+    width: 12px; height: 12px; border-radius: 50%;
+    display: inline-block;
+    border: 0.5px solid rgba(0,0,0,0.1);
+  }
+  .tl.close { background: #FF5F57; }
+  .tl.min   { background: #FEBC2E; }
+  .tl.max   { background: #28C840; }
+
+  .title {
+    position: absolute;
+    left: 50%; transform: translateX(-50%);
+    font-size: 13px; font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .title .subtle { color: var(--text-sec); font-weight: 400; }
+
+  /* Toolbar */
+  .toolbar {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+    background: var(--chrome);
+    border-bottom: 0.5px solid var(--divider);
+  }
+
+  .tb-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px;
+  }
+  .tb-group + .tb-group {
+    border-left: 0.5px solid var(--border);
+    margin-left: 4px;
+    padding-left: 8px;
+  }
+  .tb-group.right {
+    margin-left: auto;
+    border-left: 0.5px solid var(--border);
+    padding-left: 8px;
+  }
+
+  .tb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: var(--radius-button);
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 120ms ease, transform 80ms ease;
+    -webkit-app-region: no-drag;
+  }
+  .tb-btn:hover { background: var(--hover); }
+  .tb-btn:active { background: var(--active); transform: scale(0.97); }
+  .tb-btn.primary {
+    background: var(--accent);
+    color: white;
+    padding: 0 14px;
+    font-weight: 500;
+  }
+  .tb-btn.primary:hover { background: var(--accent-hover); }
+  .tb-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
+
+  .tb-icon-only {
+    width: 30px; padding: 0;
+    justify-content: center;
+  }
+
+  .tb-divider { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
+
+  /* Segmented control for view mode */
+  .segmented {
+    display: inline-flex;
+    background: var(--panel-alt);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-button);
+    padding: 2px;
+    gap: 2px;
+  }
+  .seg-btn {
+    height: 22px;
+    padding: 0 10px;
+    border: none;
+    background: transparent;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--text-sec);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: all 150ms ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .seg-btn svg { width: 12px; height: 12px; }
+  .seg-btn.active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
+  }
+
+  /* Main body */
+  .main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 220px 1fr 280px;
+    min-height: 0;
+  }
+
+  /* Left panel — Layers */
+  .left-panel {
+    background: var(--panel);
+    border-right: 0.5px solid var(--divider);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .panel-tabs {
+    height: 32px;
+    display: flex;
+    border-bottom: 0.5px solid var(--divider);
+    padding: 0 8px;
+    gap: 4px;
+    align-items: center;
+  }
+  .panel-tab {
+    height: 22px;
+    padding: 0 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-sec);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    transition: all 120ms;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+  }
+  .panel-tab.active { background: var(--accent-tint); color: var(--accent); }
+  .panel-tab:not(.active):hover { background: var(--hover); color: var(--text); }
+
+  .layers-header {
+    padding: 14px 14px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--label-caps);
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .icon-btn {
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-sec);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 120ms;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  .icon-btn svg { width: 13px; height: 13px; }
+
+  .layers-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 6px 12px;
+  }
+
+  .row-group {
+    margin-bottom: 4px;
+  }
+  .row-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 120ms;
+  }
+  .row-header:hover { background: var(--hover); }
+  .row-header .chevron {
+    width: 10px; height: 10px;
+    color: var(--text-tert);
+    transition: transform 150ms ease;
+  }
+  .row-header.collapsed .chevron { transform: rotate(-90deg); }
+  .row-header .row-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .row-header .row-meta {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-tert);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cell-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px 5px 22px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 120ms;
+    position: relative;
+  }
+  .cell-item:hover { background: var(--hover); }
+  .cell-item.selected {
+    background: var(--accent-tint);
+  }
+  .cell-item.selected::before {
+    content: "";
+    position: absolute;
+    left: 3px; top: 4px; bottom: 4px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 1px;
+  }
+
+  .thumb {
+    width: 22px; height: 22px;
+    border-radius: 3px;
+    background: var(--surface);
+    border: 1px dashed var(--border-strong);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tert);
+    flex-shrink: 0;
+  }
+  .thumb.filled {
+    border: 1px solid var(--border);
+    border-style: solid;
+    background: linear-gradient(135deg, #e0f2fe, #bae6fd);
+  }
+  [data-theme="dark"] .thumb.filled {
+    background: linear-gradient(135deg, #164e63, #0e7490);
+  }
+  .thumb svg { width: 10px; height: 10px; }
+
+  .cell-label {
+    font-size: 12px;
+    color: var(--text);
+    flex: 1;
+  }
+  .cell-label .tag {
+    color: var(--text-tert);
+    font-variant-numeric: tabular-nums;
+    margin-right: 6px;
+  }
+  .cell-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .cell-item:hover .cell-actions,
+  .cell-item.selected .cell-actions { opacity: 1; }
+
+  /* Canvas area */
+  .canvas-area {
+    background: var(--canvas-bg);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .canvas-tabs {
+    height: 30px;
+    background: var(--panel);
+    border-bottom: 0.5px solid var(--divider);
+    display: flex;
+    align-items: flex-end;
+    padding: 0 8px;
+    gap: 2px;
+  }
+  .tab-item {
+    height: 26px;
+    padding: 0 14px 0 12px;
+    background: var(--surface);
+    border: 0.5px solid var(--divider);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    position: relative;
+  }
+  .tab-item .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .tab-item .close-x {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tert);
+    font-size: 14px;
+  }
+  .tab-item .close-x:hover { background: var(--hover); color: var(--text); }
+
+  .canvas-viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background:
+      linear-gradient(var(--canvas-bg), var(--canvas-bg));
+    background-image:
+      radial-gradient(circle at 1px 1px, var(--grid-line) 1px, transparent 0);
+    background-size: 20px 20px;
+    background-position: 0 0;
+  }
+
+  .page {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 320px; height: 452px;
+    background: var(--surface);
+    box-shadow: var(--shadow-md), 0 0 0 0.5px var(--border);
+    border-radius: 2px;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .page-cell {
+    border: 1.5px dashed var(--border-strong);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--placeholder);
+    font-size: 11px;
+    background: var(--panel-alt);
+    transition: all 150ms ease;
+    cursor: pointer;
+  }
+  .page-cell:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-tint);
+  }
+  .page-cell.selected {
+    border: 1.5px solid var(--accent);
+    background: var(--accent-tint);
+    color: var(--accent);
+  }
+  .page-cell svg { width: 18px; height: 18px; }
+
+  .page-selection-frame {
+    position: absolute;
+    inset: -4px;
+    border: 1.5px solid var(--accent);
+    border-radius: 4px;
+    pointer-events: none;
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+  .page-wrap { position: relative; }
+
+  /* Floating zoom control */
+  .zoom-control {
+    position: absolute;
+    bottom: 16px;
+    right: 16px;
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-md);
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    font-size: 12px;
+  }
+  .zoom-control button {
+    width: 26px; height: 26px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+  }
+  .zoom-control button:hover { background: var(--hover); }
+  .zoom-level {
+    padding: 0 10px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    min-width: 56px;
+    text-align: center;
+    border-left: 0.5px solid var(--divider);
+    border-right: 0.5px solid var(--divider);
+  }
+
+  /* Right inspector */
+  .inspector {
+    background: var(--panel);
+    border-left: 0.5px solid var(--divider);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .inspector-header {
+    padding: 12px 14px;
+    border-bottom: 0.5px solid var(--divider);
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+  .inspector-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .inspector-sub {
+    font-size: 11px;
+    color: var(--text-sec);
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .section {
+    border-bottom: 0.5px solid var(--divider);
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 120ms;
+  }
+  .section-head:hover { background: var(--hover); }
+  .section-head .chevron {
+    width: 10px; height: 10px;
+    color: var(--text-tert);
+    transition: transform 180ms ease;
+  }
+  .section-head.collapsed .chevron { transform: rotate(-90deg); }
+  .section-head h4 {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--label-caps);
+  }
+
+  .section-body {
+    padding: 4px 14px 14px;
+    display: grid;
+    grid-template-columns: 72px 1fr;
+    gap: 8px 10px;
+    align-items: center;
+    transition: max-height 180ms ease, opacity 150ms ease, padding 180ms ease;
+    overflow: hidden;
+  }
+  .section.collapsed .section-body {
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+  }
+  .section:not(.collapsed) .section-body {
+    max-height: 500px;
+    opacity: 1;
+  }
+
+  .field-label {
+    font-size: 12px;
+    color: var(--text-sec);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .field-input {
+    position: relative;
+  }
+  input[type="text"], input[type="number"], select {
+    width: 100%;
+    height: 24px;
+    padding: 0 8px;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: var(--radius-input);
+    outline: none;
+    transition: border-color 120ms, box-shadow 120ms;
+    font-variant-numeric: tabular-nums;
+  }
+  input[type="text"]:focus, input[type="number"]:focus, select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-ring);
+  }
+  .field-suffix {
+    position: absolute;
+    right: 8px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 11px;
+    color: var(--text-tert);
+    pointer-events: none;
+  }
+  .field-input.has-suffix input { padding-right: 28px; }
+
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3 5l3 3 3-3' stroke='%236E6E73' fill='none' stroke-width='1.5' stroke-linecap='round'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 6px center;
+    padding-right: 22px;
+  }
+
+  /* Color swatch row */
+  .color-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .color-swatch {
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    border: 0.5px solid var(--border);
+    background: #1D1D1F;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .full-row {
+    grid-column: 1 / -1;
+  }
+
+  .btn-row {
+    display: flex; gap: 6px;
+  }
+  .chip-btn {
+    flex: 1;
+    height: 26px;
+    padding: 0 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    border: 0.5px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 120ms;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+  }
+  .chip-btn:hover { border-color: var(--border-strong); background: var(--hover); }
+  .chip-btn.active {
+    background: var(--accent-tint);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  /* Status bar */
+  .statusbar {
+    height: 24px;
+    background: var(--panel);
+    border-top: 0.5px solid var(--divider);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 16px;
+    font-size: 11px;
+    color: var(--text-sec);
+    font-variant-numeric: tabular-nums;
+  }
+  .status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .status-item svg { width: 11px; height: 11px; }
+  .status-divider {
+    width: 1px; height: 12px;
+    background: var(--border);
+  }
+  .status-right { margin-left: auto; display: flex; gap: 16px; }
+
+  /* Theme toggle (floating demo control) */
+  .demo-toggle {
+    position: fixed;
+    bottom: 24px; left: 24px;
+    display: flex;
+    gap: 0;
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    border-radius: 6px;
+    padding: 3px;
+    box-shadow: var(--shadow-md);
+    z-index: 100;
+    font-size: 12px;
+  }
+  .demo-toggle button {
+    padding: 5px 12px;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text-sec);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 150ms;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .demo-toggle button.active {
+    background: var(--accent);
+    color: white;
+  }
+  .demo-toggle button svg { width: 13px; height: 13px; }
+
+  /* Scrollbar refinement */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 5px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tert);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+</style>
+</head>
+<body>
+
+<div class="window">
+  <!-- Titlebar -->
+  <div class="titlebar">
+    <div class="traffic-lights">
+      <span class="tl close"></span>
+      <span class="tl min"></span>
+      <span class="tl max"></span>
+    </div>
+    <div class="title">
+      Academic Figure Layout <span class="subtle">— Untitled</span>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="tb-group">
+      <button class="tb-btn tb-icon-only" title="Undo">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h7a3 3 0 0 1 0 6H8"/><path d="M6 5L3 8l3 3"/></svg>
+      </button>
+      <button class="tb-btn tb-icon-only" title="Redo">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8H5a3 3 0 0 0 0 6h3"/><path d="M10 5l3 3-3 3"/></svg>
+      </button>
+    </div>
+
+    <div class="tb-group">
+      <button class="tb-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6z"/><path d="M9 2v4h4"/></svg>
+        New
+      </button>
+      <button class="tb-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5a1 1 0 0 1 1-1h3l2 2h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        Open
+      </button>
+      <button class="tb-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2h8l2 2v10a0 0 0 0 1 0 0H3a0 0 0 0 1 0 0V2z"/><path d="M5 2v4h5V2"/><path d="M5 10h6"/></svg>
+        Save
+      </button>
+    </div>
+
+    <div class="tb-group">
+      <button class="tb-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11M6 2.5v11"/></svg>
+        Cell Labels
+      </button>
+      <button class="tb-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="4" rx="1"/><rect x="2.5" y="9.5" width="11" height="4" rx="1"/></svg>
+        Row Labels
+      </button>
+      <button class="tb-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M2 8h12"/><circle cx="8" cy="8" r="6"/></svg>
+        Auto Layout
+      </button>
+    </div>
+
+    <div class="tb-group right">
+      <div class="segmented" id="themeSeg">
+        <button class="seg-btn active" data-theme-toggle="light">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M3 13l1.4-1.4M11.6 4.4L13 3"/></svg>
+          Light
+        </button>
+        <button class="seg-btn" data-theme-toggle="dark">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/></svg>
+          Dark
+        </button>
+      </div>
+      <button class="tb-btn primary">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>
+        Export
+      </button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="main">
+    <!-- Left layers panel -->
+    <aside class="left-panel">
+      <div class="panel-tabs">
+        <button class="panel-tab active">Layers</button>
+        <button class="panel-tab">History</button>
+      </div>
+      <div class="layers-header">
+        <span>Figure Layers</span>
+        <button class="icon-btn" title="Add row">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        </button>
+      </div>
+      <div class="layers-list">
+        <div class="row-group">
+          <div class="row-header">
+            <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+            <span class="row-title">Row 1</span>
+            <span class="row-meta">2 cells</span>
+          </div>
+          <div class="cell-item selected">
+            <div class="thumb filled">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="1.5"/><path d="M2 12l3-3 2 2 4-4 3 3v2H2z"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C1</span>figure_a.png</div>
+            <div class="cell-actions">
+              <button class="icon-btn" title="Toggle visibility">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="cell-item">
+            <div class="thumb">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C2</span>Empty</div>
+            <div class="cell-actions">
+              <button class="icon-btn" title="Toggle visibility">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="row-group">
+          <div class="row-header">
+            <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+            <span class="row-title">Row 2</span>
+            <span class="row-meta">2 cells</span>
+          </div>
+          <div class="cell-item">
+            <div class="thumb">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C1</span>Empty</div>
+          </div>
+          <div class="cell-item">
+            <div class="thumb">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C2</span>Empty</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Canvas -->
+    <main class="canvas-area">
+      <div class="canvas-tabs">
+        <div class="tab-item">
+          <span class="dot"></span>
+          Untitled
+          <span class="close-x">×</span>
+        </div>
+      </div>
+      <div class="canvas-viewport">
+        <div class="page-wrap" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+          <div class="page" style="position: relative; top: 0; left: 0; transform: none;">
+            <div class="page-cell selected">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+            <div class="page-cell">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+            <div class="page-cell">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+            <div class="page-cell">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+          </div>
+          <div class="page-selection-frame"></div>
+        </div>
+
+        <div class="zoom-control">
+          <button title="Zoom out">−</button>
+          <div class="zoom-level">100%</div>
+          <button title="Zoom in">+</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right inspector -->
+    <aside class="inspector">
+      <div class="inspector-header">
+        <div class="inspector-title">Project Settings</div>
+        <div class="inspector-sub">210 × 297 mm · 600 dpi</div>
+      </div>
+
+      <div class="section">
+        <div class="section-head" data-toggle>
+          <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+          <h4>Page</h4>
+        </div>
+        <div class="section-body">
+          <label class="field-label">Preset</label>
+          <div class="field-input">
+            <select>
+              <option>Custom</option>
+              <option>A4 Portrait</option>
+              <option>A4 Landscape</option>
+              <option>Letter</option>
+            </select>
+          </div>
+
+          <label class="field-label">Width</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="210.00">
+            <span class="field-suffix">mm</span>
+          </div>
+
+          <label class="field-label">Height</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="297.00">
+            <span class="field-suffix">mm</span>
+          </div>
+
+          <label class="field-label">DPI</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="600">
+            <span class="field-suffix">dpi</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head" data-toggle>
+          <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+          <h4>Margins</h4>
+        </div>
+        <div class="section-body">
+          <label class="field-label">Top</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="0.00">
+            <span class="field-suffix">mm</span>
+          </div>
+          <label class="field-label">Bottom</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="0.00">
+            <span class="field-suffix">mm</span>
+          </div>
+          <label class="field-label">Left</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="0.00">
+            <span class="field-suffix">mm</span>
+          </div>
+          <label class="field-label">Right</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="0.00">
+            <span class="field-suffix">mm</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-head" data-toggle>
+          <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+          <h4>Grid</h4>
+        </div>
+        <div class="section-body">
+          <label class="field-label">Mode</label>
+          <div class="field-input">
+            <select>
+              <option>Stretch Rows to Page</option>
+              <option>Fixed Grid</option>
+              <option>Free Layout</option>
+            </select>
+          </div>
+          <label class="field-label">Alignment</label>
+          <div class="field-input full-row" style="grid-column: 2;">
+            <div class="btn-row">
+              <button class="chip-btn">Top</button>
+              <button class="chip-btn active">Center</button>
+              <button class="chip-btn">Bottom</button>
+            </div>
+          </div>
+          <label class="field-label">Cell Gap</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="2.00">
+            <span class="field-suffix">mm</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section collapsed">
+        <div class="section-head collapsed" data-toggle>
+          <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+          <h4>Corner Labels</h4>
+        </div>
+        <div class="section-body">
+          <label class="field-label">Font</label>
+          <div class="field-input">
+            <select>
+              <option>Arial</option>
+              <option>Helvetica</option>
+              <option>Times New Roman</option>
+            </select>
+          </div>
+          <label class="field-label">Size</label>
+          <div class="field-input has-suffix">
+            <input type="number" value="12">
+            <span class="field-suffix">pt</span>
+          </div>
+          <label class="field-label">Color</label>
+          <div class="field-input">
+            <div class="color-field">
+              <div class="color-swatch"></div>
+              <input type="text" value="#000000" style="flex:1;">
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Status bar -->
+  <div class="statusbar">
+    <div class="status-item">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2v12M2 8h12"/></svg>
+      X 287.0, Y −99.0 mm
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item">Canvas 310 × 397 mm</div>
+    <div class="status-right">
+      <div class="status-item">Row 1 · C1 selected</div>
+      <div class="status-item">4 cells</div>
+    </div>
+  </div>
+</div>
+
+<!-- Theme toggle for the mockup demo -->
+<div class="demo-toggle">
+  <button class="active" data-theme-toggle="light">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M3 13l1.4-1.4M11.6 4.4L13 3"/></svg>
+    Light
+  </button>
+  <button data-theme-toggle="dark">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/></svg>
+    Dark
+  </button>
+</div>
+
+<script>
+  // Section collapse/expand
+  document.querySelectorAll('[data-toggle]').forEach(head => {
+    head.addEventListener('click', () => {
+      const section = head.closest('.section');
+      section.classList.toggle('collapsed');
+      head.classList.toggle('collapsed');
+    });
+  });
+
+  // Row collapse
+  document.querySelectorAll('.row-header').forEach(head => {
+    head.addEventListener('click', () => {
+      head.classList.toggle('collapsed');
+    });
+  });
+
+  // Theme toggle (works on both the toolbar segmented control and the floating one)
+  const setTheme = (theme) => {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.themeToggle === theme);
+    });
+  };
+  document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => setTheme(btn.dataset.themeToggle));
+  });
+
+  // Cell selection on canvas
+  document.querySelectorAll('.page-cell').forEach(cell => {
+    cell.addEventListener('click', () => {
+      document.querySelectorAll('.page-cell').forEach(c => c.classList.remove('selected'));
+      cell.classList.add('selected');
+    });
+  });
+
+  // Cell item selection in layers
+  document.querySelectorAll('.cell-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.cell-item').forEach(c => c.classList.remove('selected'));
+      item.classList.add('selected');
+    });
+  });
+</script>
+
+</body>
+</html>

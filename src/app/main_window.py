@@ -1627,14 +1627,32 @@ class MainWindow(QMainWindow):
         self._refresh_and_update()
 
     def _on_apply_color_to_group(self, subtype: str, color_hex: str):
-        """Apply color to all labels in the same group (numbering or corner)."""
+        """Apply color to all labels in the same group (numbering or corner)
+        as an undoable operation."""
+        targets = []
         for text_item in self.project.text_items:
-            if text_item.scope == "cell":
-                if subtype == "corner" and text_item.subtype == "corner":
-                    text_item.color = color_hex
-                elif subtype == "numbering" and text_item.subtype != "corner":
-                    text_item.color = color_hex
-        self._refresh_and_update()
+            if text_item.scope != "cell":
+                continue
+            if subtype == "corner" and text_item.subtype == "corner":
+                targets.append(text_item)
+            elif subtype == "numbering" and text_item.subtype != "corner":
+                targets.append(text_item)
+
+        if not targets:
+            return
+
+        # Skip no-ops: all targets already have this color.
+        if all(t.color == color_hex for t in targets):
+            return
+
+        desc = f"Apply color to {len(targets)} {subtype} label(s)"
+        cmd = MultiPropertyChangeCommand(
+            targets,
+            {"color": color_hex},
+            self._refresh_and_update,
+            desc,
+        )
+        self.undo_stack.push(cmd)
 
     def _on_add_text(self):
         """Create a floating (canvas-anchored) text item. Position is in mm,
@@ -1791,41 +1809,50 @@ class MainWindow(QMainWindow):
             act = menu.addAction(f"Delete {len(row_indices)} Row(s)")
             act.triggered.connect(_del_rows)
 
-        menu.exec(global_pos if isinstance(global_pos, QPoint) else
-                  QPoint(int(global_pos.x()), int(global_pos.y())))
+        def _show():
+            menu.exec(global_pos if isinstance(global_pos, QPoint) else
+                      QPoint(int(global_pos.x()), int(global_pos.y())))
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, _show)
 
     def _on_empty_context_menu(self, scene_pos, screen_pos):
-        """Right-click on empty canvas area (page background or grey margin)."""
-        from PyQt6.QtCore import QPoint
-        menu = QMenu(self)
+        """Right-click on empty canvas area (page background or grey margin).
 
-        # ── Text ──────────────────────────────────────────────────────
-        add_action = menu.addAction(tr("ctx_add_floating_text_here"))
-        # Place text at click; clamp to page so it stays visible in exports.
+        The menu is deferred to the next event-loop tick via QTimer.singleShot(0)
+        so the synchronous contextMenuEvent handler in CanvasScene finishes and
+        the right-click event is fully consumed BEFORE the nested menu loop
+        begins. Otherwise Qt can re-dispatch the event after the menu closes,
+        causing the context menu to pop up a second time.
+        """
+        from PyQt6.QtCore import QPoint
+        # Clamp the spawn position to the page rect so the new text is always visible.
         page_w = float(getattr(self.project, "page_width_mm", 210.0))
         page_h = float(getattr(self.project, "page_height_mm", 297.0))
         x_mm = max(0.0, min(float(scene_pos.x()), page_w - 5.0))
         y_mm = max(0.0, min(float(scene_pos.y()), page_h - 5.0))
-        add_action.triggered.connect(lambda: self._ctx_add_floating_text_at(x_mm, y_mm))
+        sx, sy = int(screen_pos.x()), int(screen_pos.y())
 
-        # ── Labels & layout ───────────────────────────────────────────
-        menu.addSeparator()
-        menu.addAction(self._act_auto_label_incell)
-        menu.addAction(self._act_auto_label_outcell)
-        menu.addAction(self._act_auto_layout)
+        def _show():
+            menu = QMenu(self)
 
-        # ── Export ────────────────────────────────────────────────────
-        menu.addSeparator()
-        menu.addAction(self._act_export_pdf)
-        menu.addAction(self._act_export_tiff)
-        menu.addAction(self._act_export_jpg)
+            # ── Text ──────────────────────────────────────────────────────
+            add_action = menu.addAction(tr("ctx_add_floating_text_here"))
+            add_action.triggered.connect(lambda: self._ctx_add_floating_text_at(x_mm, y_mm))
 
-        # ── Undo / Redo ───────────────────────────────────────────────
-        menu.addSeparator()
-        menu.addAction(self._undo_action)
-        menu.addAction(self._redo_action)
+            # ── Export ────────────────────────────────────────────────────
+            menu.addSeparator()
+            menu.addAction(self._act_export_pdf)
+            menu.addAction(self._act_export_tiff)
+            menu.addAction(self._act_export_jpg)
 
-        menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+            # ── Undo / Redo ───────────────────────────────────────────────
+            menu.addSeparator()
+            menu.addAction(self._undo_action)
+            menu.addAction(self._redo_action)
+
+            menu.exec(QPoint(sx, sy))
+
+        QTimer.singleShot(0, _show)
 
     def _ctx_add_floating_text_at(self, x_mm: float, y_mm: float):
         """Create a floating text item at the given canvas (mm) position."""

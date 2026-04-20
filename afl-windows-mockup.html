@@ -1,0 +1,1302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Academic Figure Layout — Windows 11 Mockup</title>
+<style>
+  :root {
+    /* Windows 11 Light */
+    --mica: #F3F3F3;
+    --mica-alt: #EEEEEE;
+    --card: #FBFBFB;
+    --card-alt: #FFFFFF;
+    --canvas-bg: #F0F0F0;
+    --surface: #FFFFFF;
+    --surface-subtle: #F9F9F9;
+    --border: #E5E5E5;
+    --border-strong: #D1D1D1;
+    --divider: #EBEBEB;
+    --text: #1A1A1A;
+    --text-sec: #5C5C5C;
+    --text-tert: #8A8A8A;
+    --label-caps: #6E6E6E;
+    --hover: rgba(0,0,0,0.04);
+    --active: rgba(0,0,0,0.08);
+    --accent: #0891B2;
+    --accent-hover: #0E7490;
+    --accent-press: #164E63;
+    --accent-tint: rgba(8, 145, 178, 0.10);
+    --accent-ring: rgba(8, 145, 178, 0.30);
+    --close-hover: #C42B1C;
+    --placeholder: #A0A0A0;
+    --grid-line: #D6D6D6;
+    --shadow-window: 0 20px 60px rgba(0,0,0,0.18), 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-flyout: 0 8px 16px rgba(0,0,0,0.14);
+    --shadow-card: 0 1px 2px rgba(0,0,0,0.04);
+    --radius-window: 8px;
+    --radius-card: 8px;
+    --radius-button: 4px;
+    --radius-input: 4px;
+  }
+
+  [data-theme="dark"] {
+    --mica: #202020;
+    --mica-alt: #1C1C1C;
+    --card: #2B2B2B;
+    --card-alt: #313131;
+    --canvas-bg: #191919;
+    --surface: #2D2D2D;
+    --surface-subtle: #272727;
+    --border: #3B3B3B;
+    --border-strong: #484848;
+    --divider: #333333;
+    --text: #FFFFFF;
+    --text-sec: #CDCDCD;
+    --text-tert: #9E9E9E;
+    --label-caps: #A8A8A8;
+    --hover: rgba(255,255,255,0.06);
+    --active: rgba(255,255,255,0.10);
+    --accent: #4EC9E5;
+    --accent-hover: #22D3EE;
+    --accent-press: #67DEF0;
+    --accent-tint: rgba(78, 201, 229, 0.14);
+    --accent-ring: rgba(78, 201, 229, 0.35);
+    --close-hover: #C42B1C;
+    --placeholder: #6E6E6E;
+    --grid-line: #3B3B3B;
+    --shadow-window: 0 20px 60px rgba(0,0,0,0.55), 0 4px 12px rgba(0,0,0,0.30);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    /* Segoe UI Variable on modern Windows; fallbacks for non-Windows */
+    font-family: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 13px;
+    color: var(--text);
+    /* Desktop wallpaper feel so Mica shows through */
+    background: 
+      radial-gradient(ellipse at 30% 20%, #7b9fc9 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 80%, #a8b8d8 0%, transparent 50%),
+      linear-gradient(135deg, #6b8bb0 0%, #9cb4d4 100%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    transition: background 0.3s ease;
+  }
+  [data-theme="dark"] body {
+    background:
+      radial-gradient(ellipse at 30% 20%, #1e3a5f 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 80%, #2a2a4a 0%, transparent 50%),
+      linear-gradient(135deg, #0a1525 0%, #1a1a2e 100%);
+  }
+
+  /* Window with Mica-like effect */
+  .window {
+    position: absolute;
+    inset: 24px;
+    background: var(--mica);
+    border-radius: var(--radius-window);
+    box-shadow: var(--shadow-window);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    backdrop-filter: blur(40px) saturate(1.5);
+  }
+  [data-theme="dark"] .window {
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+
+  /* Windows 11 title bar */
+  .titlebar {
+    height: 32px;
+    display: flex;
+    align-items: center;
+    background: transparent;
+    padding-left: 12px;
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .titlebar-title {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text);
+    letter-spacing: 0;
+  }
+  .titlebar-title .subtle { color: var(--text-sec); }
+
+  .window-controls {
+    margin-left: auto;
+    display: flex;
+    height: 100%;
+  }
+  .wc-btn {
+    width: 46px;
+    height: 32px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 100ms;
+  }
+  .wc-btn:hover { background: var(--hover); }
+  .wc-btn.close:hover { background: var(--close-hover); color: white; }
+  .wc-btn svg { width: 10px; height: 10px; }
+
+  /* Menu bar (Windows pattern) */
+  .menubar {
+    height: 30px;
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    gap: 2px;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .menu-item {
+    padding: 4px 10px;
+    border-radius: var(--radius-button);
+    color: var(--text);
+    cursor: pointer;
+    transition: background 100ms;
+  }
+  .menu-item:hover { background: var(--hover); }
+
+  /* Command bar (Windows 11 style toolbar) */
+  .commandbar {
+    height: 48px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 8px 6px;
+    flex-shrink: 0;
+  }
+
+  .cmd-group {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 4px;
+  }
+  .cmd-group + .cmd-group::before {
+    content: "";
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin-right: 6px;
+  }
+  .cmd-group.right {
+    margin-left: auto;
+  }
+  .cmd-group.right::before {
+    content: "";
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    margin-right: 6px;
+  }
+
+  .cmd-btn {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 48px;
+    height: 38px;
+    padding: 2px 8px;
+    border-radius: var(--radius-button);
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 100ms, transform 60ms;
+    gap: 2px;
+  }
+  .cmd-btn:hover { background: var(--hover); }
+  .cmd-btn:active { background: var(--active); }
+  .cmd-btn svg { width: 16px; height: 16px; }
+
+  .cmd-btn.horizontal {
+    flex-direction: row;
+    gap: 6px;
+    padding: 0 12px;
+    height: 32px;
+  }
+
+  .cmd-btn.primary {
+    background: var(--accent);
+    color: white;
+    flex-direction: row;
+    gap: 6px;
+    padding: 0 14px;
+    height: 32px;
+    font-size: 13px;
+    font-weight: 400;
+  }
+  .cmd-btn.primary:hover { background: var(--accent-hover); }
+  .cmd-btn.primary:active { background: var(--accent-press); }
+
+  /* Windows 11 toggle switch */
+  .theme-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    height: 32px;
+  }
+  .toggle-switch {
+    position: relative;
+    width: 40px;
+    height: 20px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    cursor: pointer;
+    transition: all 150ms;
+  }
+  .toggle-switch.on {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .toggle-switch::before {
+    content: "";
+    position: absolute;
+    top: 3px; left: 3px;
+    width: 12px; height: 12px;
+    background: var(--text-sec);
+    border-radius: 50%;
+    transition: all 150ms ease;
+  }
+  .toggle-switch.on::before {
+    left: 23px;
+    background: white;
+  }
+  .toggle-label {
+    font-size: 12px;
+    color: var(--text);
+  }
+
+  /* Main body */
+  .main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 240px 1fr 300px;
+    min-height: 0;
+    gap: 4px;
+    padding: 0 4px 4px;
+  }
+
+  /* Panel cards (Windows 11 card pattern) */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* Left panel */
+  .panel-tabs {
+    height: 40px;
+    display: flex;
+    padding: 0 4px;
+    gap: 2px;
+    align-items: center;
+    border-bottom: 1px solid var(--divider);
+    flex-shrink: 0;
+  }
+  .panel-tab {
+    flex: 1;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: var(--radius-button);
+    font-size: 13px;
+    font-weight: 400;
+    color: var(--text-sec);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 120ms;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    position: relative;
+  }
+  .panel-tab.active {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .panel-tab.active::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 20px;
+    height: 3px;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+  .panel-tab:not(.active):hover { background: var(--hover); color: var(--text); }
+
+  .layers-header {
+    padding: 14px 14px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--label-caps);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .icon-btn {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-button);
+    border: none;
+    background: transparent;
+    color: var(--text-sec);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 120ms;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  .icon-btn svg { width: 14px; height: 14px; }
+
+  .layers-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 4px 12px;
+  }
+
+  .row-group { margin-bottom: 4px; }
+  .row-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: var(--radius-button);
+    cursor: pointer;
+    user-select: none;
+    transition: background 100ms;
+  }
+  .row-header:hover { background: var(--hover); }
+  .row-header .chevron {
+    width: 12px; height: 12px;
+    color: var(--text-tert);
+    transition: transform 150ms ease;
+  }
+  .row-header.collapsed .chevron { transform: rotate(-90deg); }
+  .row-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .row-meta {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-tert);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .cell-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px 6px 26px;
+    border-radius: var(--radius-button);
+    cursor: pointer;
+    transition: background 100ms;
+    position: relative;
+    margin: 2px 0;
+  }
+  .cell-item:hover { background: var(--hover); }
+  .cell-item.selected { background: var(--accent-tint); }
+  .cell-item.selected::before {
+    content: "";
+    position: absolute;
+    left: 6px; top: 8px; bottom: 8px;
+    width: 3px;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+
+  .thumb {
+    width: 22px; height: 22px;
+    border-radius: 3px;
+    background: var(--surface);
+    border: 1px dashed var(--border-strong);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tert);
+    flex-shrink: 0;
+  }
+  .thumb.filled {
+    border: 1px solid var(--border);
+    border-style: solid;
+    background: linear-gradient(135deg, #cffafe, #a5f3fc);
+  }
+  [data-theme="dark"] .thumb.filled {
+    background: linear-gradient(135deg, #164e63, #0e7490);
+  }
+  .thumb svg { width: 10px; height: 10px; }
+
+  .cell-label {
+    font-size: 13px;
+    color: var(--text);
+    flex: 1;
+  }
+  .cell-label .tag {
+    color: var(--text-tert);
+    font-variant-numeric: tabular-nums;
+    margin-right: 6px;
+  }
+  .cell-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+    transition: opacity 120ms;
+  }
+  .cell-item:hover .cell-actions,
+  .cell-item.selected .cell-actions { opacity: 1; }
+
+  /* Canvas */
+  .canvas-panel {
+    background: var(--canvas-bg);
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+  }
+
+  .canvas-tabs {
+    height: 36px;
+    background: var(--mica-alt);
+    border-bottom: 1px solid var(--divider);
+    display: flex;
+    align-items: center;
+    padding: 0 4px;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .tab-item {
+    height: 28px;
+    padding: 0 12px 0 14px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    margin: 0 2px;
+  }
+  .tab-item .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+  .tab-item .close-x {
+    width: 18px; height: 18px;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tert);
+    font-size: 14px;
+  }
+  .tab-item .close-x:hover { background: var(--hover); color: var(--text); }
+
+  .canvas-viewport {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background-image: radial-gradient(circle at 1px 1px, var(--grid-line) 1px, transparent 0);
+    background-size: 20px 20px;
+  }
+
+  .page-wrap {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .page {
+    position: relative;
+    width: 320px; height: 452px;
+    background: var(--surface);
+    box-shadow: var(--shadow-flyout), 0 0 0 1px var(--border);
+    padding: 12px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    gap: 8px;
+  }
+  .page-cell {
+    border: 1.5px dashed var(--border-strong);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--placeholder);
+    font-size: 11px;
+    background: var(--surface-subtle);
+    transition: all 150ms ease;
+    cursor: pointer;
+  }
+  .page-cell:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-tint);
+  }
+  .page-cell.selected {
+    border: 1.5px solid var(--accent);
+    background: var(--accent-tint);
+    color: var(--accent);
+  }
+  .page-cell svg { width: 18px; height: 18px; }
+
+  .page-selection-frame {
+    position: absolute;
+    inset: -4px;
+    border: 2px solid var(--accent);
+    border-radius: 2px;
+    pointer-events: none;
+    box-shadow: 0 0 0 4px var(--accent-ring);
+  }
+
+  /* Zoom control */
+  .zoom-control {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-flyout);
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    font-size: 12px;
+    height: 32px;
+  }
+  .zoom-control button {
+    width: 32px; height: 30px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 14px;
+    font-family: inherit;
+  }
+  .zoom-control button:hover { background: var(--hover); }
+  .zoom-level {
+    padding: 0 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    min-width: 60px;
+    text-align: center;
+    border-left: 1px solid var(--divider);
+    border-right: 1px solid var(--divider);
+    line-height: 30px;
+  }
+
+  /* Right inspector — Windows 11 Expander style */
+  .inspector {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .inspector-header {
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid var(--divider);
+    background: var(--card);
+    flex-shrink: 0;
+  }
+  .inspector-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.01em;
+    font-family: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", sans-serif;
+  }
+  .inspector-sub {
+    font-size: 12px;
+    color: var(--text-sec);
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .inspector-body {
+    padding: 8px;
+    overflow-y: auto;
+  }
+
+  /* Windows 11 Expander */
+  .expander {
+    background: var(--card-alt);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+  .expander-head {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 100ms;
+    min-height: 44px;
+  }
+  .expander-head:hover { background: var(--hover); }
+  .expander-head h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .expander-head .sub {
+    font-size: 11px;
+    color: var(--text-sec);
+    font-weight: 400;
+    margin-left: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .expander-head .chevron {
+    width: 14px; height: 14px;
+    margin-left: auto;
+    color: var(--text-sec);
+    transition: transform 180ms ease;
+  }
+  .expander.open .expander-head .chevron { transform: rotate(180deg); }
+
+  .expander-body {
+    padding: 4px 14px 14px;
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 10px 12px;
+    align-items: center;
+    border-top: 1px solid var(--divider);
+    max-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    transition: max-height 200ms ease, opacity 150ms ease, padding 200ms ease;
+    padding-top: 0;
+    padding-bottom: 0;
+  }
+  .expander.open .expander-body {
+    max-height: 600px;
+    opacity: 1;
+    padding-top: 12px;
+    padding-bottom: 14px;
+  }
+
+  .field-label {
+    font-size: 13px;
+    color: var(--text-sec);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .field-input { position: relative; }
+
+  input[type="text"], input[type="number"], select {
+    width: 100%;
+    height: 30px;
+    padding: 0 10px;
+    font-size: 13px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-bottom: 2px solid var(--border-strong);
+    border-radius: var(--radius-input);
+    outline: none;
+    transition: border-color 120ms, box-shadow 120ms;
+    font-variant-numeric: tabular-nums;
+  }
+  input[type="text"]:hover, input[type="number"]:hover, select:hover {
+    background: var(--surface-subtle);
+  }
+  input[type="text"]:focus, input[type="number"]:focus, select:focus {
+    border-bottom: 2px solid var(--accent);
+  }
+
+  .field-suffix {
+    position: absolute;
+    right: 10px; top: 50%;
+    transform: translateY(-50%);
+    font-size: 12px;
+    color: var(--text-tert);
+    pointer-events: none;
+  }
+  .field-input.has-suffix input { padding-right: 32px; }
+
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3 5l3 3 3-3' stroke='%235C5C5C' fill='none' stroke-width='1.5' stroke-linecap='round'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    padding-right: 26px;
+  }
+  [data-theme="dark"] select {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M3 5l3 3 3-3' stroke='%23CDCDCD' fill='none' stroke-width='1.5' stroke-linecap='round'/></svg>");
+  }
+
+  .color-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .color-swatch {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-input);
+    border: 1px solid var(--border-strong);
+    background: #1A1A1A;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .full-row { grid-column: 1 / -1; }
+
+  .btn-row {
+    display: flex;
+    gap: 4px;
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-input);
+    padding: 2px;
+  }
+  .chip-btn {
+    flex: 1;
+    height: 24px;
+    padding: 0 8px;
+    font-size: 12px;
+    border-radius: 2px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 120ms;
+    font-family: inherit;
+  }
+  .chip-btn:hover { background: var(--hover); }
+  .chip-btn.active {
+    background: var(--accent-tint);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  /* Status bar */
+  .statusbar {
+    height: 26px;
+    background: var(--mica);
+    border-top: 1px solid var(--divider);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 16px;
+    font-size: 11px;
+    color: var(--text-sec);
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .status-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .status-item svg { width: 11px; height: 11px; }
+  .status-divider {
+    width: 1px; height: 12px;
+    background: var(--border);
+  }
+  .status-right { margin-left: auto; display: flex; gap: 16px; }
+
+  /* Platform comparison banner */
+  .platform-badge {
+    position: fixed;
+    top: 32px; right: 32px;
+    background: rgba(0,0,0,0.6);
+    color: white;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    backdrop-filter: blur(20px);
+    z-index: 99;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .platform-badge svg { width: 12px; height: 12px; }
+
+  /* Demo theme toggle */
+  .demo-toggle {
+    position: fixed;
+    bottom: 32px; left: 32px;
+    display: flex;
+    gap: 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px;
+    box-shadow: var(--shadow-flyout);
+    z-index: 100;
+    font-size: 12px;
+  }
+  .demo-toggle button {
+    padding: 6px 14px;
+    background: transparent;
+    border: none;
+    font-family: inherit;
+    font-size: 12px;
+    color: var(--text-sec);
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 120ms;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .demo-toggle button.active {
+    background: var(--accent);
+    color: white;
+  }
+  .demo-toggle button svg { width: 13px; height: 13px; }
+
+  /* Windows 11 scrollbar */
+  ::-webkit-scrollbar { width: 14px; height: 14px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: transparent;
+    border: 4px solid transparent;
+    border-radius: 7px;
+    background-clip: padding-box;
+  }
+  *:hover > ::-webkit-scrollbar-thumb,
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-strong);
+    background-clip: padding-box;
+    border: 4px solid transparent;
+  }
+</style>
+</head>
+<body>
+
+<div class="platform-badge">
+  <svg viewBox="0 0 16 16" fill="currentColor"><path d="M0 2.5l6.5-.9v6.3H0zm0 10.9l6.5.9V7.3H0zm7.2 1L16 15.6V7.3H7.2zm0-12.8v6.2H16V0z"/></svg>
+  Windows 11
+</div>
+
+<div class="window">
+  <!-- Title bar -->
+  <div class="titlebar">
+    <div class="titlebar-title">
+      Academic Figure Layout <span class="subtle">— Untitled</span>
+    </div>
+    <div class="window-controls">
+      <button class="wc-btn" title="Minimize">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 5h10"/></svg>
+      </button>
+      <button class="wc-btn" title="Maximize">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="0.5" width="9" height="9"/></svg>
+      </button>
+      <button class="wc-btn close" title="Close">
+        <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1"><path d="M0 0l10 10M10 0L0 10"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Menu bar -->
+  <div class="menubar">
+    <div class="menu-item">File</div>
+    <div class="menu-item">Edit</div>
+    <div class="menu-item">View</div>
+    <div class="menu-item">Layout</div>
+    <div class="menu-item">Help</div>
+  </div>
+
+  <!-- Command bar -->
+  <div class="commandbar">
+    <div class="cmd-group">
+      <button class="cmd-btn" title="Undo (Ctrl+Z)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h7a3 3 0 0 1 0 6H8"/><path d="M6 5L3 8l3 3"/></svg>
+        Undo
+      </button>
+      <button class="cmd-btn" title="Redo (Ctrl+Y)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8H5a3 3 0 0 0 0 6h3"/><path d="M10 5l3 3-3 3"/></svg>
+        Redo
+      </button>
+    </div>
+
+    <div class="cmd-group">
+      <button class="cmd-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V6z"/><path d="M9 2v4h4"/></svg>
+        New
+      </button>
+      <button class="cmd-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5a1 1 0 0 1 1-1h3l2 2h5a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/></svg>
+        Open
+      </button>
+      <button class="cmd-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2h8l2 2v10H3V2z"/><path d="M5 2v4h5V2"/><path d="M5 10h6"/></svg>
+        Save
+      </button>
+    </div>
+
+    <div class="cmd-group">
+      <button class="cmd-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="1"/><path d="M2.5 6h11M6 2.5v11"/></svg>
+        Cell Labels
+      </button>
+      <button class="cmd-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="4" rx="1"/><rect x="2.5" y="9.5" width="11" height="4" rx="1"/></svg>
+        Row Labels
+      </button>
+      <button class="cmd-btn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v12M2 8h12"/><circle cx="8" cy="8" r="6"/></svg>
+        Auto Layout
+      </button>
+    </div>
+
+    <div class="cmd-group right">
+      <div class="theme-toggle">
+        <span class="toggle-label">Dark</span>
+        <div class="toggle-switch" id="themeSwitch"></div>
+      </div>
+      <button class="cmd-btn primary">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2v8M5 7l3 3 3-3M3 13h10"/></svg>
+        Export
+      </button>
+    </div>
+  </div>
+
+  <!-- Main content -->
+  <div class="main">
+    <!-- Left panel -->
+    <aside class="panel">
+      <div class="panel-tabs">
+        <button class="panel-tab active">Layers</button>
+        <button class="panel-tab">History</button>
+      </div>
+      <div class="layers-header">
+        <span>Figure Layers</span>
+        <button class="icon-btn" title="Add row">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>
+        </button>
+      </div>
+      <div class="layers-list">
+        <div class="row-group">
+          <div class="row-header">
+            <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+            <span class="row-title">Row 1</span>
+            <span class="row-meta">2 cells</span>
+          </div>
+          <div class="cell-item selected">
+            <div class="thumb filled">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="6" cy="6" r="1.5"/><path d="M2 12l3-3 2 2 4-4 3 3v2H2z"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C1</span>figure_a.png</div>
+            <div class="cell-actions">
+              <button class="icon-btn">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="cell-item">
+            <div class="thumb">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C2</span>Empty</div>
+          </div>
+        </div>
+        <div class="row-group">
+          <div class="row-header">
+            <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4l3 3 3-3"/></svg>
+            <span class="row-title">Row 2</span>
+            <span class="row-meta">2 cells</span>
+          </div>
+          <div class="cell-item">
+            <div class="thumb">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C1</span>Empty</div>
+          </div>
+          <div class="cell-item">
+            <div class="thumb">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+            </div>
+            <div class="cell-label"><span class="tag">C2</span>Empty</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Canvas -->
+    <main class="canvas-panel">
+      <div class="canvas-tabs">
+        <div class="tab-item">
+          <span class="dot"></span>
+          Untitled
+          <span class="close-x">×</span>
+        </div>
+      </div>
+      <div class="canvas-viewport">
+        <div class="page-wrap">
+          <div class="page">
+            <div class="page-cell selected">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+            <div class="page-cell">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+            <div class="page-cell">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+            <div class="page-cell">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M8 4v8M4 8h8"/></svg>
+              Drop image
+            </div>
+          </div>
+          <div class="page-selection-frame"></div>
+        </div>
+
+        <div class="zoom-control">
+          <button>−</button>
+          <div class="zoom-level">100%</div>
+          <button>+</button>
+        </div>
+      </div>
+    </main>
+
+    <!-- Right inspector -->
+    <aside class="panel inspector">
+      <div class="inspector-header">
+        <div class="inspector-title">Project Settings</div>
+        <div class="inspector-sub">210 × 297 mm · 600 dpi</div>
+      </div>
+
+      <div class="inspector-body">
+        <div class="expander open">
+          <div class="expander-head" data-toggle>
+            <h4>Page</h4>
+            <span class="sub">A4 · Custom</span>
+            <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+          </div>
+          <div class="expander-body">
+            <label class="field-label">Preset</label>
+            <div class="field-input">
+              <select>
+                <option>Custom</option>
+                <option>A4 Portrait</option>
+                <option>A4 Landscape</option>
+                <option>Letter</option>
+              </select>
+            </div>
+            <label class="field-label">Width</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="210.00">
+              <span class="field-suffix">mm</span>
+            </div>
+            <label class="field-label">Height</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="297.00">
+              <span class="field-suffix">mm</span>
+            </div>
+            <label class="field-label">DPI</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="600">
+              <span class="field-suffix">dpi</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="expander open">
+          <div class="expander-head" data-toggle>
+            <h4>Margins</h4>
+            <span class="sub">0.00 all sides</span>
+            <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+          </div>
+          <div class="expander-body">
+            <label class="field-label">Top</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="0.00">
+              <span class="field-suffix">mm</span>
+            </div>
+            <label class="field-label">Bottom</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="0.00">
+              <span class="field-suffix">mm</span>
+            </div>
+            <label class="field-label">Left</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="0.00">
+              <span class="field-suffix">mm</span>
+            </div>
+            <label class="field-label">Right</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="0.00">
+              <span class="field-suffix">mm</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="expander">
+          <div class="expander-head" data-toggle>
+            <h4>Grid</h4>
+            <span class="sub">Stretch · Center</span>
+            <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+          </div>
+          <div class="expander-body">
+            <label class="field-label">Mode</label>
+            <div class="field-input">
+              <select>
+                <option>Stretch Rows to Page</option>
+                <option>Fixed Grid</option>
+                <option>Free Layout</option>
+              </select>
+            </div>
+            <label class="field-label">Alignment</label>
+            <div class="field-input" style="grid-column: 2;">
+              <div class="btn-row">
+                <button class="chip-btn">Top</button>
+                <button class="chip-btn active">Center</button>
+                <button class="chip-btn">Bottom</button>
+              </div>
+            </div>
+            <label class="field-label">Cell Gap</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="2.00">
+              <span class="field-suffix">mm</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="expander">
+          <div class="expander-head" data-toggle>
+            <h4>Corner Labels</h4>
+            <span class="sub">Arial · 12 pt</span>
+            <svg class="chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6l4 4 4-4"/></svg>
+          </div>
+          <div class="expander-body">
+            <label class="field-label">Font</label>
+            <div class="field-input">
+              <select>
+                <option>Arial</option>
+                <option>Segoe UI</option>
+                <option>Times New Roman</option>
+              </select>
+            </div>
+            <label class="field-label">Size</label>
+            <div class="field-input has-suffix">
+              <input type="number" value="12">
+              <span class="field-suffix">pt</span>
+            </div>
+            <label class="field-label">Color</label>
+            <div class="field-input">
+              <div class="color-field">
+                <div class="color-swatch"></div>
+                <input type="text" value="#000000" style="flex:1;">
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Status bar -->
+  <div class="statusbar">
+    <div class="status-item">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2v12M2 8h12"/></svg>
+      X 287.0, Y −99.0 mm
+    </div>
+    <div class="status-divider"></div>
+    <div class="status-item">Canvas 310 × 397 mm</div>
+    <div class="status-right">
+      <div class="status-item">Row 1 · C1 selected</div>
+      <div class="status-item">4 cells</div>
+    </div>
+  </div>
+</div>
+
+<div class="demo-toggle">
+  <button class="active" data-theme-toggle="light">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="8" cy="8" r="3"/><path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l1.4 1.4M11.6 11.6L13 13M3 13l1.4-1.4M11.6 4.4L13 3"/></svg>
+    Light
+  </button>
+  <button data-theme-toggle="dark">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/></svg>
+    Dark
+  </button>
+</div>
+
+<script>
+  // Expander toggle
+  document.querySelectorAll('[data-toggle]').forEach(head => {
+    head.addEventListener('click', () => {
+      head.closest('.expander').classList.toggle('open');
+    });
+  });
+
+  // Row collapse
+  document.querySelectorAll('.row-header').forEach(head => {
+    head.addEventListener('click', () => head.classList.toggle('collapsed'));
+  });
+
+  // Theme toggle — connects both the in-app switch and the demo toggle
+  const setTheme = (theme) => {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.themeToggle === theme);
+    });
+    const sw = document.getElementById('themeSwitch');
+    if (sw) sw.classList.toggle('on', theme === 'dark');
+  };
+  document.querySelectorAll('[data-theme-toggle]').forEach(btn => {
+    btn.addEventListener('click', () => setTheme(btn.dataset.themeToggle));
+  });
+  document.getElementById('themeSwitch').addEventListener('click', function() {
+    const isDark = this.classList.contains('on');
+    setTheme(isDark ? 'light' : 'dark');
+  });
+
+  // Cell selection
+  document.querySelectorAll('.page-cell').forEach(cell => {
+    cell.addEventListener('click', () => {
+      document.querySelectorAll('.page-cell').forEach(c => c.classList.remove('selected'));
+      cell.classList.add('selected');
+    });
+  });
+  document.querySelectorAll('.cell-item').forEach(item => {
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.cell-item').forEach(c => c.classList.remove('selected'));
+      item.classList.add('selected');
+    });
+  });
+</script>
+</body>
+</html>
