@@ -5,13 +5,16 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QToolBar, QPushButton, QToolButton, QSplitter, QSplitterHandle, QFileDialog,
-    QMessageBox, QSpinBox, QLabel, QComboBox,
-    QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox
+    QMessageBox, QSpinBox, QLabel, QComboBox, QFrame, QGraphicsOpacityEffect,
+    QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
+    QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings
+from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack
 from PyQt6.QtWidgets import QUndoView
-from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, DARK, LIGHT
+from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
+from src.app.icons import make_icon
+from src.app.theme_segmented import ThemeSegmented
 from src.app.i18n import tr, set_language, current_language
 
 # Try importing QOpenGLWidget for GPU acceleration
@@ -166,11 +169,25 @@ class MainWindow(QMainWindow):
         self._current_project_path = None
         self._current_theme = LIGHT
 
+        # Registry for toolbar actions whose icon is recoloured on theme
+        # change. Populated by _setup_ui via _register_themed_action().
+        self._themed_actions: dict[QAction, str] = {}
+
         # UI Components (tab_widget, layers panel, inspector created here)
         self._setup_ui()
 
         # Connect inspector / layers panel signals (once, not per-tab)
         self._connect_static_signals()
+
+        # Theme-switch fade overlay (covers the whole window briefly)
+        self._theme_overlay = QWidget(self)
+        self._theme_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._theme_overlay.setStyleSheet("background-color: rgba(0,0,0,1);")
+        self._theme_overlay.hide()
+        self._overlay_fx = QGraphicsOpacityEffect(self._theme_overlay)
+        self._overlay_fx.setOpacity(0.0)
+        self._theme_overlay.setGraphicsEffect(self._overlay_fx)
+        self._overlay_anim: QPropertyAnimation | None = None
 
         # Create the first tab with a default project
         initial_project = Project()
@@ -225,7 +242,7 @@ class MainWindow(QMainWindow):
         # Toolbar
         self.toolbar = QToolBar()
         self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.toolbar.setIconSize(QSize(16, 16))
+        self.toolbar.setIconSize(QSize(20, 20))
         self.toolbar.setMovable(False)
         self.addToolBar(self.toolbar)
         self.toolbar.toggleViewAction().setEnabled(False)
@@ -275,13 +292,13 @@ class MainWindow(QMainWindow):
         # ── Undo / Redo ──
         self._undo_action = QAction(tr("action_undo"), self)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        self._undo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowBack))
+        self._register_themed_action(self._undo_action, "undo")
         self._undo_action.setEnabled(False)
         self._undo_action.triggered.connect(lambda: self.undo_stack.undo())
 
         self._redo_action = QAction(tr("action_redo"), self)
         self._redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        self._redo_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_ArrowForward))
+        self._register_themed_action(self._redo_action, "redo")
         self._redo_action.setEnabled(False)
         self._redo_action.triggered.connect(lambda: self.undo_stack.redo())
 
@@ -296,19 +313,19 @@ class MainWindow(QMainWindow):
         # ── File Actions ──
         new_action = QAction(tr("action_new"), self)
         new_action.setShortcut(QKeySequence.StandardKey.New)
-        new_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        self._register_themed_action(new_action, "new")
         new_action.triggered.connect(self._on_new_project)
         self._act_new = new_action
 
         open_action = QAction(tr("action_open"), self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
-        open_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogOpenButton))
+        self._register_themed_action(open_action, "open")
         open_action.triggered.connect(self._on_open_project)
         self._act_open = open_action
 
         save_action = QAction(tr("action_save"), self)
         save_action.setShortcut(QKeySequence.StandardKey.Save)
-        save_action.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        self._register_themed_action(save_action, "save")
         save_action.triggered.connect(self._on_save_project)
         self._act_save = save_action
 
@@ -386,18 +403,21 @@ class MainWindow(QMainWindow):
 
         auto_label_incell_action = QAction(tr("action_auto_label_incell"), self)
         auto_label_incell_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        self._register_themed_action(auto_label_incell_action, "cell_labels")
         auto_label_incell_action.triggered.connect(self._on_auto_label_incell)
         edit_menu.addAction(auto_label_incell_action)
         self._act_auto_label_incell = auto_label_incell_action
 
         auto_label_outcell_action = QAction(tr("action_auto_label_outcell"), self)
         auto_label_outcell_action.setShortcut(QKeySequence("Ctrl+Shift+K"))
+        self._register_themed_action(auto_label_outcell_action, "row_labels")
         auto_label_outcell_action.triggered.connect(self._on_auto_label_outcell)
         edit_menu.addAction(auto_label_outcell_action)
         self._act_auto_label_outcell = auto_label_outcell_action
 
         auto_layout_action = QAction(tr("action_auto_layout"), self)
         auto_layout_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
+        self._register_themed_action(auto_layout_action, "auto_layout")
         auto_layout_action.triggered.connect(self._on_auto_layout)
         edit_menu.addAction(auto_layout_action)
         self._act_auto_layout = auto_layout_action
@@ -437,26 +457,36 @@ class MainWindow(QMainWindow):
         self.toolbar.addAction(auto_layout_action)
         self.toolbar.addSeparator()
 
-        # ── Toolbar — Export dropdown button ──
+        # ── Right-aligned toolbar group ─────────────────────────────────
+        # A stretch spacer pushes the following widgets to the right edge,
+        # matching the ``.tb-group.right`` region in the redesign mockups.
+        self._toolbar_spacer = QWidget(self)
+        self._toolbar_spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self._toolbar_spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._toolbar_spacer.setStyleSheet("background: transparent;")
+        self.toolbar.addWidget(self._toolbar_spacer)
+
+        # Light / Dark segmented pill.
+        self._theme_segmented = ThemeSegmented(initial=self._current_theme, parent=self)
+        self._theme_segmented.themeChanged.connect(self._apply_theme)
+        self.toolbar.addWidget(self._theme_segmented)
+
+        # Primary Export button (accent colour). QToolButton with
+        # ``primary=true`` is styled by the QSS in ``theme.py``.
         export_button = QToolButton(self)
         export_button.setText(tr("toolbar_export"))
-        self._export_button = export_button
+        export_button.setProperty("primary", True)
         export_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        export_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
+        export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         export_menu = QMenu(self)
         export_menu.addAction(export_pdf_action)
         export_menu.addAction(export_tiff_action)
         export_menu.addAction(export_jpg_action)
         export_button.setMenu(export_menu)
-        export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._export_button = export_button  # icon applied via _refresh_toolbar_icons
         self.toolbar.addWidget(export_button)
-        self.toolbar.addSeparator()
-
-        # Theme toggle button in toolbar
-        self._theme_toolbar_action = QAction("☀ Light", self)
-        self._theme_toolbar_action.setToolTip("Toggle light / dark theme (Ctrl+Shift+T)")
-        self._theme_toolbar_action.triggered.connect(self._on_toggle_theme)
-        self.toolbar.addAction(self._theme_toolbar_action)
 
         # ── Preview-mode toggle ──
         self._act_preview_mode = QAction(tr("action_preview_mode"), self)
@@ -525,7 +555,18 @@ class MainWindow(QMainWindow):
         self.selection_info_label = QLabel("")
         self.canvas_size_label = QLabel("Canvas: -")
         self.zoom_label = QLabel("Zoom: 100%")
+
+        def _status_divider() -> QFrame:
+            f = QFrame()
+            f.setObjectName("statusDivider")
+            f.setFrameShape(QFrame.Shape.VLine)
+            f.setFixedSize(1, 12)
+            return f
+
         self.statusbar.addWidget(self.mouse_pos_label)
+        self.statusbar.addWidget(_status_divider())
+        self.statusbar.addWidget(self.canvas_size_label)
+        self.statusbar.addWidget(_status_divider())
         self.statusbar.addWidget(self.selection_info_label)
 
         # Update-available banner (hidden unless a newer release is detected
@@ -540,8 +581,6 @@ class MainWindow(QMainWindow):
         self.update_available_label.linkActivated.connect(self._on_update_banner_clicked)
         self.update_available_label.hide()
         self.statusbar.addPermanentWidget(self.update_available_label)
-
-        self.statusbar.addPermanentWidget(self.canvas_size_label)
         self.statusbar.addPermanentWidget(self.zoom_label)
 
     def _connect_static_signals(self):
@@ -632,6 +671,9 @@ class MainWindow(QMainWindow):
         # Apply current undo limit from settings
         limit = int(self._settings.value("max_history", 200))
         tab.undo_stack.setUndoLimit(limit)
+
+        # Seed canvas colours with the current theme before any content loads.
+        tab.scene.apply_theme(get_tokens(self._current_theme))
 
         self._tabs.append(tab)
         idx = self.tab_widget.addTab(tab.view, self._tab_title(tab))
@@ -768,7 +810,17 @@ class MainWindow(QMainWindow):
         if idx == self._active_tab_idx:
             self._disconnect_tab_signals(tab)
         self._tabs.pop(idx)
+
+        # Block QTabWidget.currentChanged during removeTab(): Qt picks a new
+        # current index synchronously and emits currentChanged, which would
+        # fire _on_tab_changed -> _activate_tab(new_idx), connecting all
+        # per-tab signals. The explicit _activate_tab call below would then
+        # connect them a SECOND time, doubling every per-tab signal. The
+        # visible symptom was drag-and-drop reopening a .figlayout spawning
+        # multiple tabs (one extra tab per past close/reopen cycle).
+        self.tab_widget.blockSignals(True)
         self.tab_widget.removeTab(idx)
+        self.tab_widget.blockSignals(False)
 
         # Repoint active index
         if len(self._tabs) == 0:
@@ -803,16 +855,89 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         app.setPalette(build_palette(theme))
         app.setStyleSheet(get_stylesheet(theme))
-        self.layers_panel.tree.setStyleSheet(get_layers_tree_stylesheet(theme))
+        self.layers_panel.apply_theme(get_tokens(theme))
+
+        # Recolour toolbar icons + segmented glyphs to match the new theme.
+        self._refresh_toolbar_icons()
+
+        # Keep the segmented pill in sync when the theme was flipped via
+        # keyboard or menu (not by the user clicking the pill itself).
+        if hasattr(self, "_theme_segmented"):
+            self._theme_segmented.set_theme(theme)
+
         self._update_theme_labels()
+
+        # Apply canvas visuals (background grid, cell colours) to all scenes.
+        tokens = get_tokens(theme)
+        for tab in self._tabs:
+            if tab.scene:
+                tab.scene.apply_theme(tokens)
+
+        self._flash_theme_overlay()
+
+    def _flash_theme_overlay(self) -> None:
+        """Brief fade-out overlay to smooth the instant theme colour swap."""
+        if not hasattr(self, "_theme_overlay"):
+            return
+        overlay = self._theme_overlay
+        overlay.resize(self.size())
+        overlay.raise_()
+        overlay.show()
+        self._overlay_fx.setOpacity(0.28)
+
+        if self._overlay_anim is not None:
+            self._overlay_anim.stop()
+
+        anim = QPropertyAnimation(self._overlay_fx, b"opacity", self)
+        anim.setDuration(220)
+        anim.setStartValue(0.28)
+        anim.setEndValue(0.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.finished.connect(overlay.hide)
+        anim.start()
+        self._overlay_anim = anim
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_theme_overlay") and self._theme_overlay.isVisible():
+            self._theme_overlay.resize(self.size())
+
+    # ------------------------------------------------------------------
+    # Themed toolbar icon helpers
+    # ------------------------------------------------------------------
+
+    def _register_themed_action(self, action: QAction, icon_name: str) -> None:
+        """Mark ``action`` as owning a themed line icon.
+
+        The actual ``QIcon`` is created now so the action looks correct
+        before ``_apply_theme`` runs; subsequent theme changes recolour
+        it via ``_refresh_toolbar_icons``.
+        """
+        self._themed_actions[action] = icon_name
+        tokens = get_tokens(self._current_theme)
+        action.setIcon(make_icon(icon_name, tokens["text"]))
+
+    def _refresh_toolbar_icons(self) -> None:
+        """Rebuild every themed icon using the current theme's palette."""
+        tokens = get_tokens(self._current_theme)
+        text_col = tokens["text"]
+        for action, name in self._themed_actions.items():
+            action.setIcon(make_icon(name, text_col))
+
+        # Primary Export button uses on_accent (white-ish) since it sits
+        # on the filled accent background.
+        if hasattr(self, "_export_button"):
+            self._export_button.setIcon(make_icon("export", tokens["on_accent"]))
+
+        # Segmented pill: active glyph picks up accent, idle is text_sec.
+        if hasattr(self, "_theme_segmented"):
+            self._theme_segmented.refresh_icons(tokens["accent"], tokens["text_sec"])
 
     def _update_theme_labels(self):
         if self._current_theme == DARK:
             self._theme_action.setText(tr("action_switch_light"))
-            self._theme_toolbar_action.setText(tr("action_light_theme"))
         else:
             self._theme_action.setText(tr("action_switch_dark"))
-            self._theme_toolbar_action.setText(tr("action_dark_theme"))
 
     def _on_toggle_language(self):
         new_lang = "zh" if current_language() == "en" else "en"
@@ -907,7 +1032,7 @@ class MainWindow(QMainWindow):
         self.zoom_label.setText(f"Zoom: {int(zoom_level * 100)}%")
 
     def _on_mouse_pos_changed(self, x_mm, y_mm):
-        self.mouse_pos_label.setText(f"  X: {x_mm:.1f} mm  Y: {y_mm:.1f} mm")
+        self.mouse_pos_label.setText(f"  X {x_mm:.1f},  Y {y_mm:.1f} mm")
 
     # ------------------------------------------------------------------
     # Cell navigation helpers

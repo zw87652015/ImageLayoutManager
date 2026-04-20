@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QFormLayout, QHBoxLayout,
     QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QFontComboBox,
-    QLineEdit, QPushButton, QCheckBox, QScrollArea, QColorDialog
+    QLineEdit, QPushButton, QCheckBox, QScrollArea, QColorDialog, QFrame
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QColor
@@ -140,6 +140,69 @@ class ColorPickerWidget(QWidget):
         self.colorChanged.emit(self._color)
 
 
+class CollapsibleSection(QWidget):
+    """Inspector panel section: clickable uppercase header + collapsible body."""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("collapsibleSection")
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._header = QWidget()
+        self._header.setObjectName("sectionHead")
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header.setFixedHeight(34)
+        h_lay = QHBoxLayout(self._header)
+        h_lay.setContentsMargins(14, 0, 14, 0)
+        h_lay.setSpacing(6)
+
+        self._chevron = QLabel("▾")
+        self._chevron.setObjectName("sectionChevron")
+        self._chevron.setFixedWidth(12)
+        h_lay.addWidget(self._chevron)
+
+        self._title_lbl = QLabel()
+        self._title_lbl.setObjectName("sectionTitle")
+        self.set_title(title)
+        h_lay.addWidget(self._title_lbl, 1)
+
+        outer.addWidget(self._header)
+
+        self._body = QWidget()
+        self._body.setObjectName("sectionBody")
+        self._form = QFormLayout(self._body)
+        self._form.setVerticalSpacing(8)
+        self._form.setHorizontalSpacing(10)
+        self._form.setContentsMargins(14, 4, 14, 14)
+        self._form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+        outer.addWidget(self._body)
+
+        sep = QFrame()
+        sep.setObjectName("sectionDivider")
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setFixedHeight(1)
+        outer.addWidget(sep)
+
+        self._collapsed = False
+        self._header.mousePressEvent = lambda e: self._toggle()
+
+    def set_title(self, title: str) -> None:
+        self._title_lbl.setText(title.upper())
+
+    def _toggle(self) -> None:
+        self._collapsed = not self._collapsed
+        self._body.setVisible(not self._collapsed)
+        self._chevron.setText("▸" if self._collapsed else "▾")
+
+
 class Inspector(QWidget):
     # Signals for property changes
     cell_property_changed = pyqtSignal(dict) # {property: value}
@@ -175,10 +238,8 @@ class Inspector(QWidget):
         self.setMinimumWidth(300)
         
         # --- Project Settings Group (Default View) ---
-        self.project_group = QGroupBox("Project Settings")
-        self.project_layout = QFormLayout()
-        self.project_layout.setSpacing(3)
-        self.project_layout.setContentsMargins(8, 4, 8, 6)
+        self.project_group = CollapsibleSection("Project Settings")
+        self.project_layout = self.project_group._form
         
         self.dpi_spin = QSpinBox()
         self.dpi_spin.setRange(72, 2400)
@@ -279,14 +340,11 @@ class Inspector(QWidget):
         )
         self.project_layout.addRow(self._fl("lbl_cell_gap"), self.gap_spin)
         
-        self.project_group.setLayout(self.project_layout)
         self.layout.addWidget(self.project_group)
         
         # --- Cell Properties Group ---
-        self.cell_group = QGroupBox("Selected Cell")
-        self.cell_layout = QFormLayout()
-        self.cell_layout.setSpacing(3)
-        self.cell_layout.setContentsMargins(8, 4, 8, 6)
+        self.cell_group = CollapsibleSection("Selected Cell")
+        self.cell_layout = self.cell_group._form
         
         self.fit_mode_combo = QComboBox()
         self.fit_mode_combo.addItems([m.value for m in FitMode])
@@ -445,15 +503,12 @@ class Inspector(QWidget):
         self.scale_bar_offset_y.valueChanged.connect(self._emit_scale_bar)
         self.cell_layout.addRow(self._fl("lbl_offset_y_mm"), self.scale_bar_offset_y)
         
-        self.cell_group.setLayout(self.cell_layout)
         self.layout.addWidget(self.cell_group)
         self.cell_group.hide()
 
         # --- Label Cell Properties Group ---
-        self.label_cell_group = QGroupBox("Label Cell Settings")
-        self.label_cell_layout = QFormLayout()
-        self.label_cell_layout.setSpacing(3)
-        self.label_cell_layout.setContentsMargins(8, 4, 8, 6)
+        self.label_cell_group = CollapsibleSection("Label Cell Settings")
+        self.label_cell_layout = self.label_cell_group._form
 
         self._current_label_text_id = None  # Track which text item is being edited
         self.label_text_edit = QLineEdit()
@@ -533,15 +588,12 @@ class Inspector(QWidget):
         )
         self.label_cell_layout.addRow(self._fl("lbl_row_height"), self.label_row_height)
 
-        self.label_cell_group.setLayout(self.label_cell_layout)
         self.layout.addWidget(self.label_cell_group)
         self.label_cell_group.hide()
 
         # --- Row Properties Group ---
-        self.row_group = QGroupBox("Row Settings")
-        self.row_layout = QFormLayout()
-        self.row_layout.setSpacing(3)
-        self.row_layout.setContentsMargins(8, 4, 8, 6)
+        self.row_group = CollapsibleSection("Row Settings")
+        self.row_layout = self.row_group._form
         
         self.row_height = QDoubleSpinBox()
         self.row_height.setRange(0.1, 10.0)
@@ -557,15 +609,12 @@ class Inspector(QWidget):
         self.col_ratios_edit.editingFinished.connect(self._emit_column_ratios)
         self.row_layout.addRow(self._fl("lbl_col_ratios"), self.col_ratios_edit)
         
-        self.row_group.setLayout(self.row_layout)
         self.layout.addWidget(self.row_group)
         self.row_group.hide()
         
         # --- Sub-Cell Settings Group ---
-        self.subcell_group = QGroupBox("Sub-Cell Settings")
-        self.subcell_layout = QFormLayout()
-        self.subcell_layout.setSpacing(3)
-        self.subcell_layout.setContentsMargins(8, 4, 8, 6)
+        self.subcell_group = CollapsibleSection("Sub-Cell Settings")
+        self.subcell_layout = self.subcell_group._form
 
         self._subcell_id = None        # Track which sub-cell is selected
         self._subcell_direction = None  # "horizontal" or "vertical"
@@ -590,15 +639,12 @@ class Inspector(QWidget):
         self._subcell_fixed_size_label = QLabel("Fixed Width:")
         self.subcell_layout.addRow(self._subcell_fixed_size_label, self.subcell_fixed_size)
 
-        self.subcell_group.setLayout(self.subcell_layout)
         self.layout.addWidget(self.subcell_group)
         self.subcell_group.hide()
 
         # --- Text Properties Group ---
-        self.text_group = QGroupBox("Selected Text")
-        self.text_layout = QFormLayout()
-        self.text_layout.setSpacing(3)
-        self.text_layout.setContentsMargins(8, 4, 8, 6)
+        self.text_group = CollapsibleSection("Selected Text")
+        self.text_layout = self.text_group._form
         
         self.text_content = QLineEdit()
         self.text_content.editingFinished.connect(
@@ -697,7 +743,6 @@ class Inspector(QWidget):
         )
         self.text_layout.addRow(self._fl("lbl_offset_y"), self.offset_y)
         
-        self.text_group.setLayout(self.text_layout)
         self.layout.addWidget(self.text_group)
         self.text_group.hide()
         
@@ -725,12 +770,12 @@ class Inspector(QWidget):
 
     def retranslate_ui(self):
         """Update all visible translatable strings to the current language."""
-        self.project_group.setTitle(tr("grp_project"))
-        self.cell_group.setTitle(tr("grp_cell"))
-        self.label_cell_group.setTitle(tr("grp_label_cell"))
-        self.row_group.setTitle(tr("grp_row"))
-        self.subcell_group.setTitle(tr("grp_subcell"))
-        self.text_group.setTitle(tr("grp_text"))
+        self.project_group.set_title(tr("grp_project"))
+        self.cell_group.set_title(tr("grp_cell"))
+        self.label_cell_group.set_title(tr("grp_label_cell"))
+        self.row_group.set_title(tr("grp_row"))
+        self.subcell_group.set_title(tr("grp_subcell"))
+        self.text_group.set_title(tr("grp_text"))
 
         self._sec_grid.setText(tr("sec_grid"))
         self._sec_corner.setText(tr("sec_corner_labels"))
@@ -800,24 +845,8 @@ class Inspector(QWidget):
         values = ["left", "center", "right"]
         self.project_property_changed.emit({"row_alignment": values[index]})
 
-    def _make_collapsible(self, group_box: QGroupBox):
-        group_box.setCheckable(True)
-        group_box.setChecked(True)
-        
-        def _toggle(checked):
-            layout = group_box.layout()
-            if not layout:
-                return
-            for i in range(layout.count()):
-                item = layout.itemAt(i)
-                if item.widget():
-                    item.widget().setVisible(checked)
-                elif item.layout():
-                    for j in range(item.layout().count()):
-                        sub = item.layout().itemAt(j)
-                        if sub and sub.widget():
-                            sub.widget().setVisible(checked)
-        group_box.toggled.connect(_toggle)
+    def _make_collapsible(self, section) -> None:
+        pass  # CollapsibleSection handles this natively
 
     def _emit_padding(self):
         self.cell_property_changed.emit({

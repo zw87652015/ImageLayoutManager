@@ -249,15 +249,19 @@ class CellItem(QGraphicsRectItem):
         # Style
         self.border_pen = QPen(QColor("#CCCCCC"))
         self.border_pen.setWidth(1)
-        self.border_pen.setCosmetic(True) # Width stays constant on zoom
-        
-        self.selected_pen = QPen(QColor("#007ACC"))
+        self.border_pen.setCosmetic(True)
+
+        self.placeholder_pen = QPen(QColor("#AEAEB2"), 1, Qt.PenStyle.DashLine)
+        self.placeholder_pen.setCosmetic(True)
+        self.placeholder_pen.setDashPattern([4.0, 4.0])
+
+        self.selected_pen = QPen(QColor("#0891B2"))
         self.selected_pen.setWidth(2)
         self.selected_pen.setCosmetic(True)
-        
-        self.hover_brush = QBrush(QColor(0, 122, 204, 30))
+
+        self.hover_brush = QBrush(QColor(8, 145, 178, 25))
         self.normal_brush = QBrush(Qt.GlobalColor.white)
-        self.placeholder_brush = QBrush(QColor("#F0F0F0"))
+        self.placeholder_brush = QBrush(QColor("#F5F5F5"))
         
         self.is_hovered = False
         self._drag_start_pos = None
@@ -417,6 +421,16 @@ class CellItem(QGraphicsRectItem):
             return
         super().contextMenuEvent(event)
 
+    def apply_theme_tokens(self, tokens: dict) -> None:
+        """Recolour pens/brushes from design tokens. Called on theme switch."""
+        self.border_pen.setColor(QColor(tokens.get("border", "#CCCCCC")))
+        self.placeholder_pen.setColor(QColor(tokens.get("placeholder", "#AEAEB2")))
+        self.selected_pen.setColor(QColor(tokens.get("accent", "#0891B2")))
+        self.normal_brush.setColor(QColor(tokens.get("surface", "#FFFFFF")))
+        accent = QColor(tokens.get("accent", "#0891B2"))
+        self.hover_brush.setColor(QColor(accent.red(), accent.green(), accent.blue(), 25))
+        self.update()
+
     def update_data(self, image_path, fit_mode, padding, is_placeholder, rotation=0, align_h="center", align_v="center",
                      scale_bar_enabled=False, scale_bar_mode="rgb", scale_bar_um_per_px=0.1301, scale_bar_length_um=10.0,
                      scale_bar_color="#FFFFFF", scale_bar_show_text=True, scale_bar_thickness_mm=0.5,
@@ -497,7 +511,17 @@ class CellItem(QGraphicsRectItem):
         scene = self.scene()
         if not (scene and getattr(scene, 'preview_mode', False)):
             if self.isSelected():
+                glow_color = QColor(self.selected_pen.color())
+                glow_color.setAlpha(55)
+                glow_pen = QPen(glow_color)
+                glow_pen.setCosmetic(True)
+                glow_pen.setWidth(5)
+                painter.setPen(glow_pen)
+                painter.drawRect(rect)
                 painter.setPen(self.selected_pen)
+                painter.drawRect(rect)
+            elif self.is_placeholder:
+                painter.setPen(self.placeholder_pen)
                 painter.drawRect(rect)
             else:
                 painter.setPen(self.border_pen)

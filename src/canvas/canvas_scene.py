@@ -40,22 +40,49 @@ class CanvasScene(QGraphicsScene):
         self.drag_manager.swap_requested.connect(self.cell_swapped.emit)
         self.drag_manager.multi_swap_requested.connect(self.multi_cells_swapped.emit)
 
-        # Background
-        self.setBackgroundBrush(QBrush(QColor("#E0E0E0"))) # Grey workspace background
-        
+        # Background — painted in drawBackground() as a dot grid
+        self._canvas_bg = "#E8E8E8"
+        self._grid_line = "#C7C7CC"
+        self.setBackgroundBrush(QBrush(Qt.BrushStyle.NoBrush))
+
         # Page rect (white paper)
         self.page_rect = QRectF(0, 0, 210, 297) # Default A4
         self.page_item = self.addRect(self.page_rect, QPen(Qt.PenStyle.NoPen), QBrush(Qt.GlobalColor.white))
         self.page_item.setZValue(-100)
-        
+
         # Margins rect (guide)
-        self.margin_item = self.addRect(QRectF(), QPen(QColor("#DDDDDD"), 1, Qt.PenStyle.DashLine), QBrush(Qt.BrushStyle.NoBrush))
+        self.margin_item = self.addRect(QRectF(), QPen(QColor("#DDDDDD"), 0.3, Qt.PenStyle.DashLine), QBrush(Qt.BrushStyle.NoBrush))
         self.margin_item.setZValue(-99)
         
         self._snap_line_items = []
         self._divider_items = []  # list of DividerItem
 
         self.preview_mode = False  # hides cell borders for export preview
+
+    # ------------------------------------------------------------------
+    # Theme
+    # ------------------------------------------------------------------
+
+    def apply_theme(self, tokens: dict) -> None:
+        """Update all canvas visuals from design tokens. Call on theme switch."""
+        self._canvas_bg = tokens["canvas_bg"]
+        self._grid_line = tokens["grid_line"]
+        self.page_item.setBrush(QBrush(QColor(tokens.get("surface", "#FFFFFF"))))
+        self.margin_item.setPen(
+            QPen(QColor(tokens.get("border", "#DDDDDD")), 0.3, Qt.PenStyle.DashLine)
+        )
+        for item in list(self.cell_items.values()) + list(self.label_cell_items.values()):
+            item.apply_theme_tokens(tokens)
+        self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.BackgroundLayer)
+
+    # ------------------------------------------------------------------
+    # Background dot grid
+    # ------------------------------------------------------------------
+
+    def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
+        painter.fillRect(rect, QColor(self._canvas_bg))
+
+    # ------------------------------------------------------------------
 
     def set_preview_mode(self, enabled: bool):
         if self.preview_mode == enabled:

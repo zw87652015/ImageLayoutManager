@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(D:/anaconda3/envs/imagelayout/python.exe -c ' *)"
+    ]
+  }
+}
