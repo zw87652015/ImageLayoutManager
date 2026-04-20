@@ -50,6 +50,9 @@ class PdfExporter:
         print(f"DEBUG: Paint rect: {actual_rect.width()}x{actual_rect.height()} pixels")
         print(f"DEBUG: Expected: {page_w_mm * project.dpi / 25.4:.0f}x{page_h_mm * project.dpi / 25.4:.0f} pixels")
         
+        # Collect PDF/EPS-source cells for vector post-processing (Pass 2)
+        pdf_source_cells = []  # list of (cell, content_rect_mm)
+
         painter = QPainter(writer)
         
         try:
@@ -87,14 +90,23 @@ class PdfExporter:
                 if nested_path and os.path.exists(nested_path):
                     PdfExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
                 elif cell.image_path and os.path.exists(cell.image_path):
-                    rotation = getattr(cell, 'rotation', 0)
-                    crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
-                            getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                    PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop)
+                    ext = os.path.splitext(cell.image_path)[1].lower()
+                    if ext in ('.pdf', '.eps'):
+                        # Skip in Pass 1 — will be stamped as vector in Pass 2
+                        content_x_mm = (content_rect.x()) / scale
+                        content_y_mm = (content_rect.y()) / scale
+                        content_w_mm = content_rect.width() / scale
+                        content_h_mm = content_rect.height() / scale
+                        pdf_source_cells.append((cell, (content_x_mm, content_y_mm, content_w_mm, content_h_mm)))
+                    else:
+                        rotation = getattr(cell, 'rotation', 0)
+                        crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
+                                getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
+                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop)
 
-                    # Draw scale bar if enabled
-                    if getattr(cell, 'scale_bar_enabled', False):
-                        PdfExporter._draw_scale_bar(painter, cell, content_rect, scale)
+                        # Draw scale bar if enabled
+                        if getattr(cell, 'scale_bar_enabled', False):
+                            PdfExporter._draw_scale_bar(painter, cell, content_rect, scale)
 
                 PdfExporter._draw_pip_items(painter, cell, content_rect)
 
@@ -116,6 +128,94 @@ class PdfExporter:
                 
         finally:
             painter.end()
+
+        # Pass 2: stamp PDF/EPS source cells as true vector XObjects
+        if pdf_source_cells:
+            PdfExporter._stamp_pdf_sources(output_path, pdf_source_cells, project.page_width_mm, project.page_height_mm)
+
+    @staticmethod
+    def _stamp_pdf_sources(output_path: str, pdf_source_cells: list, page_w_mm: float, page_h_mm: float):
+        """Post-process the exported PDF to replace PDF/EPS source cells with
+        true vector XObjects using PyMuPDF show_pdf_page().
+
+        Coordinate system: QPdfWriter uses top-left origin (mm), PyMuPDF uses
+        bottom-left origin (points, 1pt = 1/72 inch).
+        """
+        try:
+            import fitz
+        except ImportError:
+            print("PyMuPDF not installed — PDF source cells will be blank in output.")
+            return
+
+        try:
+            out_doc = fitz.open(output_path)
+            out_page = out_doc[0]  # single-page export
+
+            # Use the ACTUAL page dimensions from the PDF (QPdfWriter rounds to integer pts)
+            # so that vector-stamped cells align exactly with QPainter-drawn elements.
+            actual_w_pt = out_page.rect.width
+            actual_h_pt = out_page.rect.height
+            mm_to_pt_x = actual_w_pt / page_w_mm
+            mm_to_pt_y = actual_h_pt / page_h_mm
+
+            for cell, (cx_mm, cy_mm, cw_mm, ch_mm) in pdf_source_cells:
+                src_path = cell.image_path
+                if not src_path or not os.path.exists(src_path):
+                    continue
+
+                crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
+                        getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
+                fit_mode_str = getattr(cell, 'fit_mode', 'contain')
+                rotation = getattr(cell, 'rotation', 0)
+                cl, ct, cr, cb = crop
+
+                try:
+                    src_doc = fitz.open(src_path)
+                    src_page = src_doc[0]
+                    src_w_pt = src_page.rect.width
+                    src_h_pt = src_page.rect.height
+
+                    # Cropped source region in points
+                    src_clip = fitz.Rect(
+                        cl * src_w_pt, ct * src_h_pt,
+                        cr * src_w_pt, cb * src_h_pt
+                    )
+
+                    # Target content rect in points.
+                    # PyMuPDF uses top-left origin (same as Qt), no Y-flip needed.
+                    cx_pt = cx_mm * mm_to_pt_x
+                    cy_pt = cy_mm * mm_to_pt_y
+                    cw_pt = cw_mm * mm_to_pt_x
+                    ch_pt = ch_mm * mm_to_pt_y
+
+                    # Destination rect = exact content cell (show_pdf_page fits src into it)
+                    clip_rect = fitz.Rect(cx_pt, cy_pt, cx_pt + cw_pt, cy_pt + ch_pt)
+
+                    # overlay=False: stamp underneath existing QPainter content
+                    # (text, labels, PiPs drawn in Pass 1 must remain on top)
+                    out_page.show_pdf_page(
+                        clip_rect,      # destination = exact content cell rect (handles clipping)
+                        src_doc,
+                        pno=0,
+                        clip=src_clip,  # source crop region
+                        rotate=rotation,
+                        keep_proportion=True,
+                        overlay=False,
+                    )
+
+                    src_doc.close()
+                except Exception as e:
+                    print(f"Failed to stamp PDF source {src_path}: {e}")
+
+            import tempfile, shutil
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                tmp_path = tmp.name
+            out_doc.save(tmp_path, incremental=False, encryption=fitz.PDF_ENCRYPT_NONE)
+            out_doc.close()
+            shutil.move(tmp_path, output_path)
+
+        except Exception as e:
+            print(f"Failed in PDF vector post-processing: {e}")
 
     @staticmethod
     def _draw_pip_items(painter: QPainter, cell, content_rect: QRectF):
@@ -432,8 +532,10 @@ class PdfExporter:
                   crop: tuple = (0.0, 0.0, 1.0, 1.0)):
         """Draw PDF/EPS first page as high-res raster via PyMuPDF.
 
-        Qt's QSvgRenderer cannot handle the complex SVG that PyMuPDF generates
-        (embedded fonts, complex path data), so we rasterise at 4× zoom instead.
+        True vector passthrough into a QPdfWriter stream is not supported by
+        Qt/PyMuPDF APIs. Instead we rasterise at a zoom that exactly matches
+        the output rect's pixel size, so the embedded raster is at the full
+        export DPI (e.g. 600 DPI) — indistinguishable from vector in print.
         """
         try:
             import fitz  # PyMuPDF
@@ -444,7 +546,16 @@ class PdfExporter:
                 return
 
             page = doc[0]
-            zoom = 4.0
+            # PDF natural size is in points (72 dpi). Zoom to match rect in dots.
+            page_rect = page.rect  # in points
+            cl, ct, cr, cb = crop
+            cropped_w_pts = max(1.0, (cr - cl) * page_rect.width)
+            cropped_h_pts = max(1.0, (cb - ct) * page_rect.height)
+            zoom_x = rect.width() / cropped_w_pts
+            zoom_y = rect.height() / cropped_h_pts
+            zoom = max(zoom_x, zoom_y) if FitMode(fit_mode_str) == FitMode.COVER \
+                else min(zoom_x, zoom_y)
+            zoom = max(zoom, 1.0)  # never render below 1× (72 dpi)
             matrix = fitz.Matrix(zoom, zoom)
             pix = page.get_pixmap(matrix=matrix, alpha=True)
             doc.close()
