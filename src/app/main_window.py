@@ -43,8 +43,10 @@ from src.app.commands import (
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
     FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand,
-    DividerDragCommand
+    DividerDragCommand,
+    AddPiPItemCommand, SetPiPGeometryCommand, SetPiPOriginCommand
 )
+from src.model.data_model import PiPItem
 from src.utils.image_proxy import get_image_proxy
 
 class _CollapseHandle(QSplitterHandle):
@@ -199,11 +201,11 @@ class MainWindow(QMainWindow):
 
         # Apply persisted theme and language
         saved_theme = self._settings.value("theme", LIGHT)
-        self._apply_theme(saved_theme)
+        self._apply_theme(saved_theme, animate=False)
         saved_lang = self._settings.value("language", "zh")
         if saved_lang != current_language():
             set_language(saved_lang)
-            self.retranslate_ui()
+        self.retranslate_ui()
 
         self._update_window_title()
         self._update_theme_labels()
@@ -403,6 +405,7 @@ class MainWindow(QMainWindow):
 
         auto_label_incell_action = QAction(tr("action_auto_label_incell"), self)
         auto_label_incell_action.setShortcut(QKeySequence("Ctrl+Shift+L"))
+        auto_label_incell_action.setToolTip(tr("tooltip_auto_label_incell"))
         self._register_themed_action(auto_label_incell_action, "cell_labels")
         auto_label_incell_action.triggered.connect(self._on_auto_label_incell)
         edit_menu.addAction(auto_label_incell_action)
@@ -410,6 +413,7 @@ class MainWindow(QMainWindow):
 
         auto_label_outcell_action = QAction(tr("action_auto_label_outcell"), self)
         auto_label_outcell_action.setShortcut(QKeySequence("Ctrl+Shift+K"))
+        auto_label_outcell_action.setToolTip(tr("tooltip_auto_label_outcell"))
         self._register_themed_action(auto_label_outcell_action, "row_labels")
         auto_label_outcell_action.triggered.connect(self._on_auto_label_outcell)
         edit_menu.addAction(auto_label_outcell_action)
@@ -589,6 +593,8 @@ class MainWindow(QMainWindow):
         self.inspector.text_property_changed.connect(self._on_text_property_changed)
         self.inspector.row_property_changed.connect(self._on_row_property_changed)
         self.inspector.project_property_changed.connect(self._on_project_property_changed)
+        self.inspector.pip_property_changed.connect(self._on_pip_property_changed)
+        self.inspector.pip_delete_requested.connect(self._on_inspector_pip_delete)
         self.inspector.corner_label_changed.connect(self._on_corner_label_changed)
         self.inspector.apply_color_to_group.connect(self._on_apply_color_to_group)
         self.inspector.label_text_changed.connect(self._on_label_text_changed)
@@ -599,19 +605,27 @@ class MainWindow(QMainWindow):
     def _connect_tab_signals(self, tab: ProjectTabState):
         """Connect per-tab scene/view/undostack signals."""
         tab.scene.cell_dropped.connect(self._on_cell_image_dropped)
+        tab.scene.pip_image_dropped.connect(self._on_pip_image_dropped)
         tab.scene.cell_swapped.connect(self._on_cell_swapped)
         tab.scene.multi_cells_swapped.connect(self._on_multi_cells_swapped)
         tab.scene.new_image_dropped.connect(self._on_new_image_dropped)
         tab.scene.project_file_dropped.connect(self._on_project_file_dropped)
         tab.scene.text_item_changed.connect(self._on_text_item_drag_changed)
+        tab.scene.selection_changed_custom.connect(self._on_scene_selection_changed_custom)
         tab.scene.selectionChanged.connect(self._on_selection_changed)
         tab.scene.cell_context_menu.connect(self._on_cell_context_menu)
+        tab.scene.cell_crop_committed.connect(self._on_cell_crop_committed)
+        tab.scene.crop_mode_active.connect(self._on_crop_mode_active)
         tab.scene.empty_context_menu.connect(self._on_empty_context_menu)
         tab.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
         tab.scene.insert_row_requested.connect(self._on_insert_row)
         tab.scene.insert_cell_requested.connect(self._on_insert_cell)
         tab.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
         tab.scene.divider_drag_finished.connect(self._on_divider_drag_finished)
+        tab.scene.pip_geometry_changed.connect(self._on_pip_geometry_changed)
+        tab.scene.pip_origin_changed.connect(self._on_pip_origin_changed)
+        tab.scene.pip_context_menu.connect(self._on_pip_context_menu)
+        tab.scene.pip_removed.connect(self._on_pip_removed)
         tab.view.zoom_changed.connect(self._on_zoom_changed)
         tab.view.mouse_scene_pos_changed.connect(self._on_mouse_pos_changed)
         tab.view.navigate_cell.connect(self._on_navigate_cell)
@@ -626,19 +640,27 @@ class MainWindow(QMainWindow):
         """Disconnect per-tab signals before switching away."""
         try:
             tab.scene.cell_dropped.disconnect(self._on_cell_image_dropped)
+            tab.scene.pip_image_dropped.disconnect(self._on_pip_image_dropped)
             tab.scene.cell_swapped.disconnect(self._on_cell_swapped)
             tab.scene.multi_cells_swapped.disconnect(self._on_multi_cells_swapped)
             tab.scene.new_image_dropped.disconnect(self._on_new_image_dropped)
             tab.scene.project_file_dropped.disconnect(self._on_project_file_dropped)
             tab.scene.text_item_changed.disconnect(self._on_text_item_drag_changed)
+            tab.scene.selection_changed_custom.disconnect(self._on_scene_selection_changed_custom)
             tab.scene.selectionChanged.disconnect(self._on_selection_changed)
             tab.scene.cell_context_menu.disconnect(self._on_cell_context_menu)
+            tab.scene.cell_crop_committed.disconnect(self._on_cell_crop_committed)
+            tab.scene.crop_mode_active.disconnect(self._on_crop_mode_active)
             tab.scene.empty_context_menu.disconnect(self._on_empty_context_menu)
             tab.scene.nested_layout_open_requested.disconnect(self._on_open_nested_layout)
             tab.scene.insert_row_requested.disconnect(self._on_insert_row)
             tab.scene.insert_cell_requested.disconnect(self._on_insert_cell)
             tab.scene.cell_freeform_geometry_changed.disconnect(self._on_cell_freeform_geometry_changed)
             tab.scene.divider_drag_finished.disconnect(self._on_divider_drag_finished)
+            tab.scene.pip_geometry_changed.disconnect(self._on_pip_geometry_changed)
+            tab.scene.pip_origin_changed.disconnect(self._on_pip_origin_changed)
+            tab.scene.pip_context_menu.disconnect(self._on_pip_context_menu)
+            tab.scene.pip_removed.disconnect(self._on_pip_removed)
             tab.view.zoom_changed.disconnect(self._on_zoom_changed)
             tab.view.mouse_scene_pos_changed.disconnect(self._on_mouse_pos_changed)
             tab.view.navigate_cell.disconnect(self._on_navigate_cell)
@@ -768,29 +790,19 @@ class MainWindow(QMainWindow):
             old_project = self.project
             old_stack = self.undo_stack
             if not old_stack.isClean():
-                ret = QMessageBox.question(
-                    self, "Unsaved Changes",
-                    f"'{self._tab_title(self._tabs[idx])}' has unsaved changes. Save now?",
-                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                    QMessageBox.StandardButton.Save,
-                )
-                if ret == QMessageBox.StandardButton.Cancel:
+                ret = self._ask_unsaved(self._tab_title(self._tabs[idx]))
+                if ret == "cancel":
                     return
-                if ret == QMessageBox.StandardButton.Save:
+                if ret == "save":
                     if not self._on_save_project():
                         return
         else:
             tab = self._tabs[idx]
             if not tab.undo_stack.isClean():
-                ret = QMessageBox.question(
-                    self, "Unsaved Changes",
-                    f"'{self._tab_title(tab)}' has unsaved changes. Save now?",
-                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                    QMessageBox.StandardButton.Save,
-                )
-                if ret == QMessageBox.StandardButton.Cancel:
+                ret = self._ask_unsaved(self._tab_title(tab))
+                if ret == "cancel":
                     return
-                if ret == QMessageBox.StandardButton.Save:
+                if ret == "save":
                     # Temporarily activate the tab to save it
                     prev = self._active_tab_idx
                     self._activate_tab(idx)
@@ -849,7 +861,10 @@ class MainWindow(QMainWindow):
         new_theme = LIGHT if self._current_theme == DARK else DARK
         self._apply_theme(new_theme)
 
-    def _apply_theme(self, theme: str):
+    def _apply_theme(self, theme: str, animate: bool = True):
+        if theme == self._current_theme and animate:
+            return
+        changed = theme != self._current_theme
         self._current_theme = theme
         self._settings.setValue("theme", theme)
         app = QApplication.instance()
@@ -873,7 +888,8 @@ class MainWindow(QMainWindow):
             if tab.scene:
                 tab.scene.apply_theme(tokens)
 
-        self._flash_theme_overlay()
+        if animate and changed:
+            self._flash_theme_overlay()
 
     def _flash_theme_overlay(self) -> None:
         """Brief fade-out overlay to smooth the instant theme colour swap."""
@@ -1003,7 +1019,9 @@ class MainWindow(QMainWindow):
         self._act_delete_sel.setText(tr("action_delete_sel"))
         self._act_delete_img.setText(tr("action_delete_img"))
         self._act_auto_label_incell.setText(tr("action_auto_label_incell"))
+        self._act_auto_label_incell.setToolTip(tr("tooltip_auto_label_incell"))
         self._act_auto_label_outcell.setText(tr("action_auto_label_outcell"))
+        self._act_auto_label_outcell.setToolTip(tr("tooltip_auto_label_outcell"))
         self._act_auto_layout.setText(tr("action_auto_layout"))
         self._act_bake.setText(tr("action_bake"))
         self._act_grid_mode.setText(tr("action_grid_mode"))
@@ -1025,6 +1043,8 @@ class MainWindow(QMainWindow):
         self.left_tabs.setTabText(0, tr("tab_layers"))
         self.left_tabs.setTabText(1, tr("tab_history"))
         self._update_theme_labels()
+        if hasattr(self, "_theme_segmented"):
+            self._theme_segmented.retranslate_ui()
         self.inspector.retranslate_ui()
         self.layers_panel.retranslate_ui()
 
@@ -1111,7 +1131,19 @@ class MainWindow(QMainWindow):
                      if c.row_index == target_row and c.col_index == target_col), None)
 
     def _select_cells_by_ids(self, cell_ids: list):
-        """Select one or more cells on the canvas by their IDs."""
+        """Select one or more cells on the canvas by their IDs. Also handles pip_ids from layers panel."""
+        # Check if these are pip IDs (not cell IDs)
+        if len(cell_ids) == 1:
+            pip_id = cell_ids[0]
+            for cell in self.project.get_all_leaf_cells():
+                pip = next((p for p in getattr(cell, 'pip_items', []) if p.id == pip_id), None)
+                if pip:
+                    cell_item = self.scene.cell_items.get(cell.id)
+                    if cell_item:
+                        cell_item.select_pip(pip_id)
+                        self.view.centerOn(cell_item)
+                    return
+
         self.scene.blockSignals(True)
         self.scene.clearSelection()
         first_item = None
@@ -1179,6 +1211,8 @@ class MainWindow(QMainWindow):
         # Update Canvas Size Label
         rect = self.scene.sceneRect()
         self.canvas_size_label.setText(f"Canvas: {int(rect.width())}x{int(rect.height())}")
+        # Re-sync inspector so pip/cell spinboxes reflect any model changes
+        self._on_selection_changed()
         
         # Check for low-res images
 
@@ -1204,21 +1238,33 @@ class MainWindow(QMainWindow):
         if self.undo_stack.isClean():
             self.setWindowModified(True)
 
+    def _ask_unsaved(self, name: str) -> str:
+        """Show translated Save/Discard/Cancel dialog. Returns 'save', 'discard', or 'cancel'."""
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("dlg_unsaved_title"))
+        box.setText(tr("dlg_unsaved_body").format(name=name))
+        box.setIcon(QMessageBox.Icon.Question)
+        save_btn    = box.addButton(tr("btn_save"),    QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = box.addButton(tr("btn_discard"), QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(tr("btn_cancel"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(save_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is save_btn:
+            return "save"
+        if clicked is discard_btn:
+            return "discard"
+        return "cancel"
+
     def _maybe_save(self) -> bool:
         """Check active tab for unsaved changes; returns True if safe to proceed."""
         if self.undo_stack is None or self.undo_stack.isClean():
             return True
         tab = self._tabs[self._active_tab_idx]
-        ret = QMessageBox.question(
-            self,
-            "Unsaved Changes",
-            f"'{self._tab_title(tab)}' has unsaved changes. Save now?",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Save,
-        )
-        if ret == QMessageBox.StandardButton.Save:
+        ret = self._ask_unsaved(self._tab_title(tab))
+        if ret == "save":
             return self._on_save_project()
-        if ret == QMessageBox.StandardButton.Discard:
+        if ret == "discard":
             return True
         return False
 
@@ -1339,6 +1385,89 @@ class MainWindow(QMainWindow):
             cmd = DropImageCommand(cell, file_path, self._refresh_and_update)
             self.undo_stack.push(cmd)
 
+    def _on_pip_image_dropped(self, cell_id: str, file_path: str):
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        pip = PiPItem(pip_type="external", image_path=file_path, show_origin_box=False)
+        cmd = AddPiPItemCommand(cell, pip, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_pip_geometry_changed(self, cell_id: str, pip_id: str, old_geom, new_geom):
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        pip = next((p for p in cell.pip_items if p.id == pip_id), None)
+        if pip:
+            cmd = SetPiPGeometryCommand(pip, old_geom, new_geom, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _on_pip_origin_changed(self, cell_id: str, pip_id: str, old_crop, new_crop):
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        pip = next((p for p in cell.pip_items if p.id == pip_id), None)
+        if pip:
+            cmd = SetPiPOriginCommand(pip, old_crop, new_crop, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _ctx_remove_pip(self, cell_id: str, pip):
+        from src.app.commands import RemovePiPItemCommand
+        cell = self.project.find_cell_by_id(cell_id)
+        if cell:
+            cmd = RemovePiPItemCommand(cell, pip, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _on_inspector_pip_delete(self):
+        """Inspector 'Delete PiP' button pressed — forward to _on_pip_removed."""
+        if not self.scene:
+            return
+        items = self.scene.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        cell_id = getattr(item, 'cell_id', None)
+        pip_id = getattr(item, '_selected_pip_id', None)
+        if cell_id and pip_id:
+            self._on_pip_removed(cell_id, pip_id)
+
+    def _on_pip_removed(self, cell_id: str, pip_id: str):
+        """Handle Delete key press or Inspector delete button for selected PiP."""
+        from src.app.commands import RemovePiPItemCommand
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        pip = next((p for p in getattr(cell, 'pip_items', []) if p.id == pip_id), None)
+        if pip:
+            cmd = RemovePiPItemCommand(cell, pip, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
+    def _on_pip_context_menu(self, cell_id: str, pip_id: str, screen_pos):
+        from PyQt6.QtCore import QPoint
+        from PyQt6.QtWidgets import QMenu
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        pip = next((p for p in cell.pip_items if p.id == pip_id), None)
+        if not pip:
+            return
+
+        cell_item = self.scene.cell_items.get(cell_id)
+
+        menu = QMenu(self)
+
+        resize_act = menu.addAction(tr("pip_ctx_resize"))
+        resize_act.triggered.connect(
+            lambda: cell_item.select_pip(pip_id, resize=True) if cell_item else None
+        )
+
+        menu.addSeparator()
+
+        remove_act = menu.addAction(tr("pip_ctx_remove"))
+        remove_act.triggered.connect(lambda: self._ctx_remove_pip(cell_id, pip))
+
+        menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
+
     def _on_new_image_dropped(self, file_path, x, y):
         # Find first placeholder
         target_cell = None
@@ -1441,6 +1570,18 @@ class MainWindow(QMainWindow):
         item = items[0]
         
         if hasattr(item, 'cell_id'):
+            # If a PiP inset inside this cell is selected, PiP becomes the
+            # effective selection target for layers highlight + inspector.
+            selected_pip_id = getattr(item, '_selected_pip_id', None)
+            if selected_pip_id:
+                self.layers_panel.select_item(selected_pip_id)
+                cell = self.project.find_cell_by_id(item.cell_id)
+                if cell:
+                    pip = next((p for p in getattr(cell, 'pip_items', []) if p.id == selected_pip_id), None)
+                    if pip:
+                        self.inspector.set_selection('pip', pip.to_dict())
+                        return
+
             self.layers_panel.select_item(item.cell_id)
             # Check if it's a label cell (id starts with "label_")
             if hasattr(item, 'is_label_cell') and item.is_label_cell:
@@ -1517,6 +1658,10 @@ class MainWindow(QMainWindow):
                  
         self.inspector.set_selection(None, self.project.to_dict())
 
+    def _on_scene_selection_changed_custom(self, _ids: list):
+        """Scene-level custom selection updates (PiP select/deselect)."""
+        self._on_selection_changed()
+
     def _on_cell_property_changed(self, changes):
         items = self.scene.selectedItems()
         if not items:
@@ -1538,6 +1683,29 @@ class MainWindow(QMainWindow):
             cmd = PropertyChangeCommand(selected_cells[0], changes, self._refresh_and_update, "Change Cell Property")
         else:
             cmd = MultiPropertyChangeCommand(selected_cells, changes, self._refresh_and_update, f"Change {len(selected_cells)} Cells")
+        self.undo_stack.push(cmd)
+
+    def _on_pip_property_changed(self, changes: dict):
+        """Apply inspector changes to the currently-selected PiP inset."""
+        if not self.scene:
+            return
+        items = self.scene.selectedItems()
+        if not items:
+            return
+        item = items[0]
+        cell_id = getattr(item, 'cell_id', None)
+        pip_id = getattr(item, '_selected_pip_id', None)
+        if not cell_id or not pip_id:
+            return
+
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        pip = next((p for p in getattr(cell, 'pip_items', []) if p.id == pip_id), None)
+        if not pip:
+            return
+
+        cmd = PropertyChangeCommand(pip, changes, self._refresh_and_update, "Change PiP Property")
         self.undo_stack.push(cmd)
 
     def _on_corner_label_changed(self, payload: dict):
@@ -1801,7 +1969,7 @@ class MainWindow(QMainWindow):
         self.undo_stack.push(cmd)
 
     def _on_delete_text(self):
-        """Delete selected text item(s) or label cell numbering labels"""
+        """Delete selected text item(s), label cell numbering labels, or cell images."""
         try:
             items = self.scene.selectedItems()
         except RuntimeError:
@@ -1809,12 +1977,14 @@ class MainWindow(QMainWindow):
         
         from src.canvas.cell_item import CellItem
 
+        handled = False
         for item in items:
             if hasattr(item, 'text_item_id'):
                 text_obj = next((t for t in self.project.text_items if t.id == item.text_item_id), None)
                 if text_obj:
                     cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
                     self.undo_stack.push(cmd)
+                    handled = True
             elif isinstance(item, CellItem) and item.is_label_cell:
                 # Label cell ID is "label_{cell_id}" — extract the parent cell_id
                 parent_cell_id = item.cell_id.removeprefix("label_")
@@ -1826,6 +1996,11 @@ class MainWindow(QMainWindow):
                 if text_obj:
                     cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
                     self.undo_stack.push(cmd)
+                    handled = True
+
+        # If nothing text-like was deleted but regular cells are selected, delete their images
+        if not handled:
+            self._on_delete_image()
 
     def _on_delete_image(self):
         """Delete image from selected cell(s)"""
@@ -1857,7 +2032,12 @@ class MainWindow(QMainWindow):
             self.undo_stack.push(cmd)
 
     def _on_layers_context_menu(self, cell_ids: list, global_pos):
-        """Right-click context menu from the layers panel tree."""
+        """Right-click context menu from the layers panel tree.
+
+        The layers panel emits raw IDs which may belong to cells, PiP
+        insets, or text items — we resolve the kind here and dispatch
+        to the matching menu.
+        """
         from PyQt6.QtWidgets import QMenu
         from PyQt6.QtCore import QPoint
 
@@ -1865,7 +2045,21 @@ class MainWindow(QMainWindow):
             return
 
         if len(cell_ids) == 1:
-            self._on_cell_context_menu(cell_ids[0], False, global_pos)
+            target_id = cell_ids[0]
+
+            # PiP items don't live in project.cells, so find_cell_by_id
+            # returns None. Scan every leaf cell's pip_items to find the
+            # owner and delegate to the PiP-specific menu.
+            for cell in self.project.get_all_leaf_cells():
+                pip = next(
+                    (p for p in getattr(cell, "pip_items", []) if p.id == target_id),
+                    None,
+                )
+                if pip:
+                    self._on_pip_context_menu(cell.id, pip.id, global_pos)
+                    return
+
+            self._on_cell_context_menu(target_id, False, global_pos)
             return
 
         menu = QMenu(self)
@@ -2116,8 +2310,8 @@ class MainWindow(QMainWindow):
 
             # Fit Mode submenu
             fit_menu = menu.addMenu(tr("ctx_fit_mode"))
-            for mode in ["contain", "cover"]:
-                action = fit_menu.addAction(mode.capitalize())
+            for mode, key in [("contain", "ctx_fit_contain"), ("cover", "ctx_fit_cover")]:
+                action = fit_menu.addAction(tr(key))
                 action.setCheckable(True)
                 action.setChecked(cell.fit_mode == mode)
                 action.triggered.connect(
@@ -2140,6 +2334,37 @@ class MainWindow(QMainWindow):
             sb_action.triggered.connect(
                 lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
             )
+
+            # --- Crop ---
+            menu.addSeparator()
+            crop_action = menu.addAction(tr("ctx_crop_image"))
+            crop_action.triggered.connect(lambda: self._ctx_crop_image(cell_id))
+
+            crop_ratio_menu = menu.addMenu(tr("ctx_crop_aspect_menu"))
+            _PRESETS = [
+                (tr("ctx_crop_preset_free"),          0, 0),
+                (tr("ctx_crop_preset_square"),         1, 1),
+                ("4:3",                                4, 3),
+                ("3:2",                                3, 2),
+                ("16:9",                              16, 9),
+                ("2:1",                                2, 1),
+                (tr("ctx_crop_preset_portrait_3_4"),   3, 4),
+                (tr("ctx_crop_preset_portrait_2_3"),   2, 3),
+                (tr("ctx_crop_preset_portrait_9_16"),  9, 16),
+            ]
+            for label, aw, ah in _PRESETS:
+                act = crop_ratio_menu.addAction(label)
+                act.triggered.connect(
+                    lambda checked=False, _aw=aw, _ah=ah: self._ctx_crop_to_aspect(cell_id, _aw, _ah)
+                )
+
+            if cell.crop_left != 0.0 or cell.crop_top != 0.0 or cell.crop_right != 1.0 or cell.crop_bottom != 1.0:
+                reset_crop_act = menu.addAction(tr("ctx_crop_reset"))
+                reset_crop_act.triggered.connect(
+                    lambda: self._ctx_set_cell_prop(
+                        cell_id, {"crop_left": 0.0, "crop_top": 0.0, "crop_right": 1.0, "crop_bottom": 1.0}
+                    )
+                )
 
         # --- Insert Row / Cell ---
         menu.addSeparator()
@@ -2408,6 +2633,76 @@ class MainWindow(QMainWindow):
             cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Change Cell Property")
             self.undo_stack.push(cmd)
 
+    def _ctx_crop_image(self, cell_id: str):
+        """Enter interactive crop mode for the given cell."""
+        if not self.scene:
+            return
+        item = self.scene.cell_items.get(cell_id)
+        if item:
+            item.enter_crop_mode()
+
+    def _ctx_crop_to_aspect(self, cell_id: str, aspect_w: float, aspect_h: float):
+        """Apply an aspect-ratio crop preset, undoably."""
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        if aspect_w <= 0 or aspect_h <= 0:
+            # "Free" — reset crop
+            changes = {"crop_left": 0.0, "crop_top": 0.0, "crop_right": 1.0, "crop_bottom": 1.0}
+            cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Reset Crop")
+            self.undo_stack.push(cmd)
+            return
+        # Compute crop rect at the requested aspect ratio, centred on the image
+        from src.utils.image_proxy import get_image_proxy
+        proxy = get_image_proxy()
+        pix = proxy.get_pixmap(cell.image_path) if cell.image_path else None
+        if pix and not pix.isNull():
+            pix_w, pix_h = pix.width(), pix.height()
+        else:
+            pix_w, pix_h = 1, 1
+        # Apply the preset computation via a temporary CellItem helper
+        import copy
+        tmp_crop = (cell.crop_left, cell.crop_top, cell.crop_right, cell.crop_bottom)
+        target_ratio = aspect_w / aspect_h
+        cur_w = (cell.crop_right - cell.crop_left) * pix_w
+        cur_h = (cell.crop_bottom - cell.crop_top) * pix_h
+        if cur_h <= 0 or cur_w <= 0:
+            cur_w, cur_h = pix_w, pix_h
+        if cur_w / cur_h > target_ratio:
+            new_w_frac = (cur_h * target_ratio) / pix_w
+            new_h_frac = cur_h / pix_h
+        else:
+            new_w_frac = cur_w / pix_w
+            new_h_frac = (cur_w / target_ratio) / pix_h
+        cx = (cell.crop_left + cell.crop_right) * 0.5
+        cy = (cell.crop_top + cell.crop_bottom) * 0.5
+        new_left = max(0.0, cx - new_w_frac * 0.5)
+        new_right = min(1.0, cx + new_w_frac * 0.5)
+        new_top = max(0.0, cy - new_h_frac * 0.5)
+        new_bottom = min(1.0, cy + new_h_frac * 0.5)
+        changes = {
+            "crop_left": new_left, "crop_top": new_top,
+            "crop_right": new_right, "crop_bottom": new_bottom,
+        }
+        cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update,
+                                    f"Crop {aspect_w}:{aspect_h}")
+        self.undo_stack.push(cmd)
+
+    def _on_cell_crop_committed(self, cell_id: str, cl: float, ct: float, cr: float, cb: float):
+        """Handle crop committed from interactive crop mode — push undo command."""
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        changes = {"crop_left": cl, "crop_top": ct, "crop_right": cr, "crop_bottom": cb}
+        cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Crop Image")
+        self.undo_stack.push(cmd)
+
+    def _on_crop_mode_active(self, active: bool):
+        if active:
+            self.statusbar.showMessage(tr("crop_hint"))
+        else:
+            self.statusbar.clearMessage()
+
     def _on_auto_label_incell(self):
         cmd = AutoLabelCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
@@ -2548,16 +2843,11 @@ class MainWindow(QMainWindow):
             if not tab.undo_stack.isClean():
                 # Activate the tab so the user sees it
                 self._activate_tab(i)
-                ret = QMessageBox.question(
-                    self, "Unsaved Changes",
-                    f"'{self._tab_title(tab)}' has unsaved changes. Save now?",
-                    QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                    QMessageBox.StandardButton.Save,
-                )
-                if ret == QMessageBox.StandardButton.Cancel:
+                ret = self._ask_unsaved(self._tab_title(tab))
+                if ret == "cancel":
                     event.ignore()
                     return
-                if ret == QMessageBox.StandardButton.Save:
+                if ret == "save":
                     if not self._on_save_project():
                         event.ignore()
                         return

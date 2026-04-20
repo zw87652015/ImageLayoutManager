@@ -213,6 +213,8 @@ class Inspector(QWidget):
     apply_color_to_group = pyqtSignal(str, str) # (subtype, color_hex) - apply color to all labels in group
     label_text_changed = pyqtSignal(str, str) # (text_item_id, new_text)
     subcell_ratio_changed = pyqtSignal(str, float) # (cell_id, new_ratio) - change a sub-cell's size ratio
+    pip_property_changed = pyqtSignal(dict) # {property: value} for selected PiP
+    pip_delete_requested = pyqtSignal()     # user clicked Delete PiP button
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -642,6 +644,87 @@ class Inspector(QWidget):
         self.layout.addWidget(self.subcell_group)
         self.subcell_group.hide()
 
+        # --- PiP Properties Group ---
+        self.pip_group = CollapsibleSection("Selected PiP")
+        self.pip_layout = self.pip_group._form
+
+        # Geometry controls (values are 0-100 %, model stores 0.0-1.0)
+        self.pip_x = QDoubleSpinBox()
+        self.pip_x.setRange(0.0, 100.0)
+        self.pip_x.setDecimals(1)
+        self.pip_x.setSingleStep(0.5)
+        self.pip_x.setSuffix(" %")
+        self.pip_x.valueChanged.connect(
+            lambda v: self.pip_property_changed.emit({"x": v / 100.0})
+        )
+        self.pip_layout.addRow(self._fl("lbl_pip_x"), self.pip_x)
+
+        self.pip_y = QDoubleSpinBox()
+        self.pip_y.setRange(0.0, 100.0)
+        self.pip_y.setDecimals(1)
+        self.pip_y.setSingleStep(0.5)
+        self.pip_y.setSuffix(" %")
+        self.pip_y.valueChanged.connect(
+            lambda v: self.pip_property_changed.emit({"y": v / 100.0})
+        )
+        self.pip_layout.addRow(self._fl("lbl_pip_y"), self.pip_y)
+
+        self.pip_w = QDoubleSpinBox()
+        self.pip_w.setRange(1.0, 100.0)
+        self.pip_w.setDecimals(1)
+        self.pip_w.setSingleStep(0.5)
+        self.pip_w.setSuffix(" %")
+        self.pip_w.valueChanged.connect(
+            lambda v: self.pip_property_changed.emit({"w": v / 100.0})
+        )
+        self.pip_layout.addRow(self._fl("lbl_pip_w"), self.pip_w)
+
+        self.pip_h = QDoubleSpinBox()
+        self.pip_h.setRange(1.0, 100.0)
+        self.pip_h.setDecimals(1)
+        self.pip_h.setSingleStep(0.5)
+        self.pip_h.setSuffix(" %")
+        self.pip_h.valueChanged.connect(
+            lambda v: self.pip_property_changed.emit({"h": v / 100.0})
+        )
+        self.pip_layout.addRow(self._fl("lbl_pip_h"), self.pip_h)
+
+        self.pip_border_enabled = QCheckBox("Enable Border")
+        self.pip_border_enabled.toggled.connect(
+            lambda b: self.pip_property_changed.emit({"border_enabled": b})
+        )
+        self.pip_layout.addRow(self.pip_border_enabled)
+
+        self.pip_border_style = QComboBox()
+        self.pip_border_style.addItems(["solid", "dashed"])
+        self.pip_border_style.currentTextChanged.connect(
+            lambda t: self.pip_property_changed.emit({"border_style": t})
+        )
+        self.pip_layout.addRow(self._fl("lbl_border_style"), self.pip_border_style)
+
+        self.pip_border_width = QDoubleSpinBox()
+        self.pip_border_width.setRange(0.1, 10.0)
+        self.pip_border_width.setSingleStep(0.1)
+        self.pip_border_width.setDecimals(1)
+        self.pip_border_width.setSuffix(" pt")
+        self.pip_border_width.valueChanged.connect(
+            lambda v: self.pip_property_changed.emit({"border_width_pt": v})
+        )
+        self.pip_layout.addRow(self._fl("lbl_thickness"), self.pip_border_width)
+
+        self.pip_border_color = ColorPickerWidget()
+        self.pip_border_color.colorChanged.connect(
+            lambda c: self.pip_property_changed.emit({"border_color": c})
+        )
+        self.pip_layout.addRow(self._fl("lbl_color"), self.pip_border_color)
+
+        self.pip_delete_btn = QPushButton(self._fl("btn_delete_pip"))
+        self.pip_delete_btn.clicked.connect(self.pip_delete_requested)
+        self.pip_layout.addRow(self.pip_delete_btn)
+
+        self.layout.addWidget(self.pip_group)
+        self.pip_group.hide()
+
         # --- Text Properties Group ---
         self.text_group = CollapsibleSection("Selected Text")
         self.text_layout = self.text_group._form
@@ -776,6 +859,7 @@ class Inspector(QWidget):
         self.row_group.set_title(tr("grp_row"))
         self.subcell_group.set_title(tr("grp_subcell"))
         self.text_group.set_title(tr("grp_text"))
+        self.pip_group.set_title(tr("grp_pip"))
 
         self._sec_grid.setText(tr("sec_grid"))
         self._sec_corner.setText(tr("sec_corner_labels"))
@@ -787,6 +871,7 @@ class Inspector(QWidget):
 
         self.scale_bar_enabled.setText(tr("chk_scale_enabled"))
         self.scale_bar_show_text.setText(tr("chk_scale_text"))
+        self.pip_border_enabled.setText(tr("chk_border_enabled"))
         self.label_bold.setText(tr("chk_bold"))
         self.is_bold.setText(tr("chk_bold"))
         self._subcell_fixed_size_label.setText(tr("lbl_fixed_width"))
@@ -808,6 +893,7 @@ class Inspector(QWidget):
         _retranslate_combo(self.grid_mode,         [tr("opt_grid_stretch"), tr("opt_grid_fixed")])
         _retranslate_combo(self.row_alignment,      [tr("opt_row_left"),     tr("opt_row_center"),    tr("opt_row_right")])
         _retranslate_combo(self.label_align,        [tr("opt_align_left"),   tr("opt_align_center"),  tr("opt_align_right")])
+        _retranslate_combo(self.pip_border_style,   ["solid", "dashed"])
         self.corner_label_color.retranslate_ui()
         self.scale_bar_color.retranslate_ui()
         self.label_color.retranslate_ui()
@@ -1036,6 +1122,7 @@ class Inspector(QWidget):
             self.no_selection_label.hide()
             self.project_group.hide()
             self.cell_group.hide()
+            self.pip_group.hide()
             self.row_group.hide()
             self.text_group.hide()
             self.subcell_group.hide()
@@ -1064,6 +1151,7 @@ class Inspector(QWidget):
             self.no_selection_label.hide()
             self.project_group.hide()
             self.text_group.hide()
+            self.pip_group.hide()
             self.label_cell_group.hide()
             self.cell_group.show()
             self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
@@ -1155,6 +1243,7 @@ class Inspector(QWidget):
             self.no_selection_label.hide()
             self.project_group.hide()
             self.cell_group.hide()
+            self.pip_group.hide()
             self.row_group.hide()
             self.label_cell_group.hide()
             self.subcell_group.hide()
@@ -1205,11 +1294,33 @@ class Inspector(QWidget):
                 self.text_rotation.setValue(float(data.get("rotation", 0.0)))
             self.blockSignals(False)
             
+        elif item_type == 'pip':
+            self.no_selection_label.hide()
+            self.project_group.hide()
+            self.cell_group.hide()
+            self.row_group.hide()
+            self.subcell_group.hide()
+            self.text_group.hide()
+            self.label_cell_group.hide()
+            self.pip_group.show()
+
+            self.blockSignals(True)
+            self.pip_x.setValue(float(data.get("x", 0.0)) * 100.0)
+            self.pip_y.setValue(float(data.get("y", 0.0)) * 100.0)
+            self.pip_w.setValue(float(data.get("w", 0.25)) * 100.0)
+            self.pip_h.setValue(float(data.get("h", 0.25)) * 100.0)
+            self.pip_border_enabled.setChecked(data.get("border_enabled", True))
+            self.pip_border_style.setCurrentText(data.get("border_style", "solid"))
+            self.pip_border_width.setValue(float(data.get("border_width_pt", 1.5)))
+            self.pip_border_color.set_color(data.get("border_color", "#FFFFFF"))
+            self.blockSignals(False)
+
         else:
             self.cell_group.hide()
             self.row_group.hide()
             self.subcell_group.hide()
             self.text_group.hide()
+            self.pip_group.hide()
             self.label_cell_group.hide()
             self.no_selection_label.hide() # We show project settings instead
             

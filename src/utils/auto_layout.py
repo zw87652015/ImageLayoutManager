@@ -44,7 +44,9 @@ class AutoLayout:
                         with Image.open(cell.image_path) as img:
                             w, h = img.size
                             if h > 0:
-                                ratio = w / h
+                                crop_w = max(0.001, getattr(cell, 'crop_right', 1.0) - getattr(cell, 'crop_left', 0.0))
+                                crop_h = max(0.001, getattr(cell, 'crop_bottom', 1.0) - getattr(cell, 'crop_top', 0.0))
+                                ratio = (w * crop_w) / (h * crop_h)
                                 if getattr(cell, 'rotation', 0) in [90, 270]:
                                     ratio = 1.0 / ratio if ratio != 0 else 0
                                 aspect_ratios[cell.id] = ratio
@@ -110,7 +112,9 @@ class AutoLayout:
                         with Image.open(cell.image_path) as img:
                             w, h = img.size
                             if h > 0:
-                                ratio = w / h
+                                crop_w = max(0.001, getattr(cell, 'crop_right', 1.0) - getattr(cell, 'crop_left', 0.0))
+                                crop_h = max(0.001, getattr(cell, 'crop_bottom', 1.0) - getattr(cell, 'crop_top', 0.0))
+                                ratio = (w * crop_w) / (h * crop_h)
                                 # Adjust ratio if rotated 90 or 270 degrees
                                 if getattr(cell, 'rotation', 0) in [90, 270]:
                                     ratio = 1.0 / ratio if ratio != 0 else 0

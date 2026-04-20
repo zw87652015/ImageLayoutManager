@@ -1,7 +1,7 @@
 from PyQt6.QtGui import QUndoCommand
 import copy
 import uuid
-from src.model.data_model import RowTemplate, Cell
+from src.model.data_model import RowTemplate, Cell, PiPItem
 
 
 class FreeformGeometryCommand(QUndoCommand):
@@ -1208,7 +1208,102 @@ class AutoLayoutFreeformCommand(QUndoCommand):
                 cell.padding_right = props['padding_right']
                 cell.freeform_w_mm = props['freeform_w_mm']
                 cell.freeform_h_mm = props['freeform_h_mm']
-                
+
         if self.update_callback:
             self.update_callback()
 
+
+class AddPiPItemCommand(QUndoCommand):
+    def __init__(self, cell: Cell, pip_item: PiPItem, update_callback=None):
+        super().__init__("Add PiP Inset")
+        self.cell = cell
+        self.pip_item = pip_item
+        self.update_callback = update_callback
+
+    def redo(self):
+        if self.pip_item not in self.cell.pip_items:
+            self.cell.pip_items.append(self.pip_item)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.cell.pip_items = [p for p in self.cell.pip_items if p.id != self.pip_item.id]
+        if self.update_callback:
+            self.update_callback()
+
+
+class RemovePiPItemCommand(QUndoCommand):
+    def __init__(self, cell: Cell, pip_item: PiPItem, update_callback=None):
+        super().__init__("Remove PiP Inset")
+        self.cell = cell
+        self.pip_item = pip_item
+        self.update_callback = update_callback
+
+    def redo(self):
+        self.cell.pip_items = [p for p in self.cell.pip_items if p.id != self.pip_item.id]
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        if self.pip_item not in self.cell.pip_items:
+            self.cell.pip_items.append(self.pip_item)
+        if self.update_callback:
+            self.update_callback()
+
+
+class SetPiPGeometryCommand(QUndoCommand):
+    """Undo/redo for moving or resizing a PiP inset (x, y, w, h normalized)."""
+    def __init__(self, pip_item: PiPItem, old_geom: tuple, new_geom: tuple, update_callback=None):
+        super().__init__("Move/Resize PiP Inset")
+        self.pip_item = pip_item
+        self.old_geom = old_geom  # (x, y, w, h)
+        self.new_geom = new_geom
+        self.update_callback = update_callback
+
+    def redo(self):
+        self.pip_item.x, self.pip_item.y, self.pip_item.w, self.pip_item.h = self.new_geom
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.pip_item.x, self.pip_item.y, self.pip_item.w, self.pip_item.h = self.old_geom
+        if self.update_callback:
+            self.update_callback()
+
+    def id(self):
+        return hash(self.pip_item.id) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        if not isinstance(other, SetPiPGeometryCommand) or other.pip_item is not self.pip_item:
+            return False
+        self.new_geom = other.new_geom
+        return True
+
+
+class SetPiPOriginCommand(QUndoCommand):
+    """Undo/redo for editing the crop region of a zoom-type PiP inset."""
+    def __init__(self, pip_item: PiPItem, old_crop: tuple, new_crop: tuple, update_callback=None):
+        super().__init__("Edit PiP Zoom Region")
+        self.pip_item = pip_item
+        self.old_crop = old_crop  # (crop_left, crop_top, crop_right, crop_bottom)
+        self.new_crop = new_crop
+        self.update_callback = update_callback
+
+    def redo(self):
+        self.pip_item.crop_left, self.pip_item.crop_top, self.pip_item.crop_right, self.pip_item.crop_bottom = self.new_crop
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.pip_item.crop_left, self.pip_item.crop_top, self.pip_item.crop_right, self.pip_item.crop_bottom = self.old_crop
+        if self.update_callback:
+            self.update_callback()
+
+    def id(self):
+        return (hash(self.pip_item.id) + 1) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        if not isinstance(other, SetPiPOriginCommand) or other.pip_item is not self.pip_item:
+            return False
+        self.new_crop = other.new_crop
+        return True

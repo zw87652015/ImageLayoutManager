@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(D:/anaconda3/envs/imagelayout/python.exe -c ' *)"
+      "Bash(D:/anaconda3/envs/imagelayout/python.exe -c ' *)",
+      "Bash(grep -E \"\\\\.\\(py|ui|txt|md\\)$\")",
+      "Bash(python -c ' *)"
     ]
   }
 }

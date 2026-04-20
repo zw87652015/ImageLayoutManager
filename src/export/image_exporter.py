@@ -87,10 +87,14 @@ class ImageExporter:
                     ImageExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
                 elif cell.image_path and os.path.exists(cell.image_path):
                     rotation = getattr(cell, 'rotation', 0)
-                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation)
+                    crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
+                            getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
+                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop)
 
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
+
+                ImageExporter._draw_pip_items(painter, cell, content_rect)
 
             # 1b. Draw Label Cells (label rows above picture rows)
             if label_row_above:
@@ -169,9 +173,13 @@ class ImageExporter:
                     ImageExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
                 elif cell.image_path and os.path.exists(cell.image_path):
                     rotation = getattr(cell, 'rotation', 0)
-                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation)
+                    crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
+                            getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
+                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop)
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
+
+                ImageExporter._draw_pip_items(painter, cell, content_rect)
 
             if label_row_above:
                 ImageExporter._draw_label_cells(painter, project, layout_result, scale)
@@ -189,6 +197,60 @@ class ImageExporter:
             painter.end()
 
         return image
+
+    @staticmethod
+    def _draw_pip_items(painter: QPainter, cell, content_rect: QRectF):
+        """Draw all PiP insets for a cell onto the given content_rect."""
+        pip_items = getattr(cell, 'pip_items', [])
+        if not pip_items:
+            return
+        cw = content_rect.width()
+        ch = content_rect.height()
+        for pip in pip_items:
+            inset_rect = QRectF(
+                content_rect.x() + pip.x * cw,
+                content_rect.y() + pip.y * ch,
+                pip.w * cw,
+                pip.h * ch,
+            )
+            painter.save()
+            painter.setClipRect(inset_rect)
+            # Draw pip image
+            if pip.pip_type == "zoom" and cell.image_path and os.path.exists(cell.image_path):
+                src_crop = (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom)
+                ImageExporter._draw_raster(painter, cell.image_path, inset_rect, "contain", 0, src_crop)
+            elif pip.pip_type == "external" and pip.image_path and os.path.exists(pip.image_path):
+                ImageExporter._draw_image(painter, pip.image_path, inset_rect, "contain", 0,
+                                          (0.0, 0.0, 1.0, 1.0))
+            painter.restore()
+            # Draw border
+            if pip.border_enabled:
+                from PyQt6.QtGui import QPen
+                bpen = QPen(QColor(pip.border_color))
+                bpen.setWidthF(pip.border_width_pt)
+                bpen.setCosmetic(True)
+                if getattr(pip, 'border_style', 'solid') == 'dashed':
+                    bpen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(bpen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(inset_rect)
+            # Draw zoom origin box
+            if pip.pip_type == "zoom" and getattr(pip, 'show_origin_box', False):
+                from PyQt6.QtGui import QPen
+                origin_rect = QRectF(
+                    content_rect.x() + pip.crop_left * cw,
+                    content_rect.y() + pip.crop_top * ch,
+                    (pip.crop_right - pip.crop_left) * cw,
+                    (pip.crop_bottom - pip.crop_top) * ch,
+                )
+                open_pen = QPen(QColor(pip.origin_box_color))
+                open_pen.setWidthF(pip.origin_box_width_pt)
+                open_pen.setCosmetic(True)
+                if getattr(pip, 'origin_box_style', 'solid') == 'dashed':
+                    open_pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(open_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(origin_rect)
 
     @staticmethod
     def _draw_nested_layout(painter: QPainter, figlayout_path: str, content_rect: QRectF, parent_dpi: int):
@@ -246,124 +308,125 @@ class ImageExporter:
         pil_image.save(output_path, "TIFF", dpi=(dpi, dpi), compression="tiff_lzw")
 
     @staticmethod
-    def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
-        """Draw an image into the given rect."""
+    def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
+                    crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+        """Draw an image into the given rect, applying crop and rotation."""
         ext = os.path.splitext(path)[1].lower()
-        
         if ext == '.svg':
-            ImageExporter._draw_svg(painter, path, rect, fit_mode_str, rotation)
+            ImageExporter._draw_svg(painter, path, rect, fit_mode_str, rotation, crop)
         elif ext in ('.pdf', '.eps'):
-            ImageExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation)
+            ImageExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation, crop)
         else:
-            ImageExporter._draw_raster(painter, path, rect, fit_mode_str, rotation)
+            ImageExporter._draw_raster(painter, path, rect, fit_mode_str, rotation, crop)
     
     @staticmethod
-    def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
-        """Draw SVG vector image."""
+    def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
+                  crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+        """Draw SVG vector image, honouring crop."""
         try:
             renderer = QSvgRenderer(path)
             if not renderer.isValid():
                 print(f"Invalid SVG file: {path}")
                 return
-            
+
             fit_mode = FitMode(fit_mode_str)
             default_size = renderer.defaultSize()
-            
-            if default_size.isEmpty():
-                img_w, img_h = rect.width(), rect.height()
-            else:
-                img_w, img_h = default_size.width(), default_size.height()
-            
-            # Adjust dimensions if rotated 90 or 270 degrees
+            img_w = default_size.width() if not default_size.isEmpty() else rect.width()
+            img_h = default_size.height() if not default_size.isEmpty() else rect.height()
+
+            cl, ct, cr, cb = crop
+            crop_w_frac = max(0.001, cr - cl)
+            crop_h_frac = max(0.001, cb - ct)
+            eff_img_w_full = img_w
+            eff_img_h_full = img_h
+
+            # Effective dimensions are the cropped portion
             is_sideways = rotation in [90, 270]
-            eff_img_w = img_h if is_sideways else img_w
-            eff_img_h = img_w if is_sideways else img_h
+            eff_crop_w = (img_h * crop_h_frac) if is_sideways else (img_w * crop_w_frac)
+            eff_crop_h = (img_w * crop_w_frac) if is_sideways else (img_h * crop_h_frac)
 
             if fit_mode == FitMode.CONTAIN:
-                ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
-                new_w = eff_img_w * ratio
-                new_h = eff_img_h * ratio
-                
-                x = rect.left() + (rect.width() - new_w) / 2
-                y = rect.top() + (rect.height() - new_h) / 2
-                
-                target_rect = QRectF(x, y, new_w, new_h)
-                
-            elif fit_mode == FitMode.COVER:
-                ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
-                new_w = eff_img_w * ratio
-                new_h = eff_img_h * ratio
-                
-                x = rect.left() + (rect.width() - new_w) / 2
-                y = rect.top() + (rect.height() - new_h) / 2
-                
-                target_rect = QRectF(x, y, new_w, new_h)
+                ratio = min(rect.width() / eff_crop_w, rect.height() / eff_crop_h)
+            else:
+                ratio = max(rect.width() / eff_crop_w, rect.height() / eff_crop_h)
+
+            # Where the crop portion lands (centred in rect)
+            crop_canvas_w = eff_crop_w * ratio
+            crop_canvas_h = eff_crop_h * ratio
+            crop_x = rect.left() + (rect.width() - crop_canvas_w) / 2
+            crop_y = rect.top() + (rect.height() - crop_canvas_h) / 2
+
+            # Full SVG canvas rect (may extend beyond rect edges)
+            full_w = eff_img_w_full * ratio
+            full_h = eff_img_h_full * ratio
+            full_x = crop_x - cl * full_w
+            full_y = crop_y - ct * full_h
+            target_rect = QRectF(full_x, full_y, full_w, full_h)
 
             painter.save()
-            if fit_mode == FitMode.COVER:
-                painter.setClipRect(rect)
-            
+            # Always clip to the visible crop area
+            painter.setClipRect(QRectF(crop_x, crop_y, crop_canvas_w, crop_canvas_h))
+
             if rotation != 0:
-                painter.translate(target_rect.center())
+                center = QRectF(crop_x, crop_y, crop_canvas_w, crop_canvas_h).center()
+                painter.translate(center)
                 painter.rotate(rotation)
-                # Drawing rect is relative to center
-                draw_rect = QRectF(-img_w * ratio / 2, -img_h * ratio / 2, img_w * ratio, img_h * ratio)
+                draw_rect = QRectF(-eff_img_w_full * ratio / 2, -eff_img_h_full * ratio / 2,
+                                   eff_img_w_full * ratio, eff_img_h_full * ratio)
                 renderer.render(painter, draw_rect)
             else:
                 renderer.render(painter, target_rect)
-            
+
             painter.restore()
-                
+
         except Exception as e:
             print(f"Failed to export SVG {path}: {e}")
     
     @staticmethod
-    def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
-        """Draw raster image using PIL."""
+    def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
+                     crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+        """Draw raster image using PIL, honouring crop."""
         try:
             with Image.open(path) as img:
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
-                
+
+                cl, ct, cr, cb = crop
+                full_w, full_h = img.width, img.height
+                # Crop to the visible region in source pixels
+                cx0 = int(cl * full_w)
+                cy0 = int(ct * full_h)
+                cx1 = max(cx0 + 1, int(cr * full_w))
+                cy1 = max(cy0 + 1, int(cb * full_h))
+                if cx0 != 0 or cy0 != 0 or cx1 != full_w or cy1 != full_h:
+                    img = img.crop((cx0, cy0, cx1, cy1))
+
                 data = img.tobytes("raw", "RGBA")
                 qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-                
+
                 fit_mode = FitMode(fit_mode_str)
-                
                 img_w = qimage.width()
                 img_h = qimage.height()
-                
-                # Adjust dimensions if rotated 90 or 270 degrees
+
                 is_sideways = rotation in [90, 270]
                 eff_img_w = img_h if is_sideways else img_w
                 eff_img_h = img_w if is_sideways else img_h
 
                 if fit_mode == FitMode.CONTAIN:
                     ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
-                    new_w = eff_img_w * ratio
-                    new_h = eff_img_h * ratio
-                    
-                    x = rect.left() + (rect.width() - new_w) / 2
-                    y = rect.top() + (rect.height() - new_h) / 2
-                    
-                    target_rect = QRectF(x, y, new_w, new_h)
-                    
-                elif fit_mode == FitMode.COVER:
+                else:
                     ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
-                    new_w = eff_img_w * ratio
-                    new_h = eff_img_h * ratio
-                    
-                    x = rect.left() + (rect.width() - new_w) / 2
-                    y = rect.top() + (rect.height() - new_h) / 2
-                    
-                    target_rect = QRectF(x, y, new_w, new_h)
-                
+
+                new_w = eff_img_w * ratio
+                new_h = eff_img_h * ratio
+                x = rect.left() + (rect.width() - new_w) / 2
+                y = rect.top() + (rect.height() - new_h) / 2
+                target_rect = QRectF(x, y, new_w, new_h)
+
                 painter.save()
                 if fit_mode == FitMode.COVER:
                     painter.setClipRect(rect)
-                
                 painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-                
                 if rotation != 0:
                     painter.translate(target_rect.center())
                     painter.rotate(rotation)
@@ -371,14 +434,14 @@ class ImageExporter:
                     painter.drawImage(draw_rect, qimage)
                 else:
                     painter.drawImage(target_rect, qimage)
-                
                 painter.restore()
-                    
+
         except Exception as e:
             print(f"Failed to export image {path}: {e}")
 
     @staticmethod
-    def _draw_pdf(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
+    def _draw_pdf(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
+                  crop: tuple = (0.0, 0.0, 1.0, 1.0)):
         """Draw PDF first page as raster image using PyMuPDF."""
         try:
             import fitz  # PyMuPDF
@@ -398,43 +461,41 @@ class ImageExporter:
             
             # Convert to QImage
             qimage = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format.Format_RGBA8888).copy()
-            
+
+            # Apply crop by sub-imaging the QImage
+            cl, ct, cr, cb = crop
+            img_w_full = qimage.width()
+            img_h_full = qimage.height()
+            cx0 = int(cl * img_w_full)
+            cy0 = int(ct * img_h_full)
+            cx1 = max(cx0 + 1, int(cr * img_w_full))
+            cy1 = max(cy0 + 1, int(cb * img_h_full))
+            if cx0 != 0 or cy0 != 0 or cx1 != img_w_full or cy1 != img_h_full:
+                qimage = qimage.copy(cx0, cy0, cx1 - cx0, cy1 - cy0)
+
             fit_mode = FitMode(fit_mode_str)
-            
             img_w = qimage.width()
             img_h = qimage.height()
-            
-            # Adjust dimensions if rotated 90 or 270 degrees
+
             is_sideways = rotation in [90, 270]
             eff_img_w = img_h if is_sideways else img_w
             eff_img_h = img_w if is_sideways else img_h
 
             if fit_mode == FitMode.CONTAIN:
                 ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
-                new_w = eff_img_w * ratio
-                new_h = eff_img_h * ratio
-                
-                x = rect.left() + (rect.width() - new_w) / 2
-                y = rect.top() + (rect.height() - new_h) / 2
-                
-                target_rect = QRectF(x, y, new_w, new_h)
-                
-            elif fit_mode == FitMode.COVER:
+            else:
                 ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
-                new_w = eff_img_w * ratio
-                new_h = eff_img_h * ratio
-                
-                x = rect.left() + (rect.width() - new_w) / 2
-                y = rect.top() + (rect.height() - new_h) / 2
-                
-                target_rect = QRectF(x, y, new_w, new_h)
-            
+
+            new_w = eff_img_w * ratio
+            new_h = eff_img_h * ratio
+            x = rect.left() + (rect.width() - new_w) / 2
+            y = rect.top() + (rect.height() - new_h) / 2
+            target_rect = QRectF(x, y, new_w, new_h)
+
             painter.save()
             if fit_mode == FitMode.COVER:
                 painter.setClipRect(rect)
-            
             painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            
             if rotation != 0:
                 painter.translate(target_rect.center())
                 painter.rotate(rotation)
@@ -442,9 +503,8 @@ class ImageExporter:
                 painter.drawImage(draw_rect, qimage)
             else:
                 painter.drawImage(target_rect, qimage)
-            
             painter.restore()
-                
+
         except Exception as e:
             print(f"Failed to export PDF {path}: {e}")
 
@@ -596,20 +656,26 @@ class ImageExporter:
         except Exception:
             return
         
+        # Apply crop to get effective source dimensions (the visible region)
+        crop_w_frac = max(0.001, getattr(cell, 'crop_right', 1.0) - getattr(cell, 'crop_left', 0.0))
+        crop_h_frac = max(0.001, getattr(cell, 'crop_bottom', 1.0) - getattr(cell, 'crop_top', 0.0))
+        eff_orig_w = orig_w * crop_w_frac
+        eff_orig_h = orig_h * crop_h_frac
+
         # Adjust dimensions if rotated 90 or 270 degrees
         rotation = getattr(cell, 'rotation', 0)
         is_sideways = rotation in [90, 270]
-        eff_pix_w = orig_h if is_sideways else orig_w
-        eff_pix_h = orig_w if is_sideways else orig_h
+        eff_pix_w = eff_orig_h if is_sideways else eff_orig_w
+        eff_pix_h = eff_orig_w if is_sideways else eff_orig_h
 
         # µm per pixel — value stored on the cell (set by the user via the inspector)
         um_per_px = getattr(cell, 'scale_bar_um_per_px', 0.1301)
         if um_per_px <= 0:
             um_per_px = 0.1301
-        
+
         # Calculate bar length in source image pixels
         bar_length_px = cell.scale_bar_length_um / um_per_px
-        
+
         # Calculate scale factor from image to content rect (in pixels)
         from src.model.enums import FitMode
         fit_mode = FitMode(cell.fit_mode)

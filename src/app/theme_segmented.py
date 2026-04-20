@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QFrame, QHBoxLayout, QToolButton, QButtonGroup
 
 from src.app.theme import LIGHT, DARK
 from src.app.icons import make_icon
+from src.app.i18n import tr
 
 
 class ThemeSegmented(QFrame):
@@ -31,8 +32,8 @@ class ThemeSegmented(QFrame):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
 
-        self._light_btn = self._make_seg_button("Light")
-        self._dark_btn = self._make_seg_button("Dark")
+        self._light_btn = self._make_seg_button(tr("theme_light"))
+        self._dark_btn = self._make_seg_button(tr("theme_dark"))
         lay.addWidget(self._light_btn)
         lay.addWidget(self._dark_btn)
 
@@ -73,6 +74,11 @@ class ThemeSegmented(QFrame):
         dark_col = active_color if self._dark_btn.isChecked() else inactive_color
         self._light_btn.setIcon(make_icon("sun", light_col, size=16))
         self._dark_btn.setIcon(make_icon("moon", dark_col, size=16))
+
+    def retranslate_ui(self) -> None:
+        """Update button labels to the current language."""
+        self._light_btn.setText(tr("theme_light"))
+        self._dark_btn.setText(tr("theme_dark"))
 
     # ── internals ─────────────────────────────────────────────────────
     def _make_seg_button(self, text: str) -> QToolButton:

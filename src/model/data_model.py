@@ -62,6 +62,58 @@ class TextItem:
         return cls(**clean)
 
 @dataclass
+class PiPItem:
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    pip_type: str = "external"          # "zoom" | "external"
+    image_path: Optional[str] = None    # None means use parent image (zoom type)
+    crop_left: float = 0.0
+    crop_top: float = 0.0
+    crop_right: float = 0.30
+    crop_bottom: float = 0.30
+    x: float = 0.62
+    y: float = 0.62
+    w: float = 0.33
+    h: float = 0.33
+    border_enabled: bool = True
+    border_color: str = "#FFFFFF"
+    border_width_pt: float = 1.5
+    border_style: str = "solid"   # "solid" | "dashed"
+    show_origin_box: bool = True
+    origin_box_color: str = "#FFFFFF"
+    origin_box_style: str = "solid"
+    origin_box_width_pt: float = 1.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "pip_type": self.pip_type,
+            "image_path": self.image_path,
+            "crop_left": self.crop_left,
+            "crop_top": self.crop_top,
+            "crop_right": self.crop_right,
+            "crop_bottom": self.crop_bottom,
+            "x": self.x,
+            "y": self.y,
+            "w": self.w,
+            "h": self.h,
+            "border_enabled": self.border_enabled,
+            "border_color": self.border_color,
+            "border_width_pt": self.border_width_pt,
+            "border_style": self.border_style,
+            "show_origin_box": self.show_origin_box,
+            "origin_box_color": self.origin_box_color,
+            "origin_box_style": self.origin_box_style,
+            "origin_box_width_pt": self.origin_box_width_pt,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'PiPItem':
+        allowed = {f.name for f in fields(cls)}
+        clean = {k: v for k, v in data.items() if k in allowed}
+        return cls(**clean)
+
+
+@dataclass
 class Cell:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     row_index: int = 0
@@ -116,6 +168,15 @@ class Cell:
     override_width_mm: float = 0.0
     override_height_mm: float = 0.0
 
+    # Crop (normalized fractions 0.0–1.0 of original image dimensions, before rotation)
+    crop_left: float = 0.0
+    crop_top: float = 0.0
+    crop_right: float = 1.0
+    crop_bottom: float = 1.0
+
+    # PiP insets
+    pip_items: List[PiPItem] = field(default_factory=list)
+
     @property
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -162,10 +223,15 @@ class Cell:
             "override_width_mm": self.override_width_mm,
             "override_height_mm": self.override_height_mm,
             "z_index": self.z_index,
+            "crop_left": self.crop_left,
+            "crop_top": self.crop_top,
+            "crop_right": self.crop_right,
+            "crop_bottom": self.crop_bottom,
             "nested_layout_path": self.nested_layout_path,
             "children": [c.to_dict() for c in self.children],
             "split_direction": self.split_direction,
             "split_ratios": self.split_ratios,
+            "pip_items": [p.to_dict() for p in self.pip_items],
         }
 
     @classmethod
@@ -198,9 +264,14 @@ class Cell:
         payload.setdefault("nested_layout_path", None)
         payload.setdefault("split_direction", "none")
         payload.setdefault("split_ratios", [])
+        payload.setdefault("crop_left", 0.0)
+        payload.setdefault("crop_top", 0.0)
+        payload.setdefault("crop_right", 1.0)
+        payload.setdefault("crop_bottom", 1.0)
         
         # Handle children separately (recursive deserialization)
         children_data = payload.pop("children", [])
+        pip_items_data = payload.pop("pip_items", [])
         
         # Resolve image path: try absolute first, then relative to project file
         if payload.get("image_path") and project_dir:
@@ -214,6 +285,7 @@ class Cell:
         
         cell = cls(**payload)
         cell.children = [Cell.from_dict(c, project_dir) for c in children_data]
+        cell.pip_items = [PiPItem.from_dict(p) for p in pip_items_data]
         return cell
 
 @dataclass

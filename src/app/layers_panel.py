@@ -118,7 +118,7 @@ class LayersDelegate(QStyledItemDelegate):
         ty = r.top() + (r.height() - self.THUMB) // 2
         thumb_r = QRect(tx, ty, self.THUMB, self.THUMB)
 
-        image_path = index.data(_ROLE_IMG) if itype == "cell_filled" else None
+        image_path = index.data(_ROLE_IMG) if itype in ("cell_filled", "pip_item") else None
         if image_path:
             pm = self._thumbnail(image_path)
             if pm and not pm.isNull():
@@ -131,7 +131,7 @@ class LayersDelegate(QStyledItemDelegate):
         # text
         text_x  = tx + self.THUMB + self.PAD
         text_rect = QRect(text_x, r.top(), r.right() - text_x - 4, r.height())
-        col = accent if is_sel else (text_c if itype in ("cell_filled", "text_leaf") else text_sec)
+        col = accent if is_sel else (text_c if itype in ("cell_filled", "pip_item", "text_leaf") else text_sec)
         painter.setPen(col)
         fnt = QFont(painter.font())
         fnt.setPointSizeF(max(8.0, fnt.pointSizeF() * 0.92))
@@ -324,6 +324,23 @@ class LayersPanel(QWidget):
             if itype == "cell_filled":
                 tree_item.setData(0, _ROLE_IMG, cell.image_path)
 
+            pip_items = getattr(cell, 'pip_items', [])
+            for pip in pip_items:
+                if pip.pip_type == "zoom":
+                    pip_label = f"  \u2295 {tr('layers_zoom_inset')}"
+                    pip_img = cell.image_path
+                else:
+                    fname = os.path.basename(pip.image_path) if pip.image_path else tr('layers_empty')
+                    pip_label = f"  \u2295 {fname}"
+                    pip_img = pip.image_path
+                pip_tree_item = QTreeWidgetItem(tree_item, [pip_label])
+                pip_tree_item.setData(0, _ROLE_ID, pip.id)
+                pip_tree_item.setData(0, _ROLE_TYPE, "pip_item")
+                if pip_img:
+                    pip_tree_item.setData(0, _ROLE_IMG, pip_img)
+            if pip_items:
+                tree_item.setExpanded(True)
+
     # ── selection ─────────────────────────────────────────────────────────────
 
     def select_item(self, target_id):
@@ -361,10 +378,18 @@ class LayersPanel(QWidget):
             self.items_selected.emit(ids)
 
     def _on_context_menu(self, pos):
-        ids = [
-            item.data(0, _ROLE_ID)
-            for item in self.tree.selectedItems()
-            if item.data(0, _ROLE_ID)
-        ]
+        # Prioritise the item under the cursor — right-clicking an unselected
+        # item (common for PiP sub-items) should still show its menu.
+        clicked = self.tree.itemAt(pos)
+        if clicked and clicked.data(0, _ROLE_ID):
+            # Select it so the menu handler finds it via selectedItems() too
+            self.tree.setCurrentItem(clicked)
+            ids = [clicked.data(0, _ROLE_ID)]
+        else:
+            ids = [
+                item.data(0, _ROLE_ID)
+                for item in self.tree.selectedItems()
+                if item.data(0, _ROLE_ID)
+            ]
         if ids:
             self.context_menu_requested.emit(ids, self.tree.viewport().mapToGlobal(pos))

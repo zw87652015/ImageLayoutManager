@@ -94,6 +94,8 @@ class PdfExporter:
                     if getattr(cell, 'scale_bar_enabled', False):
                         PdfExporter._draw_scale_bar(painter, cell, content_rect, scale)
 
+                PdfExporter._draw_pip_items(painter, cell, content_rect)
+
             # 1b. Draw Label Cells (label rows above picture rows)
             if label_row_above:
                 PdfExporter._draw_label_cells(painter, project, layout_result, scale)
@@ -112,6 +114,57 @@ class PdfExporter:
                 
         finally:
             painter.end()
+
+    @staticmethod
+    def _draw_pip_items(painter: QPainter, cell, content_rect: QRectF):
+        """Draw all PiP insets for a cell onto the given content_rect."""
+        from PyQt6.QtGui import QPen
+        pip_items = getattr(cell, 'pip_items', [])
+        if not pip_items:
+            return
+        cw = content_rect.width()
+        ch = content_rect.height()
+        for pip in pip_items:
+            inset_rect = QRectF(
+                content_rect.x() + pip.x * cw,
+                content_rect.y() + pip.y * ch,
+                pip.w * cw,
+                pip.h * ch,
+            )
+            painter.save()
+            painter.setClipRect(inset_rect)
+            if pip.pip_type == "zoom" and cell.image_path and os.path.exists(cell.image_path):
+                PdfExporter._draw_raster_cropped(
+                    painter, cell.image_path, inset_rect, "contain", 0,
+                    (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom)
+                )
+            elif pip.pip_type == "external" and pip.image_path and os.path.exists(pip.image_path):
+                PdfExporter._draw_image(painter, pip.image_path, inset_rect, "contain", 0)
+            painter.restore()
+            if pip.border_enabled:
+                bpen = QPen(QColor(pip.border_color))
+                bpen.setWidthF(pip.border_width_pt)
+                bpen.setCosmetic(True)
+                if getattr(pip, 'border_style', 'solid') == 'dashed':
+                    bpen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(bpen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(inset_rect)
+            if pip.pip_type == "zoom" and getattr(pip, 'show_origin_box', False):
+                origin_rect = QRectF(
+                    content_rect.x() + pip.crop_left * cw,
+                    content_rect.y() + pip.crop_top * ch,
+                    (pip.crop_right - pip.crop_left) * cw,
+                    (pip.crop_bottom - pip.crop_top) * ch,
+                )
+                open_pen = QPen(QColor(pip.origin_box_color))
+                open_pen.setWidthF(pip.origin_box_width_pt)
+                open_pen.setCosmetic(True)
+                if getattr(pip, 'origin_box_style', 'solid') == 'dashed':
+                    open_pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(open_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(origin_rect)
 
     @staticmethod
     def _draw_nested_layout(painter: QPainter, figlayout_path: str, content_rect: QRectF, parent_dpi: int):
@@ -186,6 +239,8 @@ class PdfExporter:
                 PdfExporter._draw_image(painter, cell.image_path, sub_content, cell.fit_mode, rotation)
                 if getattr(cell, 'scale_bar_enabled', False):
                     PdfExporter._draw_scale_bar(painter, cell, sub_content, sub_scale)
+
+            PdfExporter._draw_pip_items(painter, cell, sub_content)
 
         # Draw sub-project label cells
         sub_label_above = getattr(sub_project, 'label_placement', 'in_cell') == 'label_row_above'
@@ -277,6 +332,42 @@ class PdfExporter:
         except Exception as e:
             print(f"Failed to export SVG {path}: {e}")
     
+    @staticmethod
+    def _draw_raster_cropped(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str,
+                             rotation: int = 0, crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+        """Draw raster image with a fractional crop region (cl, ct, cr, cb)."""
+        try:
+            with Image.open(path) as img:
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                cl, ct, cr, cb = crop
+                fw, fh = img.width, img.height
+                cx0, cy0 = int(cl * fw), int(ct * fh)
+                cx1, cy1 = max(cx0 + 1, int(cr * fw)), max(cy0 + 1, int(cb * fh))
+                if cx0 != 0 or cy0 != 0 or cx1 != fw or cy1 != fh:
+                    img = img.crop((cx0, cy0, cx1, cy1))
+                data = img.tobytes("raw", "RGBA")
+                qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+                fit_mode = FitMode(fit_mode_str)
+                iw, ih = qimage.width(), qimage.height()
+                is_sideways = rotation in [90, 270]
+                ew = ih if is_sideways else iw
+                eh = iw if is_sideways else ih
+                if fit_mode == FitMode.CONTAIN:
+                    ratio = min(rect.width() / ew, rect.height() / eh)
+                else:
+                    ratio = max(rect.width() / ew, rect.height() / eh)
+                nw, nh = ew * ratio, eh * ratio
+                x = rect.left() + (rect.width() - nw) / 2
+                y = rect.top() + (rect.height() - nh) / 2
+                target = QRectF(x, y, nw, nh)
+                painter.save()
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                painter.drawImage(target, qimage)
+                painter.restore()
+        except Exception as e:
+            print(f"Failed to export cropped image {path}: {e}")
+
     @staticmethod
     def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0):
         """Draw raster image using PIL."""

@@ -13,6 +13,7 @@ from src.canvas.divider_item import DividerItem, HIT_THICKNESS
 class CanvasScene(QGraphicsScene):
     # Signals
     cell_dropped = pyqtSignal(str, str) # cell_id, file_path
+    pip_image_dropped = pyqtSignal(str, str) # cell_id, file_path (drop landed in PiP zone)
     cell_swapped = pyqtSignal(str, str) # cell_id_1, cell_id_2
     multi_cells_swapped = pyqtSignal(list, list) # source_ids, target_ids
     new_image_dropped = pyqtSignal(str, float, float) # file_path, x, y (for creating new cells)
@@ -26,6 +27,12 @@ class CanvasScene(QGraphicsScene):
     insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
     cell_freeform_geometry_changed = pyqtSignal(str, float, float, float, float) # cell_id, x, y, w, h
     divider_drag_finished = pyqtSignal(object)  # DividerItem
+    cell_crop_committed = pyqtSignal(str, float, float, float, float)  # cell_id, left, top, right, bottom
+    crop_mode_active = pyqtSignal(bool)  # True = entered crop mode, False = exited
+    pip_geometry_changed = pyqtSignal(str, str, object, object)  # cell_id, pip_id, old_geom tuple, new_geom tuple
+    pip_origin_changed = pyqtSignal(str, str, object, object)    # cell_id, pip_id, old_crop tuple, new_crop tuple
+    pip_removed = pyqtSignal(str, str)  # cell_id, pip_id
+    pip_context_menu = pyqtSignal(str, str, object)  # cell_id, pip_id, screen_pos (QPointF)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -56,8 +63,13 @@ class CanvasScene(QGraphicsScene):
         
         self._snap_line_items = []
         self._divider_items = []  # list of DividerItem
+        self._drag_target_cell = None  # CellItem currently under an external file drag
 
         self.preview_mode = False  # hides cell borders for export preview
+
+        # Crop isolation veil
+        self._crop_veil_item = None
+        self._active_crop_cell = None
 
     # ------------------------------------------------------------------
     # Theme
@@ -192,9 +204,15 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'scale_bar_offset_y', 2.0),
                     getattr(cell, 'scale_bar_custom_text', None),
                     getattr(cell, 'scale_bar_text_size_mm', 2.0),
+                    getattr(cell, 'crop_left', 0.0),
+                    getattr(cell, 'crop_top', 0.0),
+                    getattr(cell, 'crop_right', 1.0),
+                    getattr(cell, 'crop_bottom', 1.0),
                 )
                 # Nested layout
                 item.set_nested_layout(getattr(cell, 'nested_layout_path', None))
+                # PiP insets
+                item.update_pip_items(getattr(cell, 'pip_items', []))
 
         # Sync Label Cell Items (label rows above picture rows)
         label_rects = getattr(layout_result, 'label_rects', {})
@@ -445,52 +463,101 @@ class CanvasScene(QGraphicsScene):
 
     def dragEnterEvent(self, event: QGraphicsSceneDragDropEvent):
         if event.mimeData().hasUrls():
+            self._drag_target_cell = None
             event.accept()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event: QGraphicsSceneDragDropEvent):
-        if event.mimeData().hasUrls():
-            event.accept()
-        else:
+        if not event.mimeData().hasUrls():
             event.ignore()
+            return
+        event.accept()
+
+        urls = event.mimeData().urls()
+        local_path = urls[0].toLocalFile() if urls else ""
+        is_image = local_path and not local_path.lower().endswith(('.figlayout', '.json'))
+
+        pos = event.scenePos()
+        target_cell = next(
+            (item for item in self.items(pos)
+             if isinstance(item, CellItem) and not item.is_label_cell),
+            None
+        )
+
+        if target_cell is not self._drag_target_cell:
+            if self._drag_target_cell is not None:
+                self._drag_target_cell.end_ext_drag()
+            self._drag_target_cell = target_cell
+            if target_cell is not None and is_image:
+                target_cell.begin_ext_drag(bool(target_cell.image_path))
+
+        if target_cell is not None and is_image:
+            target_cell.update_ext_drag_pos(target_cell.mapFromScene(pos))
+
+    def dragLeaveEvent(self, event):
+        if self._drag_target_cell is not None:
+            self._drag_target_cell.end_ext_drag()
+            self._drag_target_cell = None
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QGraphicsSceneDragDropEvent):
         # Handle File Drop (External only — internal cell swap is handled by DragManager)
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if not urls:
+                if self._drag_target_cell is not None:
+                    self._drag_target_cell.end_ext_drag()
+                    self._drag_target_cell = None
                 return
-                
+
             local_path = urls[0].toLocalFile()
             if not local_path:
+                if self._drag_target_cell is not None:
+                    self._drag_target_cell.end_ext_drag()
+                    self._drag_target_cell = None
                 return
-            
+
             # Check if it's a project file
             if local_path.lower().endswith('.figlayout') or local_path.lower().endswith('.json'):
+                if self._drag_target_cell is not None:
+                    self._drag_target_cell.end_ext_drag()
+                    self._drag_target_cell = None
                 self.project_file_dropped.emit(local_path)
                 event.accept()
                 return
-                
+
             # Check if dropped on a cell
             pos = event.scenePos()
-            items = self.items(pos)
-            target_cell = None
-            
-            for item in items:
-                if isinstance(item, CellItem) and not item.is_label_cell:
-                    target_cell = item
-                    break
-            
+            target_cell = next(
+                (item for item in self.items(pos)
+                 if isinstance(item, CellItem) and not item.is_label_cell),
+                None
+            )
+
+            # Evaluate PiP zone BEFORE clearing drag state (is_pip_drop_zone reads _ext_drag_has_image)
+            is_pip = target_cell is not None and target_cell.is_pip_drop_zone(
+                target_cell.mapFromScene(pos)
+            )
+
+            # Now clean up drag hover state
+            if self._drag_target_cell is not None:
+                self._drag_target_cell.end_ext_drag()
+                self._drag_target_cell = None
+
             if target_cell:
-                # Replace image in cell
-                self.cell_dropped.emit(target_cell.cell_id, local_path)
+                if is_pip:
+                    self.pip_image_dropped.emit(target_cell.cell_id, local_path)
+                else:
+                    self.cell_dropped.emit(target_cell.cell_id, local_path)
             else:
-                # Add new image at position (or append to grid)
                 self.new_image_dropped.emit(local_path, pos.x(), pos.y())
-                
+
             event.accept()
         else:
+            if self._drag_target_cell is not None:
+                self._drag_target_cell.end_ext_drag()
+                self._drag_target_cell = None
             super().dropEvent(event)
 
     def _refresh_add_buttons(self, layout_result):
@@ -680,6 +747,88 @@ class CanvasScene(QGraphicsScene):
     def _on_text_item_changed(self, text_item_id: str, changes: dict):
         """Forward text item changes to MainWindow via signal"""
         self.text_item_changed.emit(text_item_id, changes)
+
+    # ------------------------------------------------------------------
+    # Crop isolation veil
+    # ------------------------------------------------------------------
+
+    def show_crop_veil(self, crop_cell_item):
+        """Overlay the scene with a dark veil, leaving the crop cell on top."""
+        self.hide_crop_veil(_emit=False)
+        veil_rect = self.sceneRect().adjusted(-500, -500, 500, 500)
+        self._crop_veil_item = self.addRect(
+            veil_rect,
+            QPen(Qt.PenStyle.NoPen),
+            QBrush(QColor(0, 0, 0, 170)),
+        )
+        self._crop_veil_item.setZValue(200)
+        self._crop_veil_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self._active_crop_cell = crop_cell_item
+        self.crop_mode_active.emit(True)
+
+    def hide_crop_veil(self, _emit=True):
+        """Remove the isolation veil."""
+        was_active = self._active_crop_cell is not None
+        if self._crop_veil_item is not None:
+            if self._crop_veil_item.scene() is self:
+                self.removeItem(self._crop_veil_item)
+            self._crop_veil_item = None
+        self._active_crop_cell = None
+        if was_active and _emit:
+            self.crop_mode_active.emit(False)
+
+    def mousePressEvent(self, event):
+        """Intercept clicks outside the active crop cell to commit and exit crop mode."""
+        if self._active_crop_cell is not None:
+            pos = event.scenePos()
+            cell_scene_rect = QRectF(
+                self._active_crop_cell.pos().x(),
+                self._active_crop_cell.pos().y(),
+                self._active_crop_cell.rect().width(),
+                self._active_crop_cell.rect().height(),
+            )
+            if not cell_scene_rect.contains(pos):
+                cell = self._active_crop_cell  # capture before exit clears it
+                cell.exit_crop_mode(commit=True)
+                self.clearSelection()
+                event.accept()
+                return
+
+        # Dismiss PiP selection handles when clicking anywhere (the cell's own
+        # mousePressEvent deselects when clicking outside a PiP within the cell,
+        # but clicks on other cells or empty space also need to dismiss).
+        if event.button() == Qt.MouseButton.LeftButton:
+            for item in self.cell_items.values():
+                if item._selected_pip_id is not None:
+                    item.deselect_pip()
+
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        """Enter/Return commits crop; Escape cancels crop or dismisses PiP handles."""
+        if self._active_crop_cell is not None:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._active_crop_cell.exit_crop_mode(commit=True)
+                self.clearSelection()
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Escape:
+                self._active_crop_cell.exit_crop_mode(commit=False)
+                self.clearSelection()
+                event.accept()
+                return
+
+        if event.key() == Qt.Key.Key_Escape:
+            dismissed = False
+            for item in self.cell_items.values():
+                if item._selected_pip_id is not None:
+                    item.deselect_pip()
+                    dismissed = True
+            if dismissed:
+                event.accept()
+                return
+
+        super().keyPressEvent(event)
 
     def contextMenuEvent(self, event):
         """Right-click on empty scene area (not on a CellItem or TextGraphicsItem).
