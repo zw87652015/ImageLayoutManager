@@ -25,9 +25,20 @@ class ImageExporter:
         # Calculate Layout (mm)
         layout_result = LayoutEngine.calculate_layout(project)
 
-        # Use the project's page size directly (WYSIWYG with canvas)
-        page_w_mm = project.page_width_mm
-        page_h_mm = project.page_height_mm
+        # If a user-defined export region is set, the raster canvas shrinks to
+        # the region size and content is translated so the region origin maps
+        # to (0, 0). Content outside the region is simply clipped by image bounds.
+        export_region = getattr(project, 'export_region', None)
+        if export_region is not None:
+            page_w_mm = export_region.w_mm
+            page_h_mm = export_region.h_mm
+            region_dx_mm = export_region.x_mm
+            region_dy_mm = export_region.y_mm
+        else:
+            page_w_mm = project.page_width_mm
+            page_h_mm = project.page_height_mm
+            region_dx_mm = 0.0
+            region_dy_mm = 0.0
         
         # Convert mm to pixels using DPI
         # DPI = dots per inch, 1 inch = 25.4 mm
@@ -57,6 +68,10 @@ class ImageExporter:
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        # Shift so the region's top-left maps to pixel (0, 0). No-op when unset.
+        if region_dx_mm != 0.0 or region_dy_mm != 0.0:
+            painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
         
         try:
             label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'

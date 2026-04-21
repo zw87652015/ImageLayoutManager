@@ -114,6 +114,33 @@ class PiPItem:
 
 
 @dataclass
+class SizeGroup:
+    """A named group that forces member cells to share the same W/H.
+
+    - pinned_width_mm / pinned_height_mm > 0 -> user-pinned absolute size
+    - 0 -> program-controlled (layout engine picks min of members' natural size)
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = "Group"
+    pinned_width_mm: float = 0.0
+    pinned_height_mm: float = 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "pinned_width_mm": self.pinned_width_mm,
+            "pinned_height_mm": self.pinned_height_mm,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'SizeGroup':
+        allowed = {f.name for f in fields(cls)}
+        clean = {k: v for k, v in data.items() if k in allowed}
+        return cls(**clean)
+
+
+@dataclass
 class Cell:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     row_index: int = 0
@@ -164,9 +191,12 @@ class Cell:
     freeform_h_mm: float = 50.0
     z_index: int = 0
     
-    # Grid override size (0 means auto)
+    # Grid override size (0 means auto). Per-cell absolute pin (when NOT in a size group).
     override_width_mm: float = 0.0
     override_height_mm: float = 0.0
+
+    # Size group membership (forces shared W/H with other members). None = ungrouped.
+    size_group_id: Optional[str] = None
 
     # Crop (normalized fractions 0.0–1.0 of original image dimensions, before rotation)
     crop_left: float = 0.0
@@ -222,6 +252,7 @@ class Cell:
             "freeform_h_mm": self.freeform_h_mm,
             "override_width_mm": self.override_width_mm,
             "override_height_mm": self.override_height_mm,
+            "size_group_id": self.size_group_id,
             "z_index": self.z_index,
             "crop_left": self.crop_left,
             "crop_top": self.crop_top,
@@ -260,6 +291,7 @@ class Cell:
         payload.setdefault("freeform_h_mm", 50.0)
         payload.setdefault("override_width_mm", 0.0)
         payload.setdefault("override_height_mm", 0.0)
+        payload.setdefault("size_group_id", None)
         payload.setdefault("z_index", 0)
         payload.setdefault("nested_layout_path", None)
         payload.setdefault("split_direction", "none")
@@ -313,6 +345,30 @@ class RowTemplate:
         )
 
 @dataclass
+class ExportRegion:
+    """User-defined export area on the page (mm, scene coordinates).
+
+    When set, exporters clip the output to this rectangle instead of using the
+    full page. None = use full page (default behaviour).
+    """
+    x_mm: float = 0.0
+    y_mm: float = 0.0
+    w_mm: float = 100.0
+    h_mm: float = 100.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "x_mm": self.x_mm, "y_mm": self.y_mm,
+            "w_mm": self.w_mm, "h_mm": self.h_mm,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ExportRegion':
+        allowed = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in allowed})
+
+
+@dataclass
 class Project:
     name: str = "Untitled Project"
     
@@ -337,7 +393,10 @@ class Project:
     # Layout
     rows: List[RowTemplate] = field(default_factory=list)
     cells: List[Cell] = field(default_factory=list)
-    
+
+    # Size Groups (force shared W/H across member cells in grid mode)
+    size_groups: List[SizeGroup] = field(default_factory=list)
+
     # Text
     text_items: List[TextItem] = field(default_factory=list)
     
@@ -353,6 +412,9 @@ class Project:
     label_offset_x: float = 0.0  # mm, horizontal offset for fine-tuning label position
     label_offset_y: float = 0.0  # mm, vertical offset for fine-tuning label position
     label_row_height: float = 0.0  # mm, 0 = auto (computed from font size)
+
+    # Export Region (None = export full page). If set, exporters clip to this rect.
+    export_region: Optional[ExportRegion] = None
 
     # Global Corner Label Settings
     corner_label_font_family: str = "Arial"
@@ -380,6 +442,22 @@ class Project:
             if found:
                 return found
         return None
+
+    def find_size_group(self, group_id: str) -> Optional[SizeGroup]:
+        for g in self.size_groups:
+            if g.id == group_id:
+                return g
+        return None
+
+    def size_group_members(self, group_id: str) -> List[Cell]:
+        return [c for c in self.get_all_leaf_cells() if c.size_group_id == group_id]
+
+    def remove_size_group(self, group_id: str):
+        """Delete a group and unassign all its members."""
+        for c in self.get_all_leaf_cells():
+            if c.size_group_id == group_id:
+                c.size_group_id = None
+        self.size_groups = [g for g in self.size_groups if g.id != group_id]
 
     def find_parent_of(self, cell_id: str) -> Optional[Cell]:
         def _search(parent, target_id):
@@ -415,6 +493,7 @@ class Project:
             "row_alignment": self.row_alignment,
             "rows": [r.to_dict() for r in self.rows],
             "cells": [c.to_dict() for c in self.cells],
+            "size_groups": [g.to_dict() for g in self.size_groups],
             "text_items": [t.to_dict() for t in self.text_items],
             "label_scheme": self.label_scheme,
             "label_placement": self.label_placement,
@@ -431,6 +510,7 @@ class Project:
             "corner_label_font_size": self.corner_label_font_size,
             "corner_label_font_weight": self.corner_label_font_weight,
             "corner_label_color": self.corner_label_color,
+            "export_region": self.export_region.to_dict() if self.export_region else None,
         }
 
     @classmethod
@@ -452,7 +532,14 @@ class Project:
         
         p.rows = [RowTemplate.from_dict(r) for r in data.get("rows", [])]
         p.cells = [Cell.from_dict(c, project_dir) for c in data.get("cells", [])]
+        p.size_groups = [SizeGroup.from_dict(g) for g in data.get("size_groups", [])]
         p.text_items = [TextItem.from_dict(t) for t in data.get("text_items", [])]
+
+        # Prune orphan group references (group deleted but cell still refers to it)
+        valid_group_ids = {g.id for g in p.size_groups}
+        for c in p.get_all_leaf_cells():
+            if c.size_group_id and c.size_group_id not in valid_group_ids:
+                c.size_group_id = None
         
         p.label_scheme = data.get("label_scheme", "(a)")
         p.label_placement = data.get("label_placement", "in_cell")
@@ -466,6 +553,9 @@ class Project:
         p.label_offset_y = data.get("label_offset_y", 0.0)
         p.label_row_height = data.get("label_row_height", 0.0)
         
+        er = data.get("export_region")
+        p.export_region = ExportRegion.from_dict(er) if er else None
+
         p.corner_label_font_family = data.get("corner_label_font_family", "Arial")
         p.corner_label_font_size = data.get("corner_label_font_size", 12)
         p.corner_label_font_weight = data.get("corner_label_font_weight", "bold")

@@ -20,9 +20,21 @@ class PdfExporter:
         # Calculate Layout (mm)
         layout_result = LayoutEngine.calculate_layout(project)
 
-        # Use the project's page size directly (WYSIWYG with canvas)
-        page_w_mm = project.page_width_mm
-        page_h_mm = project.page_height_mm
+        # Determine output page size & translation. If a user-defined export
+        # region is set, the PDF page becomes the region's size and all content
+        # is translated so the region origin maps to (0, 0) — content outside
+        # the region is naturally clipped by the page bounds.
+        export_region = getattr(project, 'export_region', None)
+        if export_region is not None:
+            page_w_mm = export_region.w_mm
+            page_h_mm = export_region.h_mm
+            region_dx_mm = export_region.x_mm
+            region_dy_mm = export_region.y_mm
+        else:
+            page_w_mm = project.page_width_mm
+            page_h_mm = project.page_height_mm
+            region_dx_mm = 0.0
+            region_dy_mm = 0.0
         
         print(f"DEBUG: Exporting PDF: {page_w_mm}mm x {page_h_mm}mm at {project.dpi} DPI")
         print(f"DEBUG: Scale factor (dpi/25.4): {project.dpi / 25.4:.2f}")
@@ -59,6 +71,11 @@ class PdfExporter:
             # Coordinate Conversion Factor: mm -> dots
             # dpi dots / inch, 1 inch = 25.4 mm
             scale = project.dpi / 25.4
+
+            # Shift everything so the export region's top-left maps to (0,0).
+            # (No-op when export_region is None: region_dx/dy are 0.)
+            if region_dx_mm != 0.0 or region_dy_mm != 0.0:
+                painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
             
             label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
             label_rects = getattr(layout_result, 'label_rects', {})
@@ -129,9 +146,17 @@ class PdfExporter:
         finally:
             painter.end()
 
-        # Pass 2: stamp PDF/EPS source cells as true vector XObjects
+        # Pass 2: stamp PDF/EPS source cells as true vector XObjects.
+        # Shift source cell mm coords so they match the (possibly-cropped) PDF page origin.
         if pdf_source_cells:
-            PdfExporter._stamp_pdf_sources(output_path, pdf_source_cells, project.page_width_mm, project.page_height_mm)
+            if region_dx_mm != 0.0 or region_dy_mm != 0.0:
+                shifted = [
+                    (cell, (cx - region_dx_mm, cy - region_dy_mm, cw, ch))
+                    for cell, (cx, cy, cw, ch) in pdf_source_cells
+                ]
+            else:
+                shifted = pdf_source_cells
+            PdfExporter._stamp_pdf_sources(output_path, shifted, page_w_mm, page_h_mm)
 
     @staticmethod
     def _stamp_pdf_sources(output_path: str, pdf_source_cells: list, page_w_mm: float, page_h_mm: float):

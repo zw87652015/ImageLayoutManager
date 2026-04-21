@@ -44,7 +44,9 @@ from src.app.commands import (
     ChangeSubCellRatioCommand,
     FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand,
     DividerDragCommand,
-    AddPiPItemCommand, SetPiPGeometryCommand, SetPiPOriginCommand
+    AddPiPItemCommand, SetPiPGeometryCommand, SetPiPOriginCommand,
+    CreateSizeGroupCommand, DeleteSizeGroupCommand, SizeGroupPropertyChangeCommand,
+    SetExportRegionCommand, ClearExportRegionCommand,
 )
 from src.model.data_model import PiPItem
 from src.utils.image_proxy import get_image_proxy
@@ -455,6 +457,20 @@ class MainWindow(QMainWindow):
         layout_menu.addAction(send_back_action)
         self._act_send_back = send_back_action
 
+        layout_menu.addSeparator()
+
+        # ── Export Region ──
+        set_export_region_action = QAction(tr("action_set_export_region"), self)
+        set_export_region_action.setCheckable(True)
+        set_export_region_action.triggered.connect(self._on_toggle_define_export_region)
+        layout_menu.addAction(set_export_region_action)
+        self._act_set_export_region = set_export_region_action
+
+        clear_export_region_action = QAction(tr("action_clear_export_region"), self)
+        clear_export_region_action.triggered.connect(self._on_clear_export_region)
+        layout_menu.addAction(clear_export_region_action)
+        self._act_clear_export_region = clear_export_region_action
+
         # ── Toolbar — quick actions ──
         self.toolbar.addAction(auto_label_incell_action)
         self.toolbar.addAction(auto_label_outcell_action)
@@ -599,6 +615,10 @@ class MainWindow(QMainWindow):
         self.inspector.apply_color_to_group.connect(self._on_apply_color_to_group)
         self.inspector.label_text_changed.connect(self._on_label_text_changed)
         self.inspector.subcell_ratio_changed.connect(self._on_subcell_ratio_changed)
+        self.inspector.size_group_create_requested.connect(self._on_size_group_create_from_selection)
+        self.inspector.size_group_pinned_changed.connect(self._on_size_group_pinned_changed)
+        self.inspector.size_group_rename_requested.connect(self._on_size_group_rename)
+        self.inspector.size_group_delete_requested.connect(self._on_size_group_delete)
         self.layers_panel.items_selected.connect(self._select_cells_by_ids)
         self.layers_panel.context_menu_requested.connect(self._on_layers_context_menu)
 
@@ -622,6 +642,9 @@ class MainWindow(QMainWindow):
         tab.scene.insert_cell_requested.connect(self._on_insert_cell)
         tab.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
         tab.scene.divider_drag_finished.connect(self._on_divider_drag_finished)
+        tab.scene.export_region_defined.connect(self._on_export_region_defined)
+        tab.scene.export_region_edited.connect(self._on_export_region_edited)
+        tab.scene.export_region_clear_requested.connect(self._on_clear_export_region)
         tab.scene.pip_geometry_changed.connect(self._on_pip_geometry_changed)
         tab.scene.pip_origin_changed.connect(self._on_pip_origin_changed)
         tab.scene.pip_context_menu.connect(self._on_pip_context_menu)
@@ -657,6 +680,9 @@ class MainWindow(QMainWindow):
             tab.scene.insert_cell_requested.disconnect(self._on_insert_cell)
             tab.scene.cell_freeform_geometry_changed.disconnect(self._on_cell_freeform_geometry_changed)
             tab.scene.divider_drag_finished.disconnect(self._on_divider_drag_finished)
+            tab.scene.export_region_defined.disconnect(self._on_export_region_defined)
+            tab.scene.export_region_edited.disconnect(self._on_export_region_edited)
+            tab.scene.export_region_clear_requested.disconnect(self._on_clear_export_region)
             tab.scene.pip_geometry_changed.disconnect(self._on_pip_geometry_changed)
             tab.scene.pip_origin_changed.disconnect(self._on_pip_origin_changed)
             tab.scene.pip_context_menu.disconnect(self._on_pip_context_menu)
@@ -1027,6 +1053,10 @@ class MainWindow(QMainWindow):
         self._act_grid_mode.setText(tr("action_grid_mode"))
         self._act_bring_front.setText(tr("action_bring_front"))
         self._act_send_back.setText(tr("action_send_back"))
+        if hasattr(self, '_act_set_export_region'):
+            self._act_set_export_region.setText(tr("action_set_export_region"))
+        if hasattr(self, '_act_clear_export_region'):
+            self._act_clear_export_region.setText(tr("action_clear_export_region"))
         self._about_action.setText(tr("action_about"))
         self._help_guide_action.setText(tr("action_user_guide"))
         self._export_button.setText(tr("toolbar_export"))
@@ -1511,17 +1541,37 @@ class MainWindow(QMainWindow):
     def _on_delete_row(self, row_index):
         if len(self.project.rows) <= 1:
             return
+        # Snapshot size-group ids of all leaf cells being removed so any
+        # now-empty groups can be pruned in the same undo step.
+        affected_gids = {
+            c.size_group_id for c in self.project.get_all_leaf_cells()
+            if c.row_index == row_index and c.size_group_id
+        }
         cmd = DeleteRowCommand(self.project, row_index,
                                update_callback=self._refresh_and_update)
-        self.undo_stack.push(cmd)
+        self._push_with_group_prune(cmd, affected_gids)
 
     def _on_delete_cell(self, row_index, col_index):
         row = next((r for r in self.project.rows if r.index == row_index), None)
         if not row or row.column_count <= 1:
             return
+        # Snapshot group ids of cells in the column being removed (recursive
+        # through any nested split containers). We walk cells whose top-level
+        # ancestor sits at (row_index, col_index).
+        def _is_in_target_col(cell):
+            top = cell
+            par = self.project.find_parent_of(top.id)
+            while par:
+                top = par
+                par = self.project.find_parent_of(top.id)
+            return top.row_index == row_index and top.col_index == col_index
+        affected_gids = {
+            c.size_group_id for c in self.project.get_all_leaf_cells()
+            if _is_in_target_col(c) and c.size_group_id
+        }
         cmd = DeleteCellCommand(self.project, row_index, col_index,
                                 update_callback=self._refresh_and_update)
-        self.undo_stack.push(cmd)
+        self._push_with_group_prune(cmd, affected_gids)
 
     def _on_selection_changed(self):
         try:
@@ -1564,6 +1614,12 @@ class MainWindow(QMainWindow):
                     "padding_left": first_cell.padding_left,
                     "padding_right": first_cell.padding_right,
                 })
+            # Common size group across selection (None if mixed or ungrouped)
+            gids = {getattr(self.project.find_cell_by_id(ci.cell_id), 'size_group_id', None)
+                    for ci in cell_items}
+            common_gid = next(iter(gids)) if len(gids) == 1 else None
+            multi_data["size_group_id"] = common_gid
+            multi_data["_size_groups"] = self._size_groups_payload()
             self.inspector.set_selection('multi_cell', multi_data)
             return
 
@@ -1624,6 +1680,7 @@ class MainWindow(QMainWindow):
                 # Populate corner label fields from existing cell-scoped text items
                 cell_dict = cell.to_dict()
                 cell_dict["layout_mode"] = getattr(self.project, 'layout_mode', 'grid')
+                cell_dict["_size_groups"] = self._size_groups_payload()
                 corner_labels = {}
                 for t in self.project.text_items:
                     if t.scope == "cell" and t.parent_id == cell.id and t.anchor:
@@ -1683,7 +1740,123 @@ class MainWindow(QMainWindow):
             cmd = PropertyChangeCommand(selected_cells[0], changes, self._refresh_and_update, "Change Cell Property")
         else:
             cmd = MultiPropertyChangeCommand(selected_cells, changes, self._refresh_and_update, f"Change {len(selected_cells)} Cells")
+
+        # If size_group_id is changing, the previously-assigned groups may become
+        # empty and should be auto-pruned as part of the same undo step.
+        if 'size_group_id' in changes:
+            affected = {getattr(c, 'size_group_id', None) for c in selected_cells}
+            self._push_with_group_prune(cmd, affected)
+        else:
+            self.undo_stack.push(cmd)
+
+    # --- Size Group handlers ---
+    def _push_with_group_prune(self, cmd, affected_group_ids):
+        """Push `cmd`, then auto-delete any groups in `affected_group_ids` that
+        became empty as a result. All operations collapse into a single undo step.
+        """
+        affected_group_ids = {gid for gid in affected_group_ids if gid}
+        if not affected_group_ids:
+            self.undo_stack.push(cmd)
+            return
+        self.undo_stack.beginMacro(cmd.text())
         self.undo_stack.push(cmd)
+        # After `cmd.redo()` any orphaned groups can now be pruned.
+        for gid in affected_group_ids:
+            if not self.project.size_group_members(gid):
+                self.undo_stack.push(
+                    DeleteSizeGroupCommand(self.project, gid, self._refresh_and_update)
+                )
+        self.undo_stack.endMacro()
+
+    def _size_groups_payload(self) -> list:
+        """Build the list-of-dicts passed to the inspector for combo population."""
+        from src.app.i18n import tr  # local import to avoid circular
+        return [
+            {
+                "id": g.id,
+                "name": g.name,
+                "pinned_width_mm": g.pinned_width_mm,
+                "pinned_height_mm": g.pinned_height_mm,
+                "member_count": len(self.project.size_group_members(g.id)),
+            }
+            for g in getattr(self.project, 'size_groups', [])
+        ]
+
+    def _selected_leaf_cells(self) -> list:
+        """Return currently-selected leaf Cell objects (de-duplicated)."""
+        try:
+            items = self.scene.selectedItems()
+        except RuntimeError:
+            return []
+        seen = set()
+        cells = []
+        from src.canvas.cell_item import CellItem
+        for it in items:
+            if isinstance(it, CellItem) and getattr(it, 'cell_id', None) and it.cell_id not in seen:
+                cell = self.project.find_cell_by_id(it.cell_id)
+                if cell and cell.is_leaf:
+                    cells.append(cell)
+                    seen.add(it.cell_id)
+        return cells
+
+    def _on_size_group_create_from_selection(self):
+        """Create a new SizeGroup containing the currently-selected cells."""
+        cells = self._selected_leaf_cells()
+        if not cells:
+            return
+        # Auto-generate name "Group N" where N = next index
+        existing_names = {g.name for g in self.project.size_groups}
+        n = 1
+        while tr("size_group_default_name").format(n=n) in existing_names:
+            n += 1
+        name = tr("size_group_default_name").format(n=n)
+        cmd = CreateSizeGroupCommand(self.project, cells, name, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_size_group_pinned_changed(self, group_id: str, w_mm: float, h_mm: float):
+        cmd = SizeGroupPropertyChangeCommand(
+            self.project, group_id,
+            {"pinned_width_mm": float(w_mm), "pinned_height_mm": float(h_mm)},
+            self._refresh_and_update, "Change Group Pinned Size"
+        )
+        self.undo_stack.push(cmd)
+
+    def _on_size_group_rename(self, group_id: str, new_name: str):
+        cmd = SizeGroupPropertyChangeCommand(
+            self.project, group_id, {"name": new_name},
+            self._refresh_and_update, "Rename Size Group"
+        )
+        self.undo_stack.push(cmd)
+
+    def _on_size_group_delete(self, group_id: str):
+        cmd = DeleteSizeGroupCommand(self.project, group_id, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_size_group_add_to_existing(self, group_id: str):
+        """Add currently-selected cells to an existing group (from context menu)."""
+        cells = self._selected_leaf_cells()
+        if not cells:
+            return
+        # Previous group memberships may become empty after the move.
+        affected = {getattr(c, 'size_group_id', None) for c in cells}
+        cmd = MultiPropertyChangeCommand(
+            cells, {"size_group_id": group_id},
+            self._refresh_and_update, "Add Cells to Size Group"
+        )
+        self._push_with_group_prune(cmd, affected)
+
+    def _on_size_group_remove_selection(self):
+        """Remove currently-selected cells from their size group."""
+        cells = self._selected_leaf_cells()
+        cells = [c for c in cells if getattr(c, 'size_group_id', None)]
+        if not cells:
+            return
+        affected = {c.size_group_id for c in cells}
+        cmd = MultiPropertyChangeCommand(
+            cells, {"size_group_id": None},
+            self._refresh_and_update, "Remove Cells from Size Group"
+        )
+        self._push_with_group_prune(cmd, affected)
 
     def _on_pip_property_changed(self, changes: dict):
         """Apply inspector changes to the currently-selected PiP inset."""
@@ -2128,6 +2301,10 @@ class MainWindow(QMainWindow):
             act = menu.addAction(f"Delete {len(row_indices)} Row(s)")
             act.triggered.connect(_del_rows)
 
+        # --- Size Group ---
+        menu.addSeparator()
+        self._append_size_group_menu(menu, cells[0] if cells else None)
+
         def _show():
             menu.exec(global_pos if isinstance(global_pos, QPoint) else
                       QPoint(int(global_pos.x()), int(global_pos.y())))
@@ -2184,6 +2361,34 @@ class MainWindow(QMainWindow):
         )
         cmd = AddTextCommand(self.project, item, self._refresh_and_update)
         self.undo_stack.push(cmd)
+
+    def _append_size_group_menu(self, menu, cell):
+        """Append Size Group create/add/remove entries to the given QMenu.
+
+        Operates on the current selection (falls back to `cell` if selection is empty).
+        """
+        sel = self._selected_leaf_cells()
+        if not sel and cell is not None:
+            sel = [cell]
+
+        # Create new group
+        create_act = menu.addAction(tr("ctx_create_size_group"))
+        create_act.triggered.connect(self._on_size_group_create_from_selection)
+        create_act.setEnabled(len(sel) >= 1)
+
+        # Add to existing group submenu
+        groups = getattr(self.project, 'size_groups', []) or []
+        if groups:
+            add_menu = menu.addMenu(tr("ctx_add_to_size_group"))
+            for g in groups:
+                gid = g.id
+                act = add_menu.addAction(g.name)
+                act.triggered.connect(lambda _checked=False, _gid=gid: self._on_size_group_add_to_existing(_gid))
+
+        # Remove from group (enabled only if any selected cell is grouped)
+        if any(getattr(c, 'size_group_id', None) for c in sel):
+            remove_act = menu.addAction(tr("ctx_remove_from_size_group"))
+            remove_act.triggered.connect(self._on_size_group_remove_selection)
 
     def _on_cell_context_menu(self, cell_id: str, is_label_cell: bool, screen_pos):
         """Build and show context menu for a cell or label cell."""
@@ -2365,6 +2570,10 @@ class MainWindow(QMainWindow):
                         cell_id, {"crop_left": 0.0, "crop_top": 0.0, "crop_right": 1.0, "crop_bottom": 1.0}
                     )
                 )
+
+        # --- Size Group ---
+        menu.addSeparator()
+        self._append_size_group_menu(menu, cell)
 
         # --- Insert Row / Cell ---
         menu.addSeparator()
@@ -2749,6 +2958,49 @@ class MainWindow(QMainWindow):
     def _on_divider_drag_finished(self, div):
         """Called when user finishes dragging a row/column divider; push undoable command."""
         cmd = DividerDragCommand(self.project, div, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    # --- Export Region handlers ---
+    def _on_toggle_define_export_region(self, checked: bool):
+        """Layout → Set Export Region (checkable): toggle rubber-band mode on the canvas."""
+        if checked:
+            if self.scene:
+                self.scene.begin_define_export_region()
+            self.statusBar().showMessage(tr("msg_define_export_region_hint"), 4000)
+        else:
+            if self.scene:
+                self.scene.cancel_define_export_region()
+
+    def _on_export_region_defined(self, x: float, y: float, w: float, h: float):
+        """Committed via drag in defining mode."""
+        cmd = SetExportRegionCommand(
+            self.project, (x, y, w, h), self._refresh_and_update,
+            description="Set Export Region"
+        )
+        self.undo_stack.push(cmd)
+        # Reset the "Set Export Region" toggle action (defining mode has finished).
+        if hasattr(self, '_act_set_export_region'):
+            self._act_set_export_region.blockSignals(True)
+            self._act_set_export_region.setChecked(False)
+            self._act_set_export_region.blockSignals(False)
+
+    def _on_export_region_edited(self, x: float, y: float, w: float, h: float,
+                                 old_x: float, old_y: float, old_w: float, old_h: float):
+        """User moved or resized an existing export region."""
+        cmd = SetExportRegionCommand(
+            self.project, (x, y, w, h), self._refresh_and_update,
+            description="Edit Export Region"
+        )
+        # Overwrite the captured "old" values with those provided by the scene so
+        # the item's pre-drag rect is the source of truth (the model was live-updated).
+        cmd.old_xywh = (old_x, old_y, old_w, old_h)
+        self.undo_stack.push(cmd)
+
+    def _on_clear_export_region(self):
+        """Layout → Clear Export Region, or Delete key while region selected."""
+        if self.project.export_region is None:
+            return
+        cmd = ClearExportRegionCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
     def _on_bring_to_front(self):

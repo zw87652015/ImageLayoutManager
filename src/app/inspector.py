@@ -1,10 +1,12 @@
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QGroupBox, QFormLayout, QHBoxLayout,
+    QWidget, QVBoxLayout, QGroupBox, QFormLayout, QHBoxLayout, QGridLayout,
     QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QFontComboBox,
-    QLineEdit, QPushButton, QCheckBox, QScrollArea, QColorDialog, QFrame
+    QLineEdit, QPushButton, QToolButton, QButtonGroup, QCheckBox,
+    QScrollArea, QColorDialog, QFrame
 )
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QColor
+from typing import Optional
 from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
@@ -215,6 +217,11 @@ class Inspector(QWidget):
     subcell_ratio_changed = pyqtSignal(str, float) # (cell_id, new_ratio) - change a sub-cell's size ratio
     pip_property_changed = pyqtSignal(dict) # {property: value} for selected PiP
     pip_delete_requested = pyqtSignal()     # user clicked Delete PiP button
+    # Size Group signals
+    size_group_create_requested = pyqtSignal()                     # create new group & assign current selection
+    size_group_pinned_changed = pyqtSignal(str, float, float)      # (group_id, w_mm, h_mm) — 0 = auto
+    size_group_rename_requested = pyqtSignal(str, str)             # (group_id, new_name)
+    size_group_delete_requested = pyqtSignal(str)                  # group_id
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -362,20 +369,46 @@ class Inspector(QWidget):
         )
         self.cell_layout.addRow(self._fl("lbl_rotation"), self.rotation_combo)
         
-        # Alignment
-        self.align_h_combo = QComboBox()
-        self.align_h_combo.addItems(["left", "center", "right"])
-        self.align_h_combo.currentTextChanged.connect(
-            lambda t: self.cell_property_changed.emit({"align_h": t})
-        )
-        self.cell_layout.addRow(self._fl("lbl_align_h"), self.align_h_combo)
-        
-        self.align_v_combo = QComboBox()
-        self.align_v_combo.addItems(["top", "center", "bottom"])
-        self.align_v_combo.currentTextChanged.connect(
-            lambda t: self.cell_property_changed.emit({"align_v": t})
-        )
-        self.cell_layout.addRow(self._fl("lbl_align_v"), self.align_v_combo)
+        # Alignment — 3x3 grid of checkable arrow buttons (PowerPoint-style).
+        # Each cell maps to a (align_h, align_v) pair; clicking emits both properties together.
+        self.align_grid_widget = QWidget()
+        _align_grid = QGridLayout(self.align_grid_widget)
+        _align_grid.setContentsMargins(0, 0, 0, 0)
+        _align_grid.setHorizontalSpacing(2)
+        _align_grid.setVerticalSpacing(2)
+
+        self.align_button_group = QButtonGroup(self)
+        self.align_button_group.setExclusive(True)
+        self._align_buttons: dict[tuple[str, str], QToolButton] = {}
+
+        # (row, col) -> ((align_h, align_v), glyph, tooltip_key)
+        _ALIGN_CELLS = [
+            (0, 0, "left",   "top",    "↖", "tip_align_tl"),
+            (0, 1, "center", "top",    "↑", "tip_align_tc"),
+            (0, 2, "right",  "top",    "↗", "tip_align_tr"),
+            (1, 0, "left",   "center", "←", "tip_align_ml"),
+            (1, 1, "center", "center", "•", "tip_align_mc"),
+            (1, 2, "right",  "center", "→", "tip_align_mr"),
+            (2, 0, "left",   "bottom", "↙", "tip_align_bl"),
+            (2, 1, "center", "bottom", "↓", "tip_align_bc"),
+            (2, 2, "right",  "bottom", "↘", "tip_align_br"),
+        ]
+        for r, c, h, v, glyph, tip_key in _ALIGN_CELLS:
+            btn = QToolButton()
+            btn.setText(glyph)
+            btn.setCheckable(True)
+            btn.setAutoRaise(False)
+            btn.setFixedSize(26, 26)
+            btn.setToolTip(tr(tip_key))
+            btn.clicked.connect(
+                lambda _checked=False, _h=h, _v=v:
+                    self.cell_property_changed.emit({"align_h": _h, "align_v": _v})
+            )
+            _align_grid.addWidget(btn, r, c)
+            self.align_button_group.addButton(btn)
+            self._align_buttons[(h, v)] = btn
+
+        self.cell_layout.addRow(self._fl("lbl_alignment"), self.align_grid_widget)
         
         self.freeform_section_label = QLabel("— Freeform Geometry —")
         self.cell_layout.addRow(self.freeform_section_label)
@@ -396,6 +429,37 @@ class Inspector(QWidget):
         self.override_h = self._create_spinbox(0, 1000, self._emit_override_size)
         self.cell_layout.addRow(self._fl("lbl_width_mm"),  self.override_w)
         self.cell_layout.addRow(self._fl("lbl_height_mm"), self.override_h)
+
+        # --- Size Group section -------------------------------------------
+        self._sec_size_group = QLabel("— Size Group —")
+        self.cell_layout.addRow(self._sec_size_group)
+
+        # Dropdown: None | <each group> | + Create New Group
+        self.size_group_combo = QComboBox()
+        self.size_group_combo.currentIndexChanged.connect(self._on_size_group_combo_changed)
+        self.cell_layout.addRow(self._fl("lbl_size_group"), self.size_group_combo)
+
+        # Group name (rename)
+        self.size_group_name_edit = QLineEdit()
+        self.size_group_name_edit.editingFinished.connect(self._emit_size_group_rename)
+        self.cell_layout.addRow(self._fl("lbl_size_group_name"), self.size_group_name_edit)
+
+        # Pinned shared W/H
+        self.size_group_pinned_w = self._create_spinbox(0, 1000, self._emit_size_group_pinned)
+        self.size_group_pinned_h = self._create_spinbox(0, 1000, self._emit_size_group_pinned)
+        self.cell_layout.addRow(self._fl("lbl_size_group_pinned_w"), self.size_group_pinned_w)
+        self.cell_layout.addRow(self._fl("lbl_size_group_pinned_h"), self.size_group_pinned_h)
+
+        # Members summary + Delete button
+        self.size_group_members_label = QLabel("")
+        self.cell_layout.addRow(self.size_group_members_label)
+        self.size_group_delete_btn = QPushButton()
+        self.size_group_delete_btn.clicked.connect(self._emit_size_group_delete)
+        self.cell_layout.addRow(self.size_group_delete_btn)
+
+        # Internal state
+        self._current_size_group_id: Optional[str] = None
+        self._size_groups_cache: list = []  # list of group dicts
 
         self._sec_padding = QLabel("— Padding —")
         self.cell_layout.addRow(self._sec_padding)
@@ -959,11 +1023,119 @@ class Inspector(QWidget):
             "freeform_h_mm": self.freeform_h.value()
         })
 
+    def _set_alignment_buttons(self, align_h: str, align_v: str):
+        """Check the single alignment button matching (align_h, align_v); uncheck others.
+
+        Temporarily disables exclusivity so we can toggle without emitting signals
+        (Qt's blockSignals already blocks click emission, but exclusivity flips state).
+        """
+        btn = self._align_buttons.get((align_h, align_v))
+        # Uncheck all (exclusive group requires disabling exclusivity first)
+        self.align_button_group.setExclusive(False)
+        for b in self._align_buttons.values():
+            b.setChecked(False)
+        if btn:
+            btn.setChecked(True)
+        self.align_button_group.setExclusive(True)
+
     def _emit_override_size(self):
         self.cell_property_changed.emit({
             "override_width_mm": self.override_w.value(),
             "override_height_mm": self.override_h.value()
         })
+
+    # --- Size Group handlers ---
+    _SG_DATA_ROLE = Qt.ItemDataRole.UserRole
+
+    def _populate_size_group_section(self, current_group_id: Optional[str], size_groups: list):
+        """Populate the Size Group section from project state.
+
+        size_groups: list of dicts {id, name, pinned_width_mm, pinned_height_mm, member_count}.
+        """
+        self._size_groups_cache = size_groups or []
+        self._current_size_group_id = current_group_id
+
+        # Rebuild combo (blocked to avoid re-emitting during setup)
+        self.size_group_combo.blockSignals(True)
+        self.size_group_combo.clear()
+        # Index 0 = None
+        self.size_group_combo.addItem(tr("size_group_none"), userData="")
+        for g in self._size_groups_cache:
+            self.size_group_combo.addItem(g.get("name", "Group"), userData=g.get("id"))
+        # Last entry = create new
+        self.size_group_combo.addItem(tr("size_group_new"), userData="__new__")
+
+        # Select current
+        idx = 0
+        if current_group_id:
+            for i in range(self.size_group_combo.count()):
+                if self.size_group_combo.itemData(i) == current_group_id:
+                    idx = i
+                    break
+        self.size_group_combo.setCurrentIndex(idx)
+        self.size_group_combo.blockSignals(False)
+
+        # Show/hide group-specific widgets
+        in_group = bool(current_group_id)
+        g_data = next((g for g in self._size_groups_cache if g.get("id") == current_group_id), None) if in_group else None
+
+        for w in (self.size_group_name_edit,
+                  self.size_group_pinned_w, self.size_group_pinned_h,
+                  self.size_group_members_label, self.size_group_delete_btn):
+            w.setVisible(in_group)
+            lbl = self.cell_layout.labelForField(w) if w not in (self.size_group_members_label, self.size_group_delete_btn) else None
+            if lbl:
+                lbl.setVisible(in_group)
+
+        if g_data:
+            self.size_group_name_edit.blockSignals(True)
+            self.size_group_name_edit.setText(g_data.get("name", "Group"))
+            self.size_group_name_edit.blockSignals(False)
+            self.size_group_pinned_w.blockSignals(True)
+            self.size_group_pinned_h.blockSignals(True)
+            self.size_group_pinned_w.setValue(g_data.get("pinned_width_mm", 0.0))
+            self.size_group_pinned_h.setValue(g_data.get("pinned_height_mm", 0.0))
+            self.size_group_pinned_w.blockSignals(False)
+            self.size_group_pinned_h.blockSignals(False)
+            n = g_data.get("member_count", 0)
+            self.size_group_members_label.setText(tr("size_group_members").format(n=n))
+            self.size_group_delete_btn.setText(tr("size_group_delete"))
+
+    def _on_size_group_combo_changed(self, idx: int):
+        if idx < 0:
+            return
+        data = self.size_group_combo.itemData(idx)
+        if data == "__new__":
+            # Create new group and assign current selection
+            self.size_group_create_requested.emit()
+            return
+        # Assign via cell property change (empty -> ungroup)
+        new_gid = data if data else None
+        if new_gid == self._current_size_group_id:
+            return
+        self.cell_property_changed.emit({"size_group_id": new_gid})
+
+    def _emit_size_group_pinned(self):
+        if not self._current_size_group_id:
+            return
+        self.size_group_pinned_changed.emit(
+            self._current_size_group_id,
+            self.size_group_pinned_w.value(),
+            self.size_group_pinned_h.value(),
+        )
+
+    def _emit_size_group_rename(self):
+        if not self._current_size_group_id:
+            return
+        new_name = self.size_group_name_edit.text().strip()
+        if not new_name:
+            return
+        self.size_group_rename_requested.emit(self._current_size_group_id, new_name)
+
+    def _emit_size_group_delete(self):
+        if not self._current_size_group_id:
+            return
+        self.size_group_delete_requested.emit(self._current_size_group_id)
 
     def _emit_scale_bar(self):
         """Emit all scale bar properties as a single cell property change."""
@@ -1115,6 +1287,11 @@ class Inspector(QWidget):
                 self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
                 self.override_w.setValue(data.get("override_width_mm", 0.0))
                 self.override_h.setValue(data.get("override_height_mm", 0.0))
+                # Size group: show current only if all selected share one; still allow assignment
+                self._populate_size_group_section(
+                    data.get("size_group_id"),
+                    data.get("_size_groups", []),
+                )
                 self.blockSignals(False)
             return
 
@@ -1202,8 +1379,10 @@ class Inspector(QWidget):
             self.blockSignals(True)
             self.fit_mode_combo.setCurrentText(data.get("fit_mode", "contain"))
             self.rotation_combo.setCurrentText(str(data.get("rotation", 0)))
-            self.align_h_combo.setCurrentText(data.get("align_h", "center"))
-            self.align_v_combo.setCurrentText(data.get("align_v", "center"))
+            self._set_alignment_buttons(
+                data.get("align_h", "center"),
+                data.get("align_v", "center"),
+            )
             self.pad_top.setValue(data.get("padding_top", 0))
             self.pad_bottom.setValue(data.get("padding_bottom", 0))
             self.pad_left.setValue(data.get("padding_left", 0))
@@ -1214,6 +1393,11 @@ class Inspector(QWidget):
             self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
             self.override_w.setValue(data.get("override_width_mm", 0.0))
             self.override_h.setValue(data.get("override_height_mm", 0.0))
+            # Size group section
+            self._populate_size_group_section(
+                data.get("size_group_id"),
+                data.get("_size_groups", []),
+            )
 
             corner_labels = data.get("corner_labels", {}) if data else {}
             self.corner_label_tl.setText(corner_labels.get("top_left_inside", ""))

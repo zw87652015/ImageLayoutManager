@@ -122,6 +122,19 @@ class AutoLayout:
                 except Exception:
                     pass
         
+        # 1a-group. Size-group aware aspect bucketing.
+        # Cells that belong to the same size group must end up with the same W/H.
+        # Using the MIN aspect of the group ensures the shared size fits every member.
+        groups = getattr(project, 'size_groups', []) or []
+        if groups:
+            for g in groups:
+                member_ids = [c.id for c in project.get_all_leaf_cells() if c.size_group_id == g.id]
+                aspects = [aspect_ratios[mid] for mid in member_ids if mid in aspect_ratios]
+                if aspects:
+                    shared_aspect = min(aspects)
+                    for mid in member_ids:
+                        aspect_ratios[mid] = shared_aspect
+
         # 1b. Recursively optimise split_ratios for every container cell
         #     and compute composite aspect ratios bottom-up.
         def _optimise_and_composite(cell):

@@ -166,6 +166,65 @@ class DividerDragCommand(QUndoCommand):
             self.update_callback()
 
 
+class SetExportRegionCommand(QUndoCommand):
+    """Set or replace the project's export region (x, y, w, h in mm)."""
+    def __init__(self, project, new_xywh, update_callback=None, description="Set Export Region"):
+        super().__init__(description)
+        from src.model.data_model import ExportRegion
+        self.project = project
+        self.ExportRegion = ExportRegion
+        # Snapshot old region (may be None)
+        old = project.export_region
+        self.old_xywh = (old.x_mm, old.y_mm, old.w_mm, old.h_mm) if old else None
+        self.new_xywh = tuple(new_xywh)
+        self.update_callback = update_callback
+
+    def _apply(self, xywh):
+        if xywh is None:
+            self.project.export_region = None
+        else:
+            x, y, w, h = xywh
+            if self.project.export_region is None:
+                self.project.export_region = self.ExportRegion(x_mm=x, y_mm=y, w_mm=w, h_mm=h)
+            else:
+                er = self.project.export_region
+                er.x_mm = x; er.y_mm = y; er.w_mm = w; er.h_mm = h
+        if self.update_callback:
+            self.update_callback()
+
+    def redo(self):
+        self._apply(self.new_xywh)
+
+    def undo(self):
+        self._apply(self.old_xywh)
+
+
+class ClearExportRegionCommand(QUndoCommand):
+    """Remove the project's export region (restore default full-page export)."""
+    def __init__(self, project, update_callback=None):
+        super().__init__("Clear Export Region")
+        from src.model.data_model import ExportRegion
+        self.project = project
+        self.ExportRegion = ExportRegion
+        old = project.export_region
+        self.old_xywh = (old.x_mm, old.y_mm, old.w_mm, old.h_mm) if old else None
+        self.update_callback = update_callback
+
+    def redo(self):
+        self.project.export_region = None
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        if self.old_xywh is None:
+            self.project.export_region = None
+        else:
+            x, y, w, h = self.old_xywh
+            self.project.export_region = self.ExportRegion(x_mm=x, y_mm=y, w_mm=w, h_mm=h)
+        if self.update_callback:
+            self.update_callback()
+
+
 class ZIndexChangeCommand(QUndoCommand):
     """Change z_index of one or more cells for bring-to-front / send-to-back."""
     def __init__(self, cells: list, delta: int, update_callback=None, description="Change Z-Order"):
@@ -246,6 +305,98 @@ class MultiPropertyChangeCommand(QUndoCommand):
                     setattr(target, k, v)
         if self.update_callback:
             self.update_callback()
+
+class CreateSizeGroupCommand(QUndoCommand):
+    """Create a new SizeGroup and assign the given cells to it."""
+    def __init__(self, project, cells: list, name: str, update_callback=None):
+        super().__init__(f"Create Size Group '{name}'")
+        from src.model.data_model import SizeGroup
+        self.project = project
+        self.cells = list(cells)
+        self.group = SizeGroup(name=name)
+        self.old_group_ids = [getattr(c, 'size_group_id', None) for c in self.cells]
+        self.update_callback = update_callback
+
+    def redo(self):
+        if self.group not in self.project.size_groups:
+            self.project.size_groups.append(self.group)
+        for c in self.cells:
+            c.size_group_id = self.group.id
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for c, old in zip(self.cells, self.old_group_ids):
+            c.size_group_id = old
+        self.project.size_groups = [g for g in self.project.size_groups if g.id != self.group.id]
+        if self.update_callback:
+            self.update_callback()
+
+
+class DeleteSizeGroupCommand(QUndoCommand):
+    """Delete a SizeGroup and unassign all its members."""
+    def __init__(self, project, group_id: str, update_callback=None):
+        super().__init__("Delete Size Group")
+        self.project = project
+        self.group_id = group_id
+        self.group = project.find_size_group(group_id)
+        self.member_ids = [c.id for c in project.size_group_members(group_id)]
+        self.update_callback = update_callback
+
+    def redo(self):
+        if self.group is None:
+            return
+        for c in self.project.get_all_leaf_cells():
+            if c.id in self.member_ids:
+                c.size_group_id = None
+        self.project.size_groups = [g for g in self.project.size_groups if g.id != self.group_id]
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        if self.group is None:
+            return
+        if self.group not in self.project.size_groups:
+            self.project.size_groups.append(self.group)
+        for c in self.project.get_all_leaf_cells():
+            if c.id in self.member_ids:
+                c.size_group_id = self.group_id
+        if self.update_callback:
+            self.update_callback()
+
+
+class SizeGroupPropertyChangeCommand(QUndoCommand):
+    """Change properties on a SizeGroup (pinned W/H, name)."""
+    def __init__(self, project, group_id: str, changes: dict, update_callback=None,
+                 description="Change Size Group Property"):
+        super().__init__(description)
+        self.project = project
+        self.group_id = group_id
+        self.changes = changes
+        group = project.find_size_group(group_id)
+        self.old_values = {k: getattr(group, k, None) for k in changes.keys()} if group else {}
+        self.update_callback = update_callback
+
+    def redo(self):
+        group = self.project.find_size_group(self.group_id)
+        if not group:
+            return
+        for k, v in self.changes.items():
+            if hasattr(group, k):
+                setattr(group, k, v)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        group = self.project.find_size_group(self.group_id)
+        if not group:
+            return
+        for k, v in self.old_values.items():
+            if hasattr(group, k):
+                setattr(group, k, v)
+        if self.update_callback:
+            self.update_callback()
+
 
 class SwapCellsCommand(QUndoCommand):
     def __init__(self, c1, c2, update_callback=None):

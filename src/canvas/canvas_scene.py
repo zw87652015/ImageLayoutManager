@@ -9,6 +9,7 @@ from src.model.layout_engine import LayoutEngine
 from src.canvas.drag_manager import DragManager
 from src.canvas.add_button_item import AddButtonItem
 from src.canvas.divider_item import DividerItem, HIT_THICKNESS
+from src.canvas.export_region_item import ExportRegionItem
 
 class CanvasScene(QGraphicsScene):
     # Signals
@@ -27,6 +28,13 @@ class CanvasScene(QGraphicsScene):
     insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
     cell_freeform_geometry_changed = pyqtSignal(str, float, float, float, float) # cell_id, x, y, w, h
     divider_drag_finished = pyqtSignal(object)  # DividerItem
+    # Export-region lifecycle (main_window creates undoable commands):
+    #   defined   — user committed a new region by drag (x, y, w, h)
+    #   edited    — user moved/resized existing region (x, y, w, h, old_x, old_y, old_w, old_h)
+    #   clear_requested — user pressed Delete while region is selected
+    export_region_defined = pyqtSignal(float, float, float, float)
+    export_region_edited = pyqtSignal(float, float, float, float, float, float, float, float)
+    export_region_clear_requested = pyqtSignal()
     cell_crop_committed = pyqtSignal(str, float, float, float, float)  # cell_id, left, top, right, bottom
     crop_mode_active = pyqtSignal(bool)  # True = entered crop mode, False = exited
     pip_geometry_changed = pyqtSignal(str, str, object, object)  # cell_id, pip_id, old_geom tuple, new_geom tuple
@@ -64,6 +72,13 @@ class CanvasScene(QGraphicsScene):
         self._snap_line_items = []
         self._divider_items = []  # list of DividerItem
         self._drag_target_cell = None  # CellItem currently under an external file drag
+
+        # Export region: view/editable model proxy. The item is created on-demand
+        # when project.export_region is set or when user enters "defining" mode.
+        self._export_region_item = None       # ExportRegionItem | None
+        self._defining_export_region = False  # True while user is rubber-banding
+        self._defining_start_pos = None       # QPointF (scene mm)
+        self._defining_preview_item = None    # transient QGraphicsRectItem during drag
 
         self.preview_mode = False  # hides cell borders for export preview
 
@@ -364,7 +379,10 @@ class CanvasScene(QGraphicsScene):
         elif getattr(self.project, 'layout_mode', 'grid') != 'grid':
             self._clear_dividers()
 
-    def get_snap_lines(self, ignore_cell_id: str = None):
+        # Sync export-region overlay
+        self.refresh_export_region()
+
+    def get_snap_lines(self, ignore_cell_id: str = None, include_page_edges: bool = False):
         """Return lists of vertical (x) and horizontal (y) coordinates for snapping."""
         v_lines = []
         h_lines = []
@@ -372,7 +390,13 @@ class CanvasScene(QGraphicsScene):
         if m.isValid():
             v_lines.extend([m.left(), m.center().x(), m.right()])
             h_lines.extend([m.top(), m.center().y(), m.bottom()])
-            
+
+        if include_page_edges and self.project is not None:
+            pw = self.project.page_width_mm
+            ph = self.project.page_height_mm
+            v_lines.extend([0.0, pw / 2.0, pw])
+            h_lines.extend([0.0, ph / 2.0, ph])
+
         for cid, item in self.cell_items.items():
             if cid == ignore_cell_id or item.is_label_cell:
                 continue
@@ -733,6 +757,65 @@ class CanvasScene(QGraphicsScene):
         """Emit signal so MainWindow can push an undoable command."""
         self.divider_drag_finished.emit(div)
 
+    # ------------------------------------------------------------------
+    # Export region
+    # ------------------------------------------------------------------
+
+    def refresh_export_region(self):
+        """Sync the on-canvas ExportRegionItem with project.export_region."""
+        if not self.project:
+            return
+        er = getattr(self.project, 'export_region', None)
+        if er is None:
+            # Remove any existing item
+            if self._export_region_item is not None and self._export_region_item.scene():
+                self.removeItem(self._export_region_item)
+            self._export_region_item = None
+            return
+        if self._export_region_item is None:
+            self._export_region_item = ExportRegionItem(er.x_mm, er.y_mm, er.w_mm, er.h_mm)
+            self.addItem(self._export_region_item)
+        else:
+            self._export_region_item.setRect(QRectF(er.x_mm, er.y_mm, er.w_mm, er.h_mm))
+
+    def begin_define_export_region(self):
+        """Enter rubber-band mode — next left-press on empty page area starts the drag."""
+        self._defining_export_region = True
+        self._defining_start_pos = None
+        # Deselect everything to avoid interference
+        self.clearSelection()
+
+    def cancel_define_export_region(self):
+        self._defining_export_region = False
+        self._defining_start_pos = None
+        if self._defining_preview_item is not None and self._defining_preview_item.scene():
+            self.removeItem(self._defining_preview_item)
+        self._defining_preview_item = None
+
+    def _export_region_live_update(self, item: 'ExportRegionItem'):
+        """Called while user drags/resizes the committed region. Keep model in sync."""
+        if not self.project or not self.project.export_region:
+            return
+        r = item.rect()
+        self.project.export_region.x_mm = r.x()
+        self.project.export_region.y_mm = r.y()
+        self.project.export_region.w_mm = r.width()
+        self.project.export_region.h_mm = r.height()
+
+    def _export_region_drag_finished(self, item: 'ExportRegionItem'):
+        """Called on mouse-release after a move/resize of an existing region."""
+        old = item.original_rect
+        r = item.rect()
+        if old == r:
+            return
+        self.export_region_edited.emit(
+            r.x(), r.y(), r.width(), r.height(),
+            old.x(), old.y(), old.width(), old.height(),
+        )
+
+    def _export_region_clear_requested(self):
+        self.export_region_clear_requested.emit()
+
     def _on_add_button_clicked(self, action: str, row_index: int, col_index: int):
         """Called by AddButtonItem when clicked."""
         if action == "row_above":
@@ -779,6 +862,25 @@ class CanvasScene(QGraphicsScene):
 
     def mousePressEvent(self, event):
         """Intercept clicks outside the active crop cell to commit and exit crop mode."""
+        # Export-region defining mode — left-click starts the rubber-band.
+        if self._defining_export_region and event.button() == Qt.MouseButton.LeftButton:
+            self._defining_start_pos = event.scenePos()
+            # Transient dashed preview rect
+            from PyQt6.QtWidgets import QGraphicsRectItem as _QRI
+            pen = QPen(QColor(230, 120, 40, 235))
+            pen.setCosmetic(True)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            pen.setWidthF(1.5)
+            brush = QBrush(QColor(230, 120, 40, 32))
+            self._defining_preview_item = _QRI()
+            self._defining_preview_item.setPen(pen)
+            self._defining_preview_item.setBrush(brush)
+            self._defining_preview_item.setZValue(900)
+            self._defining_preview_item.setRect(QRectF(self._defining_start_pos, self._defining_start_pos))
+            self.addItem(self._defining_preview_item)
+            event.accept()
+            return
+
         if self._active_crop_cell is not None:
             pos = event.scenePos()
             cell_scene_rect = QRectF(
@@ -804,8 +906,79 @@ class CanvasScene(QGraphicsScene):
 
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event):
+        # Update rubber-band preview while defining an export region.
+        if (self._defining_export_region
+                and self._defining_start_pos is not None
+                and self._defining_preview_item is not None):
+            p1 = self._defining_start_pos
+            p2 = self._snap_rubberband_point(event.scenePos(), p1)
+            r = QRectF(p1, p2).normalized()
+            self._defining_preview_item.setRect(r)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        # Commit the rubber-band export-region selection.
+        if (self._defining_export_region
+                and self._defining_start_pos is not None
+                and event.button() == Qt.MouseButton.LeftButton):
+            p1 = self._defining_start_pos
+            p2 = self._snap_rubberband_point(event.scenePos(), p1)
+            r = QRectF(p1, p2).normalized()
+            self.hide_snap_lines()
+            # Discard degenerate rects
+            if r.width() >= 2.0 and r.height() >= 2.0:
+                self.export_region_defined.emit(r.x(), r.y(), r.width(), r.height())
+            # Exit defining mode and clear preview
+            self.cancel_define_export_region()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _snap_rubberband_point(self, p, anchor):
+        """Snap the moving corner of the export-region rubber-band to nearby
+        page/margin/cell edges. Shows pink guides and returns the snapped point.
+        """
+        SNAP = 2.0  # mm
+        v_lines, h_lines = self.get_snap_lines(include_page_edges=True)
+
+        new_x = p.x()
+        snap_x = None
+        min_dx = SNAP
+        for tv in v_lines:
+            diff = tv - p.x()
+            if abs(diff) < min_dx:
+                min_dx = abs(diff)
+                new_x = tv
+                snap_x = tv
+
+        new_y = p.y()
+        snap_y = None
+        min_dy = SNAP
+        for th in h_lines:
+            diff = th - p.y()
+            if abs(diff) < min_dy:
+                min_dy = abs(diff)
+                new_y = th
+                snap_y = th
+
+        self.show_snap_lines(
+            [snap_x] if snap_x is not None else [],
+            [snap_y] if snap_y is not None else [],
+        )
+        from PyQt6.QtCore import QPointF
+        return QPointF(new_x, new_y)
+
     def keyPressEvent(self, event):
         """Enter/Return commits crop; Escape cancels crop or dismisses PiP handles."""
+        # Escape during define-mode cancels the rubber-band without emitting.
+        if self._defining_export_region and event.key() == Qt.Key.Key_Escape:
+            self.cancel_define_export_region()
+            event.accept()
+            return
+
         if self._active_crop_cell is not None:
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
                 self._active_crop_cell.exit_crop_mode(commit=True)

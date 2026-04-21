@@ -216,14 +216,21 @@ class LayoutEngine:
 
         figure_rects: Dict[str, Tuple[float, float, float, float]] = dict(cell_rects)
 
-        # Apply grid size overrides
+        # Apply grid size overrides (including size-group resolution)
         if getattr(project, 'layout_mode', 'grid') == 'grid':
+            # Resolve per-cell effective overrides. Size groups take precedence over per-cell overrides.
+            effective_overrides = LayoutEngine._resolve_group_overrides(project, cell_rects)
             for cell in project.get_all_leaf_cells():
                 if cell.id in cell_rects:
                     sx, sy, sw, sh = cell_rects[cell.id]
-                    ow = getattr(cell, 'override_width_mm', 0.0)
-                    oh = getattr(cell, 'override_height_mm', 0.0)
-                    
+                    eff_ow, eff_oh = effective_overrides.get(
+                        cell.id,
+                        (getattr(cell, 'override_width_mm', 0.0),
+                         getattr(cell, 'override_height_mm', 0.0))
+                    )
+                    ow = eff_ow
+                    oh = eff_oh
+
                     if ow > 0 or oh > 0:
                         fw = ow if ow > 0 else sw
                         fh = oh if oh > 0 else sh
@@ -276,6 +283,71 @@ class LayoutEngine:
                 row_rects[r_temp.index] = (x_offset, pic_y, row_width, pic_h)
 
         return LayoutResult(cell_rects, row_heights, figure_rects=figure_rects, label_rects=label_rects, row_rects=row_rects)
+
+    @staticmethod
+    def _resolve_group_overrides(
+        project: 'Project',
+        natural_cell_rects: Dict[str, Tuple[float, float, float, float]],
+    ) -> Dict[str, Tuple[float, float]]:
+        """Resolve each cell's effective (override_w, override_h) accounting for size groups.
+
+        Rules:
+        - Ungrouped cell: return its own (override_width_mm, override_height_mm).
+        - Cell in a group:
+            * If group.pinned_width_mm  > 0: effective width  = pinned_width.
+              Else: effective width  = min of natural widths of members (program-controlled shared).
+            * Same for height independently.
+          Per-cell override_width_mm / override_height_mm are ignored for grouped cells
+          (the group owns the shared size).
+        """
+        result: Dict[str, Tuple[float, float]] = {}
+        groups = getattr(project, 'size_groups', []) or []
+        if not groups:
+            # No groups: just return per-cell overrides.
+            for cell in project.get_all_leaf_cells():
+                result[cell.id] = (
+                    getattr(cell, 'override_width_mm', 0.0),
+                    getattr(cell, 'override_height_mm', 0.0),
+                )
+            return result
+
+        # Pre-compute natural sizes per group (for program-controlled shared sizing).
+        group_natural_min_w: Dict[str, float] = {}
+        group_natural_min_h: Dict[str, float] = {}
+        for g in groups:
+            members = [c for c in project.get_all_leaf_cells() if c.size_group_id == g.id]
+            ws, hs = [], []
+            for m in members:
+                if m.id in natural_cell_rects:
+                    _, _, nw, nh = natural_cell_rects[m.id]
+                    if nw > 0:
+                        ws.append(nw)
+                    if nh > 0:
+                        hs.append(nh)
+            group_natural_min_w[g.id] = min(ws) if ws else 0.0
+            group_natural_min_h[g.id] = min(hs) if hs else 0.0
+
+        # Resolve per-cell effective overrides.
+        for cell in project.get_all_leaf_cells():
+            gid = getattr(cell, 'size_group_id', None)
+            if gid:
+                g = next((x for x in groups if x.id == gid), None)
+                if g is None:
+                    # Orphan reference: fall back to per-cell.
+                    result[cell.id] = (
+                        getattr(cell, 'override_width_mm', 0.0),
+                        getattr(cell, 'override_height_mm', 0.0),
+                    )
+                    continue
+                eff_w = g.pinned_width_mm if g.pinned_width_mm > 0 else group_natural_min_w.get(g.id, 0.0)
+                eff_h = g.pinned_height_mm if g.pinned_height_mm > 0 else group_natural_min_h.get(g.id, 0.0)
+                result[cell.id] = (eff_w, eff_h)
+            else:
+                result[cell.id] = (
+                    getattr(cell, 'override_width_mm', 0.0),
+                    getattr(cell, 'override_height_mm', 0.0),
+                )
+        return result
 
     @staticmethod
     def _layout_subcells(

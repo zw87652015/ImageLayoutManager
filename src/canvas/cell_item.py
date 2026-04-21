@@ -784,6 +784,12 @@ class CellItem(QGraphicsRectItem):
                     event.accept()
                     return
             self._drag_start_pos = event.screenPos()
+        elif event.button() == Qt.MouseButton.RightButton and self.isSelected():
+            # Right-click on a cell that's already part of a (possibly multi-) selection:
+            # do NOT delegate to super(), which would clear other selected items.
+            # Accept the press so contextMenuEvent still fires with the full selection intact.
+            event.accept()
+            return
         super().mousePressEvent(event)
 
     def _do_shift_select(self, scene):
@@ -1308,8 +1314,18 @@ class CellItem(QGraphicsRectItem):
         if self._ext_drag_active:
             self._draw_pip_drop_zone(painter, rect)
 
-        # Draw Border (suppressed in preview mode)
+        # Draw Size Group badge (small color chip in top-left corner).
+        # Suppressed in preview/export.
         scene = self.scene()
+        if scene and not getattr(scene, 'preview_mode', False):
+            project = getattr(scene, 'project', None)
+            if project is not None:
+                cell = project.find_cell_by_id(self.cell_id)
+                gid = getattr(cell, 'size_group_id', None) if cell else None
+                if gid:
+                    self._draw_size_group_badge(painter, rect, gid)
+
+        # Draw Border (suppressed in preview mode)
         if not (scene and getattr(scene, 'preview_mode', False)):
             if self.isSelected():
                 glow_color = QColor(self.selected_pen.color())
@@ -1327,6 +1343,50 @@ class CellItem(QGraphicsRectItem):
             else:
                 painter.setPen(self.border_pen)
                 painter.drawRect(rect)
+
+    def _draw_size_group_badge(self, painter: QPainter, rect: QRectF, group_id: str):
+        """Draw a small color-coded chip in the top-left of the cell indicating group membership."""
+        # Hash group id -> HSL hue for stable per-group color
+        h = abs(hash(group_id)) % 360
+        color = QColor.fromHsl(h, 180, 150)
+
+        # Work in device pixels so the badge size is consistent regardless of zoom
+        transform = painter.transform()
+        m = transform.m11()
+        if m <= 0:
+            return
+        scene = self.scene()
+        project = getattr(scene, 'project', None) if scene else None
+        group = project.find_size_group(group_id) if project else None
+        label = (group.name if group else "G")[:3]
+
+        # Badge rect: ~12x12 device px, top-left with small margin
+        size_px = 14
+        pad_px = 4
+        dev_rect = transform.mapRect(rect)
+
+        badge_rect = QRectF(
+            dev_rect.left() + pad_px,
+            dev_rect.top() + pad_px,
+            size_px * max(1.0, len(label) * 0.7),
+            size_px,
+        )
+
+        painter.save()
+        painter.resetTransform()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        # Filled rounded rect
+        painter.setBrush(color)
+        painter.setPen(QPen(QColor(0, 0, 0, 140), 1))
+        painter.drawRoundedRect(badge_rect, 3, 3)
+        # Group name text (first 3 chars)
+        font = QFont("Arial")
+        font.setPixelSize(max(8, size_px - 4))
+        font.setBold(True)
+        painter.setFont(font)
+        painter.setPen(QPen(QColor("#FFFFFF")))
+        painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, label)
+        painter.restore()
 
     def _draw_label_cell(self, painter: QPainter, rect: QRectF):
         """Draw a label-only cell with centered text."""
