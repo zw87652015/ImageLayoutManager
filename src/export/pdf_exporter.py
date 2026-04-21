@@ -64,6 +64,9 @@ class PdfExporter:
         
         # Collect PDF/EPS-source cells for vector post-processing (Pass 2)
         pdf_source_cells = []  # list of (cell, content_rect_mm)
+        # Collect math text items rendered as vector PDF for Pass 2 stamping.
+        # Each entry: (pdf_bytes, x_mm, y_mm, w_mm, h_mm, rotation_deg)
+        math_stamps = []
 
         painter = QPainter(writer)
         
@@ -147,7 +150,8 @@ class PdfExporter:
                     and text_item.parent_id in label_rects
                 ):
                     continue
-                PdfExporter._draw_text(painter, project, text_item, layout_result, scale)
+                PdfExporter._draw_text(painter, project, text_item, layout_result, scale,
+                                       math_stamps=math_stamps)
                 
         finally:
             painter.end()
@@ -163,6 +167,68 @@ class PdfExporter:
             else:
                 shifted = pdf_source_cells
             PdfExporter._stamp_pdf_sources(output_path, shifted, page_w_mm, page_h_mm)
+
+        # Pass 2b: stamp vector-PDF math expressions on top (true matplotlib vector).
+        if math_stamps:
+            if region_dx_mm != 0.0 or region_dy_mm != 0.0:
+                shifted_math = [
+                    (pdf_bytes, x - region_dx_mm, y - region_dy_mm, w, h, rot)
+                    for (pdf_bytes, x, y, w, h, rot) in math_stamps
+                ]
+            else:
+                shifted_math = math_stamps
+            PdfExporter._stamp_math(output_path, shifted_math, page_w_mm, page_h_mm)
+
+    @staticmethod
+    def _stamp_math(output_path: str, math_stamps: list, page_w_mm: float, page_h_mm: float):
+        """Stamp matplotlib-rendered math PDFs onto the output page as true
+        vector XObjects using PyMuPDF show_pdf_page().
+
+        math_stamps entries: (pdf_bytes, x_mm, y_mm, w_mm, h_mm, rotation_deg)
+        """
+        try:
+            import fitz
+        except ImportError:
+            print("PyMuPDF not installed — math text will not be stamped as vector.")
+            return
+
+        try:
+            out_doc = fitz.open(output_path)
+            out_page = out_doc[0]
+            actual_w_pt = out_page.rect.width
+            actual_h_pt = out_page.rect.height
+            mm_to_pt_x = actual_w_pt / page_w_mm
+            mm_to_pt_y = actual_h_pt / page_h_mm
+
+            for (pdf_bytes, x_mm, y_mm, w_mm, h_mm, rotation_deg) in math_stamps:
+                try:
+                    src_doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+                    x_pt = x_mm * mm_to_pt_x
+                    y_pt = y_mm * mm_to_pt_y
+                    w_pt = w_mm * mm_to_pt_x
+                    h_pt = h_mm * mm_to_pt_y
+                    dest = fitz.Rect(x_pt, y_pt, x_pt + w_pt, y_pt + h_pt)
+                    # PyMuPDF's `rotate` only accepts multiples of 90; for
+                    # arbitrary angles we still stamp upright (rotation == 0).
+                    rotate = int(rotation_deg) if rotation_deg in (0, 90, 180, 270) else 0
+                    out_page.show_pdf_page(
+                        dest, src_doc, pno=0,
+                        rotate=rotate,
+                        keep_proportion=True,
+                        overlay=True,
+                    )
+                    src_doc.close()
+                except Exception as exc:
+                    print(f"Failed to stamp math PDF: {exc}")
+
+            import tempfile, shutil
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp:
+                tmp_path = tmp.name
+            out_doc.save(tmp_path, incremental=False, encryption=fitz.PDF_ENCRYPT_NONE)
+            out_doc.close()
+            shutil.move(tmp_path, output_path)
+        except Exception as exc:
+            print(f"Failed in math PDF stamping: {exc}")
 
     @staticmethod
     def _stamp_pdf_sources(output_path: str, pdf_source_cells: list, page_w_mm: float, page_h_mm: float):
@@ -641,12 +707,68 @@ class PdfExporter:
             print(f"Failed to export PDF {path}: {e}")
 
     @staticmethod
-    def _draw_text(painter: QPainter, project: Project, text_item, layout_result, scale: float):
-        from src.utils.math_text import has_math, render_math_to_qimage, strip_html, MATH_RENDER_DPI
+    def _draw_text(painter: QPainter, project: Project, text_item, layout_result,
+                   scale: float, math_stamps: list = None):
+        from src.utils.math_text import (
+            has_math, render_math_to_qimage, render_math_to_svg,
+            render_math_to_pdf_bytes, strip_html, MATH_RENDER_DPI,
+        )
         from src.export.image_exporter import ImageExporter
 
         plain = strip_html(text_item.text)
         if has_math(plain):
+            # Prefer matplotlib-native vector PDF (same mechanism the
+            # violin_plot_generator script uses). Stamped in Pass 2 via
+            # PyMuPDF so the glyphs stay true vector in the output.
+            if math_stamps is not None:
+                pdf_result = render_math_to_pdf_bytes(
+                    plain,
+                    text_item.font_size_pt,
+                    text_item.font_family,
+                    text_item.font_weight,
+                    text_item.color,
+                )
+                if pdf_result is not None:
+                    pdf_bytes, tw_mm, th_mm = pdf_result
+                    x_mm, y_mm = ImageExporter._text_position_mm(
+                        text_item, layout_result, tw_mm, th_mm)
+                    is_global = not (text_item.scope == "cell" and text_item.parent_id
+                                     and text_item.parent_id in layout_result.cell_rects)
+                    rotation_deg = float(getattr(text_item, 'rotation', 0.0)) if is_global else 0.0
+                    math_stamps.append((pdf_bytes, x_mm, y_mm, tw_mm, th_mm, rotation_deg))
+                    return
+
+            svg_result = render_math_to_svg(
+                plain,
+                text_item.font_size_pt,
+                text_item.font_family,
+                text_item.font_weight,
+                text_item.color,
+            )
+            if svg_result is not None:
+                svg_bytes, tw_mm, th_mm = svg_result
+                x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
+                
+                is_global = not (text_item.scope == "cell" and text_item.parent_id
+                                 and text_item.parent_id in layout_result.cell_rects)
+                rotation_deg = float(getattr(text_item, 'rotation', 0.0)) if is_global else 0.0
+
+                from PyQt6.QtCore import QRectF, QByteArray
+                from PyQt6.QtSvg import QSvgRenderer
+                target = QRectF(0, 0, tw_mm * scale, th_mm * scale)
+                renderer = QSvgRenderer(QByteArray(svg_bytes))
+                
+                painter.save()
+                painter.translate(x_mm * scale, y_mm * scale)
+                if rotation_deg:
+                    painter.translate(tw_mm * scale / 2.0, th_mm * scale / 2.0)
+                    painter.rotate(rotation_deg)
+                    painter.translate(-tw_mm * scale / 2.0, -th_mm * scale / 2.0)
+                renderer.render(painter, target)
+                painter.restore()
+                return
+
+            # Fallback to raster if SVG fails
             result = render_math_to_qimage(
                 plain,
                 text_item.font_size_pt,
@@ -658,9 +780,22 @@ class PdfExporter:
             if result is not None:
                 img, tw_mm, th_mm = result
                 x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
+                
+                is_global = not (text_item.scope == "cell" and text_item.parent_id
+                                 and text_item.parent_id in layout_result.cell_rects)
+                rotation_deg = float(getattr(text_item, 'rotation', 0.0)) if is_global else 0.0
+
                 from PyQt6.QtCore import QRectF
-                target = QRectF(x_mm * scale, y_mm * scale, tw_mm * scale, th_mm * scale)
+                target = QRectF(0, 0, tw_mm * scale, th_mm * scale)
+                
+                painter.save()
+                painter.translate(x_mm * scale, y_mm * scale)
+                if rotation_deg:
+                    painter.translate(tw_mm * scale / 2.0, th_mm * scale / 2.0)
+                    painter.rotate(rotation_deg)
+                    painter.translate(-tw_mm * scale / 2.0, -th_mm * scale / 2.0)
                 painter.drawImage(target, img)
+                painter.restore()
                 return
 
         base_pt = 24

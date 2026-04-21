@@ -1,2 +1,4 @@
 PyQt6
 Pillow
+matplotlib
+PyMuPDF
