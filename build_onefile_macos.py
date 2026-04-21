@@ -3,6 +3,52 @@ import sys
 from pathlib import Path
 
 
+def _generate_icns(src: Path, dest: Path) -> bool:
+    """Build a proper multi-resolution .icns from any image sips can read."""
+    import subprocess
+    import shutil
+    import tempfile
+
+    iconset = Path(tempfile.mkdtemp()) / "app.iconset"
+    iconset.mkdir()
+    try:
+        # Standard macOS iconset size pairs  (logical size, actual pixels)
+        pairs = [
+            (16, 16), (16, 32),
+            (32, 32), (32, 64),
+            (64, 64), (64, 128),
+            (128, 128), (128, 256),
+            (256, 256), (256, 512),
+            (512, 512), (512, 1024),
+        ]
+        names = [
+            "icon_16x16.png",   "icon_16x16@2x.png",
+            "icon_32x32.png",   "icon_32x32@2x.png",
+            "icon_64x64.png",   "icon_64x64@2x.png",
+            "icon_128x128.png", "icon_128x128@2x.png",
+            "icon_256x256.png", "icon_256x256@2x.png",
+            "icon_512x512.png", "icon_512x512@2x.png",
+        ]
+        for (_, px), name in zip(pairs, names):
+            subprocess.run(
+                ["sips", "-s", "format", "png",
+                 "-z", str(px), str(px),
+                 str(src), "--out", str(iconset / name)],
+                check=True, capture_output=True,
+            )
+        subprocess.run(
+            ["iconutil", "-c", "icns", str(iconset), "-o", str(dest)],
+            check=True, capture_output=True,
+        )
+        print(f"Generated {dest}")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Warning: icns generation failed: {e.stderr.decode().strip()}")
+        return False
+    finally:
+        shutil.rmtree(str(iconset.parent), ignore_errors=True)
+
+
 def main() -> int:
     """Build a single-file macOS application bundle using PyInstaller.
 
@@ -52,6 +98,15 @@ def main() -> int:
     if assets_dir.exists():
         add_data_args.append(f"--add-data={assets_dir}:assets")
 
+    # App icon — generate a proper multi-resolution .icns if it doesn't exist yet
+    icon_icns = assets_dir / "icon.icns"
+    icon_ico  = assets_dir / "icon.ico"
+    if not icon_icns.exists() and icon_ico.exists():
+        print("Generating assets/icon.icns from assets/icon.ico …")
+        _generate_icns(icon_ico, icon_icns)
+
+    icon_args = [f"--icon={icon_icns}"] if icon_icns.exists() else []
+
     args = [
         "--noconfirm",
         "--clean",
@@ -73,6 +128,7 @@ def main() -> int:
         # imageio_ffmpeg ships a ~60 MB ffmpeg binary not used by this app
         "--exclude-module=imageio",
         "--exclude-module=imageio_ffmpeg",
+        *icon_args,
         *add_data_args,
         str(entry),
     ]
