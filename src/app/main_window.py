@@ -263,6 +263,13 @@ class MainWindow(QMainWindow):
         edit_menu   = self._edit_menu
         help_menu   = self._help_menu
 
+        # ── SVG Text Groups action (View menu) ──
+        self._act_svg_text_groups = QAction(tr("action_svg_text_groups"), self)
+        self._act_svg_text_groups.triggered.connect(self._on_show_svg_text_groups)
+        self._view_menu.addAction(self._act_svg_text_groups)
+        self._view_menu.addSeparator()
+        self._svg_text_groups_panel = None  # lazy-created
+
         # ── View menu (theme + language toggles) ──
         self._act_toggle_layers = QAction(tr("action_toggle_layers"), self)
         self._act_toggle_layers.setShortcut(QKeySequence("Ctrl+\\"))
@@ -378,6 +385,11 @@ class MainWindow(QMainWindow):
         export_jpg_action.triggered.connect(self._on_export_jpg)
         file_menu.addAction(export_jpg_action)
         self._act_export_jpg = export_jpg_action
+
+        export_png_action = QAction(tr("action_export_png"), self)
+        export_png_action.triggered.connect(self._on_export_png)
+        file_menu.addAction(export_png_action)
+        self._act_export_png = export_png_action
 
         # Toolbar — file group (New, Open, Save only)
         self.toolbar.addAction(new_action)
@@ -504,6 +516,7 @@ class MainWindow(QMainWindow):
         export_menu.addAction(export_pdf_action)
         export_menu.addAction(export_tiff_action)
         export_menu.addAction(export_jpg_action)
+        export_menu.addAction(export_png_action)
         export_button.setMenu(export_menu)
         self._export_button = export_button  # icon applied via _refresh_toolbar_icons
         self.toolbar.addWidget(export_button)
@@ -1041,6 +1054,8 @@ class MainWindow(QMainWindow):
         self._act_export_pdf.setText(tr("action_export_pdf"))
         self._act_export_tiff.setText(tr("action_export_tiff"))
         self._act_export_jpg.setText(tr("action_export_jpg"))
+        if hasattr(self, '_act_export_png'):
+            self._act_export_png.setText(tr("action_export_png"))
         self._act_add_text.setText(tr("action_add_text"))
         self._act_delete_sel.setText(tr("action_delete_sel"))
         self._act_delete_img.setText(tr("action_delete_img"))
@@ -1236,6 +1251,7 @@ class MainWindow(QMainWindow):
                     self.project.cells.append(new_cell)
 
     def _refresh_and_update(self):
+        self._sync_svg_overrides()  # apply any stored SVG overrides
         self.scene.refresh_layout()
         self.layers_panel.set_project(self.project)
         # Update Canvas Size Label
@@ -2340,6 +2356,7 @@ class MainWindow(QMainWindow):
             menu.addAction(self._act_export_pdf)
             menu.addAction(self._act_export_tiff)
             menu.addAction(self._act_export_jpg)
+            menu.addAction(self._act_export_png)
 
             # ── Undo / Redo ───────────────────────────────────────────────
             menu.addSeparator()
@@ -2539,6 +2556,15 @@ class MainWindow(QMainWindow):
             sb_action.triggered.connect(
                 lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
             )
+
+            # SVG Text Groups (only for SVG images)
+            if cell.image_path and cell.image_path.lower().endswith('.svg'):
+                menu.addSeparator()
+                svg_txt_action = menu.addAction(tr("ctx_svg_text_inspector"))
+                _svg_path = cell.image_path
+                svg_txt_action.triggered.connect(
+                    lambda checked=False, p=_svg_path: self._on_open_svg_text_inspector(p)
+                )
 
             # --- Crop ---
             menu.addSeparator()
@@ -3047,12 +3073,65 @@ class MainWindow(QMainWindow):
             ImageExporter.export(self.project, path, "TIFF")
             QMessageBox.information(self, "Export", f"Exported to {path}")
 
+    def _on_export_png(self):
+        default_dir = self._get_export_default_dir()
+        path, _ = QFileDialog.getSaveFileName(self, "Export PNG", default_dir, "PNG Files (*.png)")
+        if path:
+            if not path.lower().endswith('.png'):
+                path += '.png'
+            ImageExporter.export(self.project, path, "PNG")
+            QMessageBox.information(self, "Export", f"Exported to {path}")
+
     def _on_export_jpg(self):
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, "Export JPG", default_dir, "JPEG Files (*.jpg *.jpeg)")
         if path:
             ImageExporter.export(self.project, path, "JPG")
             QMessageBox.information(self, "Export", f"Exported to {path}")
+
+    def _on_show_svg_text_groups(self):
+        """Open (or raise) the SVG Text Groups management panel."""
+        if self._svg_text_groups_panel is None or not self._svg_text_groups_panel.isVisible():
+            from src.app.svg_text_groups_panel import SvgTextGroupsPanel
+            self._svg_text_groups_panel = SvgTextGroupsPanel(self.project, parent=self)
+            self._svg_text_groups_panel.groups_changed.connect(self._on_svg_text_groups_changed)
+        else:
+            self._svg_text_groups_panel.refresh(self.project)
+        self._svg_text_groups_panel.show()
+        self._svg_text_groups_panel.raise_()
+        self._svg_text_groups_panel.activateWindow()
+
+    def _on_open_svg_text_inspector(self, svg_path: str):
+        """Open a stand-alone SVG text inspector for the given SVG file."""
+        from src.app.svg_text_inspector import SvgTextInspectorWindow
+        win = SvgTextInspectorWindow(svg_path, self.project, parent=self)
+        win.groups_changed.connect(self._on_svg_text_groups_changed)
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
+    def _sync_svg_overrides(self):
+        """Recompute and push SVG font-size overrides to the image proxy."""
+        from src.utils.svg_text_utils import build_svg_overrides_for_path, apply_svg_font_overrides
+        proxy = get_image_proxy()
+        proxy.clear_svg_overrides()
+
+        svg_paths = set()
+        for cell in self.project.get_all_leaf_cells():
+            if cell.image_path and cell.image_path.lower().endswith('.svg'):
+                svg_paths.add(cell.image_path)
+
+        for path in svg_paths:
+            overrides = build_svg_overrides_for_path(self.project, path)
+            content = apply_svg_font_overrides(path, overrides) if overrides else None
+            if content:
+                proxy.set_svg_override(path, content)
+
+    def _on_svg_text_groups_changed(self):
+        """Called when the user edits SVG text groups — syncs overrides then refreshes."""
+        self._sync_svg_overrides()
+        self.scene.refresh_layout()
+        self._mark_dirty()
 
     def _on_show_about(self):
         dlg = AboutDialog(self)

@@ -22,17 +22,18 @@ def is_supported_image(path: str) -> bool:
     return ext in VECTOR_EXTENSIONS or ext in RASTER_EXTENSIONS
 
 class ThumbnailWorker(QRunnable):
-    def __init__(self, path, max_size, callback):
+    def __init__(self, path, max_size, callback, svg_override_bytes=None):
         super().__init__()
         self.path = path
         self.max_size = max_size
         self.callback = callback
+        self.svg_override_bytes = svg_override_bytes
         self.setAutoDelete(True)
 
     def run(self):
         try:
             ext = os.path.splitext(self.path)[1].lower()
-            
+
             if ext == '.svg':
                 # Handle SVG vector format
                 qimage = self._load_svg()
@@ -50,7 +51,11 @@ class ThumbnailWorker(QRunnable):
     
     def _load_svg(self) -> QImage:
         """Load SVG and render to QImage at appropriate size."""
-        renderer = QSvgRenderer(self.path)
+        if self.svg_override_bytes:
+            from PyQt6.QtCore import QByteArray
+            renderer = QSvgRenderer(QByteArray(self.svg_override_bytes))
+        else:
+            renderer = QSvgRenderer(self.path)
         if not renderer.isValid():
             return QImage()
         
@@ -134,6 +139,7 @@ class ImageProxy(QObject):
         self._max_size = 1024 # Max dimension for thumbnail
         self._thread_pool = QThreadPool.globalInstance()
         self._thread_pool.setMaxThreadCount(4)  # Limit concurrent image loads
+        self._svg_overrides = {}  # path -> bytes (pre-computed modified SVG)
 
     def shutdown(self):
         # Wait for all workers to finish
@@ -144,6 +150,19 @@ class ImageProxy(QObject):
         """Clear all cached thumbnails to force reload from disk."""
         self._cache.clear()
         self._loading.clear()
+
+    def set_svg_override(self, path: str, content: bytes):
+        """Set pre-computed modified SVG bytes for a path and invalidate its cache entry."""
+        self._svg_overrides[path] = content
+        self._cache.pop(path, None)
+        self._loading.discard(path)
+
+    def clear_svg_overrides(self):
+        """Remove all SVG overrides and invalidate their cache entries."""
+        for path in self._svg_overrides:
+            self._cache.pop(path, None)
+            self._loading.discard(path)
+        self._svg_overrides.clear()
 
     def get_pixmap(self, path: str) -> QPixmap:
         """
@@ -166,7 +185,8 @@ class ImageProxy(QObject):
 
     def _start_loading(self, path):
         self._loading.add(path)
-        worker = ThumbnailWorker(path, self._max_size, self._on_thumbnail_finished)
+        override = self._svg_overrides.get(path)
+        worker = ThumbnailWorker(path, self._max_size, self._on_thumbnail_finished, override)
         self._thread_pool.start(worker)
 
     def _on_thumbnail_finished(self, path, qimage):

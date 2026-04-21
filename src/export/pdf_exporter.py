@@ -119,7 +119,13 @@ class PdfExporter:
                         rotation = getattr(cell, 'rotation', 0)
                         crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                                 getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop)
+                        svg_override = None
+                        if cell.image_path.lower().endswith('.svg'):
+                            from src.utils.svg_text_utils import build_svg_overrides_for_path, apply_svg_font_overrides
+                            ov = build_svg_overrides_for_path(project, cell.image_path)
+                            if ov:
+                                svg_override = apply_svg_font_overrides(cell.image_path, ov)
+                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
 
                         # Draw scale bar if enabled
                         if getattr(cell, 'scale_bar_enabled', False):
@@ -392,22 +398,26 @@ class PdfExporter:
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                    crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+                    crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None):
         ext = os.path.splitext(path)[1].lower()
-        
+
         if ext == '.svg':
-            PdfExporter._draw_svg(painter, path, rect, fit_mode_str, rotation, crop)
+            PdfExporter._draw_svg(painter, path, rect, fit_mode_str, rotation, crop, svg_override_bytes)
         elif ext in ('.pdf', '.eps'):
             PdfExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation, crop)
         else:
             PdfExporter._draw_raster(painter, path, rect, fit_mode_str, rotation, crop)
-    
+
     @staticmethod
     def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                  crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+                  crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None):
         """Draw SVG vector image - renders as vector in PDF for best quality."""
         try:
-            renderer = QSvgRenderer(path)
+            if svg_override_bytes:
+                from PyQt6.QtCore import QByteArray
+                renderer = QSvgRenderer(QByteArray(svg_override_bytes))
+            else:
+                renderer = QSvgRenderer(path)
             if not renderer.isValid():
                 print(f"Invalid SVG file: {path}")
                 return
@@ -632,74 +642,70 @@ class PdfExporter:
 
     @staticmethod
     def _draw_text(painter: QPainter, project: Project, text_item, layout_result, scale: float):
-        # WYSIWYG text rendering - use exact same method as canvas (QGraphicsTextItem)
-        #
-        # Canvas behavior (TextGraphicsItem.update_style + canvas_scene.refresh_layout):
-        #   - Uses 24pt base font with setScale(font_size_pt / 24)
-        #   - boundingRect() * scale gives final size in scene "mm"
-        #   - setDefaultTextColor() sets the color
-        #
-        # PDF strategy: Create a temporary QGraphicsTextItem, measure it exactly as
-        # canvas does, then render to PDF with the same proportions.
-        
+        from src.utils.math_text import has_math, render_math_to_qimage, strip_html, MATH_RENDER_DPI
+        from src.export.image_exporter import ImageExporter
+
+        plain = strip_html(text_item.text)
+        if has_math(plain):
+            result = render_math_to_qimage(
+                plain,
+                text_item.font_size_pt,
+                text_item.font_family,
+                text_item.font_weight,
+                text_item.color,
+                dpi=MATH_RENDER_DPI,
+            )
+            if result is not None:
+                img, tw_mm, th_mm = result
+                x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
+                from PyQt6.QtCore import QRectF
+                target = QRectF(x_mm * scale, y_mm * scale, tw_mm * scale, th_mm * scale)
+                painter.drawImage(target, img)
+                return
+
         base_pt = 24
         text_scale = text_item.font_size_pt / base_pt
-        
-        # Create temporary QGraphicsTextItem - same as canvas does
+
         temp_item = QGraphicsTextItem()
         temp_item.setHtml(text_item.text)
-        
+
         font = QFont(text_item.font_family, base_pt)
         if text_item.font_weight == "bold":
             font.setBold(True)
         temp_item.setFont(font)
         temp_item.setDefaultTextColor(QColor(text_item.color))
-        
-        # Get bounding rect at base font (same as canvas)
+
         base_rect = temp_item.boundingRect()
-        
-        # Canvas "mm" = boundingRect * text_scale (this is what user sees)
         tw_mm = base_rect.width() * text_scale
         th_mm = base_rect.height() * text_scale
-        
-        # Calculate position in mm (same logic as canvas_scene.refresh_layout)
-        # For cell-scoped labels, use anchor-based positioning (default to top_left_inside if anchor is None)
-        if text_item.scope == "cell" and text_item.parent_id and text_item.parent_id in layout_result.cell_rects:
-            cx, cy, cw, ch = layout_result.cell_rects[text_item.parent_id]
 
-            # Default to top_left_inside if anchor is None (for numbering labels)
-            anchor = text_item.anchor or "top_left_inside"
-            ox, oy = text_item.offset_x, text_item.offset_y
+        x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
 
-            if "top" in anchor:
-                y_mm = cy + oy
-            elif "bottom" in anchor:
-                y_mm = cy + ch - oy - th_mm
-            else:
-                y_mm = cy + (ch - th_mm) / 2
+        # Canvas applies scale & rotation about the unscaled bounding-rect
+        # centre for GLOBAL (floating) text. Mirror that here so the exported
+        # visual top-left matches the on-canvas position:
+        #   visual_topleft = (x, y) + (1 - s) * br/2
+        is_global = not (text_item.scope == "cell" and text_item.parent_id
+                         and text_item.parent_id in layout_result.cell_rects)
+        if is_global:
+            offset_x_mm = (base_rect.width() - tw_mm) / 2.0
+            offset_y_mm = (base_rect.height() - th_mm) / 2.0
+            x_mm += offset_x_mm
+            y_mm += offset_y_mm
 
-            if "left" in anchor:
-                x_mm = cx + ox
-            elif "right" in anchor:
-                x_mm = cx + cw - ox - tw_mm
-            else:
-                x_mm = cx + (cw - tw_mm) / 2
-        else:
-            x_mm = text_item.x
-            y_mm = text_item.y
-
-        # Convert position to PDF dots
         x_dots = x_mm * scale
         y_dots = y_mm * scale
-        
-        # Render: scale painter so text fills the correct mm in PDF
-        # PDF needs: tw_mm * scale dots wide
-        # QGraphicsTextItem at base_pt renders at base_rect.width() pixels
-        # So render_scale = (tw_mm * scale) / base_rect.width() = text_scale * scale
+
         render_scale = text_scale * scale
-        
+
         painter.save()
         painter.translate(x_dots, y_dots)
+        # Rotation around the scaled rect centre (same as canvas).
+        rotation_deg = float(getattr(text_item, 'rotation', 0.0)) if is_global else 0.0
+        if rotation_deg:
+            painter.translate(tw_mm * scale / 2.0, th_mm * scale / 2.0)
+            painter.rotate(rotation_deg)
+            painter.translate(-tw_mm * scale / 2.0, -th_mm * scale / 2.0)
         painter.scale(render_scale, render_scale)
         
         # Paint the QGraphicsTextItem directly to the PDF painter

@@ -104,7 +104,13 @@ class ImageExporter:
                     rotation = getattr(cell, 'rotation', 0)
                     crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                             getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop)
+                    svg_override = None
+                    if cell.image_path.lower().endswith('.svg'):
+                        from src.utils.svg_text_utils import build_svg_overrides_for_path, apply_svg_font_overrides
+                        ov = build_svg_overrides_for_path(project, cell.image_path)
+                        if ov:
+                            svg_override = apply_svg_font_overrides(cell.image_path, ov)
+                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
 
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
@@ -190,7 +196,13 @@ class ImageExporter:
                     rotation = getattr(cell, 'rotation', 0)
                     crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                             getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop)
+                    svg_override = None
+                    if cell.image_path.lower().endswith('.svg'):
+                        from src.utils.svg_text_utils import build_svg_overrides_for_path, apply_svg_font_overrides
+                        ov = build_svg_overrides_for_path(project, cell.image_path)
+                        if ov:
+                            svg_override = apply_svg_font_overrides(cell.image_path, ov)
+                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
 
@@ -324,22 +336,26 @@ class ImageExporter:
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                    crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+                    crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None):
         """Draw an image into the given rect, applying crop and rotation."""
         ext = os.path.splitext(path)[1].lower()
         if ext == '.svg':
-            ImageExporter._draw_svg(painter, path, rect, fit_mode_str, rotation, crop)
+            ImageExporter._draw_svg(painter, path, rect, fit_mode_str, rotation, crop, svg_override_bytes)
         elif ext in ('.pdf', '.eps'):
             ImageExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation, crop)
         else:
             ImageExporter._draw_raster(painter, path, rect, fit_mode_str, rotation, crop)
-    
+
     @staticmethod
     def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                  crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+                  crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None):
         """Draw SVG vector image, honouring crop."""
         try:
-            renderer = QSvgRenderer(path)
+            if svg_override_bytes:
+                from PyQt6.QtCore import QByteArray
+                renderer = QSvgRenderer(QByteArray(svg_override_bytes))
+            else:
+                renderer = QSvgRenderer(path)
             if not renderer.isValid():
                 print(f"Invalid SVG file: {path}")
                 return
@@ -526,40 +542,71 @@ class ImageExporter:
     @staticmethod
     def _draw_text(painter: QPainter, project: Project, text_item, layout_result, scale: float):
         """Draw text item (same logic as PdfExporter for WYSIWYG)."""
+        from src.utils.math_text import has_math, render_math_to_qimage, strip_html, MATH_RENDER_DPI
+
+        plain = strip_html(text_item.text)
+        if has_math(plain):
+            # Render with matplotlib mathtext engine at a fixed reference DPI,
+            # then draw scaled to the target pixel rect.
+            result = render_math_to_qimage(
+                plain,
+                text_item.font_size_pt,
+                text_item.font_family,
+                text_item.font_weight,
+                text_item.color,
+                dpi=MATH_RENDER_DPI,
+            )
+            if result is not None:
+                img, tw_mm, th_mm = result
+                x_mm, y_mm = ImageExporter._text_position_mm(
+                    text_item, layout_result, tw_mm, th_mm)
+                target = QRectF(x_mm * scale, y_mm * scale, tw_mm * scale, th_mm * scale)
+                painter.drawImage(target, img)
+                return
+            # Fall through to Qt rendering if matplotlib failed
+
         base_pt = 24
         text_scale = text_item.font_size_pt / base_pt
-        
+
         # Create temporary QGraphicsTextItem - same as canvas does
         temp_item = QGraphicsTextItem()
         temp_item.setHtml(text_item.text)
-        
+
         font = QFont(text_item.font_family, base_pt)
         if text_item.font_weight == "bold":
             font.setBold(True)
         temp_item.setFont(font)
         temp_item.setDefaultTextColor(QColor(text_item.color))
-        
-        # Get bounding rect at base font (same as canvas)
+
         base_rect = temp_item.boundingRect()
-        
-        # Canvas "mm" = boundingRect * text_scale (this is what user sees)
         tw_mm = base_rect.width() * text_scale
         th_mm = base_rect.height() * text_scale
-        
-        # Calculate position in mm (same logic as canvas_scene.refresh_layout)
+
+        x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
+        x_px = x_mm * scale
+        y_px = y_mm * scale
+
+        render_scale = text_scale * scale
+        painter.save()
+        painter.translate(x_px, y_px)
+        painter.scale(render_scale, render_scale)
+        option = QStyleOptionGraphicsItem()
+        temp_item.paint(painter, option, None)
+        painter.restore()
+
+    @staticmethod
+    def _text_position_mm(text_item, layout_result, tw_mm: float, th_mm: float):
+        """Compute (x_mm, y_mm) top-left origin for a text item given its size."""
         if text_item.scope == "cell" and text_item.parent_id and text_item.parent_id in layout_result.cell_rects:
             cx, cy, cw, ch = layout_result.cell_rects[text_item.parent_id]
-
             anchor = text_item.anchor or "top_left_inside"
             ox, oy = text_item.offset_x, text_item.offset_y
-
             if "top" in anchor:
                 y_mm = cy + oy
             elif "bottom" in anchor:
                 y_mm = cy + ch - oy - th_mm
             else:
                 y_mm = cy + (ch - th_mm) / 2
-
             if "left" in anchor:
                 x_mm = cx + ox
             elif "right" in anchor:
@@ -569,23 +616,7 @@ class ImageExporter:
         else:
             x_mm = text_item.x
             y_mm = text_item.y
-
-        # Convert position to pixels
-        x_px = x_mm * scale
-        y_px = y_mm * scale
-        
-        # Render: scale painter so text fills the correct mm
-        render_scale = text_scale * scale
-        
-        painter.save()
-        painter.translate(x_px, y_px)
-        painter.scale(render_scale, render_scale)
-        
-        # Paint the QGraphicsTextItem directly
-        option = QStyleOptionGraphicsItem()
-        temp_item.paint(painter, option, None)
-        
-        painter.restore()
+        return x_mm, y_mm
 
     @staticmethod
     def _draw_label_cells(painter: QPainter, project, layout_result, scale: float):

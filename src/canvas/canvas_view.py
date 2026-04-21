@@ -35,7 +35,11 @@ class CanvasView(QGraphicsView):
 
         # Space-drag pan state
         self._space_held = False
-        self._pre_space_drag_mode = None
+
+        # Manual middle-button / space pan state (avoids synthetic LeftButton
+        # reaching scene items and triggering their drag logic)
+        self._pan_active = False
+        self._pan_last_pos: QPoint | None = None
 
         # Mouse tracking for status bar coordinates
         self.setMouseTracking(True)
@@ -83,18 +87,13 @@ class CanvasView(QGraphicsView):
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.MouseButton.MiddleButton or self._space_held:
-            # Pan via middle-button or Space+drag
-            self._pre_space_drag_mode = self.dragMode()
-            self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
-            synthetic_event = QMouseEvent(
-                event.type(),
-                event.position(),
-                event.globalPosition(),
-                Qt.MouseButton.LeftButton,
-                Qt.MouseButton.LeftButton,
-                event.modifiers()
-            )
-            super().mousePressEvent(synthetic_event)
+            # Pan via middle-button or Space+drag — handled entirely in the
+            # view so the event never reaches scene items (prevents accidental
+            # cell-drag when the wheel button is pressed over a cell).
+            self._pan_active = True
+            self._pan_last_pos = event.position().toPoint()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
         elif event.button() == Qt.MouseButton.LeftButton:
             from PyQt6.QtWidgets import QGraphicsItem
             scene_pos = self.mapToScene(event.position().toPoint())
@@ -127,7 +126,14 @@ class CanvasView(QGraphicsView):
             self.mouse_scene_pos_changed.emit(scene_pos.x(), scene_pos.y())
             self._last_mouse_emit.restart()
 
-        if self._rb_origin is not None:
+        if self._pan_active and self._pan_last_pos is not None:
+            current = event.position().toPoint()
+            delta = current - self._pan_last_pos
+            self._pan_last_pos = current
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+            event.accept()
+        elif self._rb_origin is not None:
             self._rb_current = event.position().toPoint()
             rb_start = self.mapToScene(self._rb_origin)
             rb_end = self.mapToScene(self._rb_current)
@@ -152,18 +158,10 @@ class CanvasView(QGraphicsView):
             event.accept()
             return
         if event.button() == Qt.MouseButton.MiddleButton or (self._space_held and event.button() == Qt.MouseButton.LeftButton):
-            synthetic_event = QMouseEvent(
-                event.type(),
-                event.position(),
-                event.globalPosition(),
-                Qt.MouseButton.LeftButton,
-                Qt.MouseButton.NoButton,
-                event.modifiers()
-            )
-            super().mouseReleaseEvent(synthetic_event)
-            mode = self._pre_space_drag_mode if self._pre_space_drag_mode is not None else QGraphicsView.DragMode.NoDrag
-            self.setDragMode(mode)
-            self._pre_space_drag_mode = None
+            self._pan_active = False
+            self._pan_last_pos = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor if self._space_held else Qt.CursorShape.ArrowCursor)
+            event.accept()
         else:
             super().mouseReleaseEvent(event)
 

@@ -114,6 +114,44 @@ class PiPItem:
 
 
 @dataclass
+class SvgTextMember:
+    svg_path: str = ""
+    element_key: str = ""  # id attr or _pos_{N}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"svg_path": self.svg_path, "element_key": self.element_key}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'SvgTextMember':
+        return cls(svg_path=data.get("svg_path", ""), element_key=data.get("element_key", ""))
+
+
+@dataclass
+class SvgTextGroup:
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = "Text Group"
+    font_size_pt: float = 12.0
+    members: List['SvgTextMember'] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "font_size_pt": self.font_size_pt,
+            "members": [m.to_dict() for m in self.members],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'SvgTextGroup':
+        return cls(
+            id=data.get("id", str(uuid.uuid4())),
+            name=data.get("name", "Text Group"),
+            font_size_pt=float(data.get("font_size_pt", 12.0)),
+            members=[SvgTextMember.from_dict(m) for m in data.get("members", [])],
+        )
+
+
+@dataclass
 class SizeGroup:
     """A named group that forces member cells to share the same W/H.
 
@@ -397,6 +435,9 @@ class Project:
     # Size Groups (force shared W/H across member cells in grid mode)
     size_groups: List[SizeGroup] = field(default_factory=list)
 
+    # SVG Text Groups (shared font-size overrides for SVG text elements)
+    svg_text_groups: List[SvgTextGroup] = field(default_factory=list)
+
     # Text
     text_items: List[TextItem] = field(default_factory=list)
     
@@ -494,6 +535,7 @@ class Project:
             "rows": [r.to_dict() for r in self.rows],
             "cells": [c.to_dict() for c in self.cells],
             "size_groups": [g.to_dict() for g in self.size_groups],
+            "svg_text_groups": [g.to_dict() for g in self.svg_text_groups],
             "text_items": [t.to_dict() for t in self.text_items],
             "label_scheme": self.label_scheme,
             "label_placement": self.label_placement,
@@ -533,6 +575,7 @@ class Project:
         p.rows = [RowTemplate.from_dict(r) for r in data.get("rows", [])]
         p.cells = [Cell.from_dict(c, project_dir) for c in data.get("cells", [])]
         p.size_groups = [SizeGroup.from_dict(g) for g in data.get("size_groups", [])]
+        p.svg_text_groups = [SvgTextGroup.from_dict(g) for g in data.get("svg_text_groups", [])]
         p.text_items = [TextItem.from_dict(t) for t in data.get("text_items", [])]
 
         # Prune orphan group references (group deleted but cell still refers to it)

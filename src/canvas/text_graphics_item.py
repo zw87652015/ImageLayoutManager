@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QGraphicsTextItem, QGraphicsItem, QStyleOptionGraphicsItem
-from PyQt6.QtGui import QFont, QColor, QPainter
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QColor, QPainter, QPixmap
+from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 
 class TextGraphicsItem(QGraphicsTextItem):
     # Signal to notify model update when text changes or moves
@@ -9,30 +9,43 @@ class TextGraphicsItem(QGraphicsTextItem):
     def __init__(self, text_item_id: str, text: str, parent=None):
         super().__init__(text, parent)
         self.text_item_id = text_item_id
-        
+
         # Flags
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
-        
+
         # Interaction
-        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction) 
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         # We handle double click to edit, so initially just movable
-        
+
         self.setAcceptHoverEvents(True)
-        
+
         # Default Style
         self.setDefaultTextColor(QColor("black"))
-        
+
         # State
         self.is_editing = False
-        
+
         # Cell-scoped label info (set by canvas_scene for constrained movement)
         self.cell_bounds = None  # (cx, cy, cw, ch) - content area bounds
         self.anchor = None  # e.g., "top_left_inside"
         self.scope = "global"  # "global" or "cell"
 
+        # Math rendering cache (populated by _update_math_cache)
+        self._math_pixmap: QPixmap | None = None
+        self._math_rect: QRectF | None = None
+        self._font_family = ""
+        self._font_size_pt = 12.0
+        self._font_weight = "normal"
+        self._color_hex = "#000000"
+
     def update_style(self, font_family, font_size_pt, font_weight, color_hex):
+        self._font_family = font_family
+        self._font_size_pt = font_size_pt
+        self._font_weight = font_weight
+        self._color_hex = color_hex
+
         # Use a base font size of 24pt for quality, then scale to desired size
         # This avoids extreme scaling (1/72) which causes pixelation
         # Scale factor = desired_size / base_size = font_size_pt / 24
@@ -42,10 +55,46 @@ class TextGraphicsItem(QGraphicsTextItem):
             font.setBold(True)
         self.setFont(font)
         self.setDefaultTextColor(QColor(color_hex))
-        
+
         # Linear scaling: 1pt -> 1/24 scale, 24pt -> 1.0 scale, 72pt -> 3.0 scale
         scale = font_size_pt / base_pt
         self.setScale(scale)
+
+        # Try to build a math-rendered pixmap; if successful, scale becomes 1.0
+        self._update_math_cache()
+
+    def _update_math_cache(self):
+        """Re-render math to pixmap if the current text contains $...$ expressions."""
+        from src.utils.math_text import has_math, render_math_to_qimage, strip_html, MATH_RENDER_DPI
+        plain = strip_html(self.toHtml()) or self.toPlainText()
+        if not has_math(plain):
+            self._math_pixmap = None
+            self._math_rect = None
+            return
+
+        result = render_math_to_qimage(
+            plain,
+            self._font_size_pt,
+            self._font_family,
+            self._font_weight,
+            self._color_hex,
+            dpi=MATH_RENDER_DPI,
+        )
+        if result is None:
+            self._math_pixmap = None
+            self._math_rect = None
+            return
+
+        img, w_mm, h_mm = result
+        self._math_pixmap = QPixmap.fromImage(img)
+        self._math_rect = QRectF(0.0, 0.0, w_mm, h_mm)
+        # Math items render at natural scene size; no font scale needed
+        self.setScale(1.0)
+
+    def boundingRect(self) -> QRectF:
+        if self._math_rect is not None:
+            return self._math_rect
+        return super().boundingRect()
 
     def mouseDoubleClickEvent(self, event):
         if self.textInteractionFlags() == Qt.TextInteractionFlag.NoTextInteraction:
@@ -114,10 +163,7 @@ class TextGraphicsItem(QGraphicsTextItem):
                 })
 
     def paint(self, painter, option, widget):
-        # Remove the dashed line box when focused/selected if desired, 
-        # or customize selection look.
-        # For now, keeping default Qt behavior but can remove the option.state check if needed.
-        
-        # If we want to hide the dashed border on selection (optional):
-        # option.state &= ~QStyle.State_Selected
+        if self._math_pixmap is not None and not self._math_pixmap.isNull():
+            painter.drawPixmap(self._math_rect.toRect(), self._math_pixmap)
+            return
         super().paint(painter, option, widget)

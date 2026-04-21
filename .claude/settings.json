@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -m py_compile src/app/svg_text_inspector.py src/app/svg_text_groups_panel.py src/utils/svg_text_utils.py)",
+      "Bash(python -m py_compile src/model/data_model.py src/utils/image_proxy.py src/export/image_exporter.py src/export/pdf_exporter.py src/app/main_window.py src/app/i18n.py)"
     ]
   }
 }
