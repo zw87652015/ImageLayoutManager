@@ -1,5 +1,7 @@
 import os
 import sys
+import re
+import plistlib
 from pathlib import Path
 
 
@@ -143,6 +145,29 @@ def main() -> int:
     dist_bin = project_root / "dist" / "ImageLayoutManager"
 
     if dist_app.exists():
+        # Inject metadata into Info.plist
+        version_py = project_root / "src" / "version.py"
+        app_version = "1.0.0"
+        if version_py.exists():
+            v_match = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', version_py.read_text(encoding="utf-8"))
+            if v_match:
+                app_version = v_match.group(1)
+        
+        plist_path = dist_app / "Contents" / "Info.plist"
+        if plist_path.exists():
+            print(f"Applying metadata to {plist_path} (Version: {app_version})...")
+            with open(plist_path, 'rb') as f:
+                pl = plistlib.load(f)
+            
+            pl['CFBundleShortVersionString'] = app_version
+            pl['CFBundleVersion'] = app_version
+            pl['CFBundleName'] = "ImageLayoutManager"
+            pl['CFBundleDisplayName'] = "ImageLayoutManager"
+            pl['NSHumanReadableCopyright'] = "Copyright © 2026. All rights reserved."
+            
+            with open(plist_path, 'wb') as f:
+                plistlib.dump(pl, f)
+
         print(f"\nBuild OK: {dist_app}")
         print("To ad-hoc sign (required to run on macOS 10.15+):")
         print(f'  codesign --deep --force --sign "-" "{dist_app}"')
