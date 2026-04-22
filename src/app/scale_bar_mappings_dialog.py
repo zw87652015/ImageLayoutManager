@@ -9,7 +9,7 @@ than relying on the hard-coded defaults.
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QFormLayout, QLineEdit, QDoubleSpinBox, QDialogButtonBox,
-    QLabel, QMessageBox, QWidget, QGroupBox
+    QLabel, QMessageBox, QWidget, QGroupBox, QComboBox
 )
 from PyQt6.QtCore import Qt
 
@@ -83,13 +83,36 @@ class ScaleBarMappingsDialog(QDialog):
         self._name_edit.textChanged.connect(self._on_form_changed)
         edit_form.addRow("Name:", self._name_edit)
 
-        self._um_spin = QDoubleSpinBox()
-        self._um_spin.setDecimals(6)
-        self._um_spin.setRange(0.000001, 100.0)
-        self._um_spin.setSingleStep(0.001)
-        self._um_spin.setSuffix(" µm/px")
-        self._um_spin.valueChanged.connect(self._on_form_changed)
-        edit_form.addRow("µm per pixel:", self._um_spin)
+        self._val_spin = QDoubleSpinBox()
+        self._val_spin.setDecimals(6)
+        self._val_spin.setRange(0.000001, 100000.0)
+        self._val_spin.setSingleStep(0.001)
+        self._val_spin.valueChanged.connect(self._on_form_changed)
+
+        self._unit_combo = QComboBox()
+        self._UNIT_TO_UM = {
+            "m":  1e6,
+            "cm": 1e4,
+            "dm": 1e5,
+            "mm": 1e3,
+            "µm": 1.0,
+            "nm": 1e-3,
+            "pm": 1e-6,
+            "fm": 1e-9,
+        }
+        self._unit_combo.addItems(list(self._UNIT_TO_UM.keys()))
+        self._unit_combo.setCurrentText("µm")
+        self._unit_combo.currentTextChanged.connect(self._on_form_changed)
+
+        val_layout = QHBoxLayout()
+        val_layout.setContentsMargins(0, 0, 0, 0)
+        val_layout.addWidget(self._val_spin)
+        val_layout.addWidget(self._unit_combo)
+        val_layout.addWidget(QLabel("/ px"))
+
+        val_widget = QWidget()
+        val_widget.setLayout(val_layout)
+        edit_form.addRow("Length per pixel:", val_widget)
 
         hint = QLabel(
             "Tip: measure a known feature in pixels and divide its physical size (µm) "
@@ -116,9 +139,11 @@ class ScaleBarMappingsDialog(QDialog):
         for m in self._mappings:
             self._list.addItem(self._item_label(m))
 
-    @staticmethod
-    def _item_label(m: dict) -> str:
-        return f"{m['name']}  ({m['um_per_px']:.6g} µm/px)"
+    def _item_label(self, m: dict) -> str:
+        unit = m.get("unit", "µm")
+        factor = getattr(self, '_UNIT_TO_UM', {}).get(unit, 1.0)
+        val = m["um_per_px"] / factor
+        return f"{m['name']}  ({val:.6g} {unit}/px)"
 
     # ------------------------------------------------------------------
     # Slots
@@ -134,10 +159,14 @@ class ScaleBarMappingsDialog(QDialog):
         if has_sel:
             m = self._mappings[row]
             self._name_edit.setText(m["name"])
-            self._um_spin.setValue(m["um_per_px"])
+            unit = m.get("unit", "µm")
+            self._unit_combo.setCurrentText(unit)
+            factor = self._UNIT_TO_UM.get(unit, 1.0)
+            self._val_spin.setValue(m["um_per_px"] / factor)
         else:
             self._name_edit.clear()
-            self._um_spin.setValue(0.1301)
+            self._unit_combo.setCurrentText("µm")
+            self._val_spin.setValue(0.1301)
         self._editing = False
 
     def _on_form_changed(self):
@@ -147,11 +176,17 @@ class ScaleBarMappingsDialog(QDialog):
         if not (0 <= row < len(self._mappings)):
             return
         self._mappings[row]["name"] = self._name_edit.text().strip()
-        self._mappings[row]["um_per_px"] = self._um_spin.value()
+        
+        unit = self._unit_combo.currentText()
+        factor = self._UNIT_TO_UM.get(unit, 1.0)
+        
+        self._mappings[row]["unit"] = unit
+        self._mappings[row]["um_per_px"] = self._val_spin.value() * factor
+        
         self._list.item(row).setText(self._item_label(self._mappings[row]))
 
     def _add_mapping(self):
-        new = {"name": "New Mapping", "um_per_px": 0.1301}
+        new = {"name": "New Mapping", "um_per_px": 0.1301, "unit": "µm"}
         self._mappings.append(new)
         self._list.addItem(self._item_label(new))
         self._list.setCurrentRow(len(self._mappings) - 1)

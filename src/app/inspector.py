@@ -497,45 +497,58 @@ class Inspector(QWidget):
         )
         self.cell_layout.addRow(self._fl("lbl_corner_br"), self.corner_label_br)
 
-        # --- Scale Bar Controls ---
-        self._sec_scale_bar = QLabel("— Scale Bar —")
-        self.cell_layout.addRow(self._sec_scale_bar)
+        # --- Scale Bar Group ---
+        self.scale_bar_group = CollapsibleSection("Scale Bar")
+        self.scale_bar_layout = self.scale_bar_group._form
         
         self.scale_bar_enabled = QCheckBox("Enable Scale Bar")
         self.scale_bar_enabled.stateChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self.scale_bar_enabled)
+        self.scale_bar_layout.addRow(self.scale_bar_enabled)
         
         mapping_row = QHBoxLayout()
         self.scale_bar_mode = QComboBox()
         self._refresh_mapping_combo()
-        self.scale_bar_mode.currentTextChanged.connect(self._emit_scale_bar)
+        self.scale_bar_mode.currentTextChanged.connect(self._on_scale_bar_mode_changed)
         mapping_row.addWidget(self.scale_bar_mode, stretch=1)
-        manage_btn = QPushButton("Manage…")
-        manage_btn.setFixedWidth(72)
-        manage_btn.clicked.connect(self._open_mappings_dialog)
-        mapping_row.addWidget(manage_btn)
-        self.cell_layout.addRow(self._fl("lbl_mapping"), mapping_row)
-        
+        self._manage_btn = QPushButton(tr("btn_manage"))
+        self._manage_btn.setFixedWidth(90)
+        self._manage_btn.clicked.connect(self._open_mappings_dialog)
+        mapping_row.addWidget(self._manage_btn)
+        self.scale_bar_layout.addRow(self._fl("lbl_mapping"), mapping_row)
+
+        length_row = QHBoxLayout()
         self.scale_bar_length = QDoubleSpinBox()
-        self.scale_bar_length.setRange(0.1, 1000.0)
+        self.scale_bar_length.setRange(1e-9, 1e9)
+        self.scale_bar_length.setDecimals(6)
         self.scale_bar_length.setSingleStep(1.0)
-        self.scale_bar_length.setSuffix(" µm")
         self.scale_bar_length.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_length"), self.scale_bar_length)
+        length_row.addWidget(self.scale_bar_length, stretch=1)
+
+        self.scale_bar_unit = QComboBox()
+        self._UNITS = ["m", "cm", "dm", "mm", "µm", "nm", "pm", "fm"]
+        self.scale_bar_unit.addItems(self._UNITS)
+        self.scale_bar_unit.setCurrentText("µm")
+        self.scale_bar_unit.setFixedWidth(65)
+        self.scale_bar_unit.currentTextChanged.connect(self._on_scale_bar_unit_changed)
+        length_row.addWidget(self.scale_bar_unit)
+
+        length_widget = QWidget()
+        length_widget.setLayout(length_row)
+        self.scale_bar_layout.addRow(self._fl("lbl_length"), length_widget)
         
         self.scale_bar_color = ColorPickerWidget()
         self.scale_bar_color.set_color("#FFFFFF")
         self.scale_bar_color.colorChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_color"), self.scale_bar_color)
+        self.scale_bar_layout.addRow(self._fl("lbl_color"), self.scale_bar_color)
         
         self.scale_bar_show_text = QCheckBox("Show Text")
         self.scale_bar_show_text.stateChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self.scale_bar_show_text)
+        self.scale_bar_layout.addRow(self.scale_bar_show_text)
         
         self.scale_bar_custom_text = QLineEdit()
         self.scale_bar_custom_text.setPlaceholderText("Auto (e.g. 10 µm)")
         self.scale_bar_custom_text.editingFinished.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_custom_text"), self.scale_bar_custom_text)
+        self.scale_bar_layout.addRow(self._fl("lbl_custom_text"), self.scale_bar_custom_text)
         
         self.scale_bar_text_size = QDoubleSpinBox()
         self.scale_bar_text_size.setRange(0.5, 10.0)
@@ -543,34 +556,36 @@ class Inspector(QWidget):
         self.scale_bar_text_size.setSuffix(" mm")
         self.scale_bar_text_size.setValue(2.0)
         self.scale_bar_text_size.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_text_size"), self.scale_bar_text_size)
+        self.scale_bar_layout.addRow(self._fl("lbl_text_size"), self.scale_bar_text_size)
         
         self.scale_bar_thickness = QDoubleSpinBox()
         self.scale_bar_thickness.setRange(0.1, 5.0)
         self.scale_bar_thickness.setSingleStep(0.1)
         self.scale_bar_thickness.setSuffix(" mm")
         self.scale_bar_thickness.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_thickness"), self.scale_bar_thickness)
+        self.scale_bar_layout.addRow(self._fl("lbl_thickness"), self.scale_bar_thickness)
         
         self.scale_bar_position = QComboBox()
         self.scale_bar_position.addItems(["bottom_left", "bottom_center", "bottom_right"])
         self.scale_bar_position.currentTextChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_position"), self.scale_bar_position)
+        self.scale_bar_layout.addRow(self._fl("lbl_position"), self.scale_bar_position)
         
         self.scale_bar_offset_x = QDoubleSpinBox()
         self.scale_bar_offset_x.setRange(0, 50)
         self.scale_bar_offset_x.setSingleStep(0.5)
         self.scale_bar_offset_x.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_offset_x_mm"), self.scale_bar_offset_x)
+        self.scale_bar_layout.addRow(self._fl("lbl_offset_x_mm"), self.scale_bar_offset_x)
         
         self.scale_bar_offset_y = QDoubleSpinBox()
         self.scale_bar_offset_y.setRange(0, 50)
         self.scale_bar_offset_y.setSingleStep(0.5)
         self.scale_bar_offset_y.valueChanged.connect(self._emit_scale_bar)
-        self.cell_layout.addRow(self._fl("lbl_offset_y_mm"), self.scale_bar_offset_y)
-        
+        self.scale_bar_layout.addRow(self._fl("lbl_offset_y_mm"), self.scale_bar_offset_y)
+
         self.layout.addWidget(self.cell_group)
+        self.layout.addWidget(self.scale_bar_group)
         self.cell_group.hide()
+        self.scale_bar_group.hide()
 
         # --- Label Cell Properties Group ---
         self.label_cell_group = CollapsibleSection("Label Cell Settings")
@@ -889,7 +904,16 @@ class Inspector(QWidget):
             lambda v: self.text_property_changed.emit({"offset_y": v})
         )
         self.text_layout.addRow(self._fl("lbl_offset_y"), self.offset_y)
-        
+
+        # Scheme selector — only shown for in-cell numbering labels (not corner labels)
+        self._incell_scheme = QComboBox()
+        self._incell_scheme.addItems(["(a)", "(A)", "a", "A"])
+        self._incell_scheme.currentTextChanged.connect(
+            lambda t: self.project_property_changed.emit({"label_scheme": t})
+        )
+        self._incell_scheme_label = self._fl("lbl_scheme")
+        self.text_layout.addRow(self._incell_scheme_label, self._incell_scheme)
+
         self.layout.addWidget(self.text_group)
         self.text_group.hide()
         
@@ -931,10 +955,11 @@ class Inspector(QWidget):
         self.freeform_section_label.setText(tr("sec_freeform"))
         self._sec_grid_override.setText(tr("sec_grid_override"))
         self._sec_padding.setText(tr("sec_padding"))
-        self._sec_scale_bar.setText(tr("sec_scale_bar"))
+        self.scale_bar_group.set_title(tr("grp_scale_bar"))
 
         self.scale_bar_enabled.setText(tr("chk_scale_enabled"))
         self.scale_bar_show_text.setText(tr("chk_scale_text"))
+        self._manage_btn.setText(tr("btn_manage"))
         self.pip_border_enabled.setText(tr("chk_border_enabled"))
         self.label_bold.setText(tr("chk_bold"))
         self.is_bold.setText(tr("chk_bold"))
@@ -1137,6 +1162,32 @@ class Inspector(QWidget):
             return
         self.size_group_delete_requested.emit(self._current_size_group_id)
 
+    # µm per unit — multiply display value by this to get µm
+    _UNIT_TO_UM = {
+        "m":  1e6,
+        "cm": 1e4,
+        "dm": 1e5,
+        "mm": 1e3,
+        "µm": 1.0,
+        "nm": 1e-3,
+        "pm": 1e-6,
+        "fm": 1e-9,
+    }
+
+    def _on_scale_bar_mode_changed(self, mode_name: str):
+        from src.app.scale_bar_mappings import load_mappings
+        mappings = load_mappings()
+        for m in mappings:
+            if m["name"] == mode_name:
+                unit = m.get("unit", "µm")
+                if self.scale_bar_unit.currentText() != unit:
+                    self._skip_unit_conversion = True
+                    self.scale_bar_unit.setCurrentText(unit)
+                    self._skip_unit_conversion = False
+                    return
+                break
+        self._emit_scale_bar()
+
     def _emit_scale_bar(self):
         """Emit all scale bar properties as a single cell property change."""
         from src.app.scale_bar_mappings import get_um_per_px
@@ -1144,11 +1195,16 @@ class Inspector(QWidget):
         # Custom text: empty string means use auto-generated text
         custom_text = self.scale_bar_custom_text.text().strip()
         mapping_name = self.scale_bar_mode.currentText()
-        self.cell_property_changed.emit({
+        # Convert displayed value from selected unit to µm
+        unit = self.scale_bar_unit.currentText()
+        factor = self._UNIT_TO_UM.get(unit, 1.0)
+        length_um = self.scale_bar_length.value() * factor
+        properties = {
             "scale_bar_enabled": self.scale_bar_enabled.isChecked(),
             "scale_bar_mode": mapping_name,
             "scale_bar_um_per_px": get_um_per_px(mapping_name),
-            "scale_bar_length_um": self.scale_bar_length.value(),
+            "scale_bar_length_um": length_um,
+            "scale_bar_unit": unit,
             "scale_bar_color": color_hex,
             "scale_bar_show_text": self.scale_bar_show_text.isChecked(),
             "scale_bar_thickness_mm": self.scale_bar_thickness.value(),
@@ -1157,7 +1213,32 @@ class Inspector(QWidget):
             "scale_bar_offset_y": self.scale_bar_offset_y.value(),
             "scale_bar_custom_text": custom_text if custom_text else None,
             "scale_bar_text_size_mm": self.scale_bar_text_size.value(),
-        })
+        }
+        if getattr(self, "_current_item_type", None) == "pip":
+            self.pip_property_changed.emit(properties)
+        else:
+            self.cell_property_changed.emit(properties)
+
+    def _on_scale_bar_unit_changed(self, new_unit: str):
+        """When the unit changes, recalculate the spinbox value so physical length stays constant."""
+        old_unit = getattr(self, '_prev_scale_bar_unit', 'µm')
+        self._prev_scale_bar_unit = new_unit
+        if old_unit == new_unit:
+            return
+
+        if getattr(self, "_skip_unit_conversion", False):
+            self._emit_scale_bar()
+            return
+
+        old_factor = self._UNIT_TO_UM.get(old_unit, 1.0)
+        new_factor = self._UNIT_TO_UM.get(new_unit, 1.0)
+        old_val = self.scale_bar_length.value()
+        # Convert: old_val * old_factor µm / new_factor = new display value
+        new_val = old_val * old_factor / new_factor
+        self.scale_bar_length.blockSignals(True)
+        self.scale_bar_length.setValue(new_val)
+        self.scale_bar_length.blockSignals(False)
+        self._emit_scale_bar()
 
     def _refresh_mapping_combo(self):
         """Reload the mapping combo from disk (called on init and after the dialog)."""
@@ -1251,11 +1332,9 @@ class Inspector(QWidget):
 
     def set_selection(self, item_type, data=None, row_data=None, project_data=None):
         """
-        item_type: 'cell' | 'label_cell' | 'text' | None
-        data: dict of current values (for cell/text/label_cell)
-        row_data: dict of row values (only if item_type is 'cell')
-        project_data: dict of project values (always passed or only when item_type is None)
+        item_type: 'cell' | 'label_cell' | 'text' | 'pip' | 'multi_cell' | None
         """
+        self._current_item_type = item_type
         self.multi_label.hide()
 
         if item_type == 'multi_cell':
@@ -1265,14 +1344,8 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.row_group.hide()
             self.subcell_group.hide()
-            count = data.get('count', 0) if data else 0
-            self.multi_label.setText(
-                f"<b>{tr('multi_cells_selected').format(n=count)}</b>\n{tr('multi_cells_desc')}"
-            )
-            self.multi_label.show()
-            # Show cell group for bulk editing
-            self.cell_group.show()
-            self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
+            self.pip_group.hide()
+            self.scale_bar_group.hide()
             if data:
                 self.blockSignals(True)
                 self.fit_mode_combo.setCurrentText(data.get("fit_mode", "contain"))
@@ -1405,22 +1478,11 @@ class Inspector(QWidget):
             self.corner_label_bl.setText(corner_labels.get("bottom_left_inside", ""))
             self.corner_label_br.setText(corner_labels.get("bottom_right_inside", ""))
 
-            # Scale bar settings
-            self.scale_bar_enabled.setChecked(data.get("scale_bar_enabled", False))
-            self._refresh_mapping_combo()
-            mapping_name = data.get("scale_bar_mode", "rgb")
-            idx = self.scale_bar_mode.findText(mapping_name)
-            self.scale_bar_mode.setCurrentIndex(idx if idx >= 0 else 0)
-            self.scale_bar_length.setValue(data.get("scale_bar_length_um", 10.0))
-            sb_color = data.get("scale_bar_color", "#FFFFFF")
-            self.scale_bar_color.set_color(sb_color)
-            self.scale_bar_show_text.setChecked(data.get("scale_bar_show_text", True))
-            self.scale_bar_custom_text.setText(data.get("scale_bar_custom_text", "") or "")
-            self.scale_bar_text_size.setValue(data.get("scale_bar_text_size_mm", 2.0))
-            self.scale_bar_thickness.setValue(data.get("scale_bar_thickness_mm", 0.5))
-            self.scale_bar_position.setCurrentText(data.get("scale_bar_position", "bottom_right"))
-            self.scale_bar_offset_x.setValue(data.get("scale_bar_offset_x", 2.0))
             self.scale_bar_offset_y.setValue(data.get("scale_bar_offset_y", 2.0))
+            
+            # Populate shared scale bar section
+            self._populate_scale_bar_section(data)
+            
             self.blockSignals(False)
             
         elif item_type == 'text':
@@ -1445,6 +1507,15 @@ class Inspector(QWidget):
             
             # Store subtype for apply-to-group functionality
             self._current_text_subtype = data.get("subtype")
+            
+            # Show/hide scheme combo
+            if self._current_text_subtype != "corner":
+                self._incell_scheme_label.show()
+                self._incell_scheme.show()
+                self._incell_scheme.setCurrentText(data.get("label_scheme", "(a)"))
+            else:
+                self._incell_scheme_label.hide()
+                self._incell_scheme.hide()
             
             # Update apply button text based on subtype
             if self._current_text_subtype == "corner":
@@ -1497,6 +1568,12 @@ class Inspector(QWidget):
             self.pip_border_style.setCurrentText(data.get("border_style", "solid"))
             self.pip_border_width.setValue(float(data.get("border_width_pt", 1.5)))
             self.pip_border_color.set_color(data.get("border_color", "#FFFFFF"))
+            
+            self.scale_bar_offset_y.setValue(data.get("scale_bar_offset_y", 2.0))
+            
+            # Populate shared scale bar section
+            self._populate_scale_bar_section(data)
+            
             self.blockSignals(False)
 
         else:
@@ -1504,8 +1581,9 @@ class Inspector(QWidget):
             self.row_group.hide()
             self.subcell_group.hide()
             self.text_group.hide()
-            self.pip_group.hide()
             self.label_cell_group.hide()
+            self.pip_group.hide()
+            self.scale_bar_group.hide()
             self.no_selection_label.hide() # We show project settings instead
             
             # When item_type is None, 'data' might actually be project_data (legacy call)
@@ -1540,3 +1618,34 @@ class Inspector(QWidget):
             else:
                 self.project_group.hide()
                 self.no_selection_label.show()
+    def _populate_scale_bar_section(self, data: dict):
+        """Populate the collapsible scale bar group with data from a Cell or PiPItem."""
+        if not data:
+            self.scale_bar_group.hide()
+            return
+            
+        self.scale_bar_enabled.setChecked(data.get("scale_bar_enabled", False))
+        self._refresh_mapping_combo()
+        mapping_name = data.get("scale_bar_mode", "rgb")
+        idx = self.scale_bar_mode.findText(mapping_name)
+        self.scale_bar_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        
+        unit = data.get("scale_bar_unit", "µm")
+        self._prev_scale_bar_unit = unit
+        self.scale_bar_unit.setCurrentText(unit)
+        
+        length_um = data.get("scale_bar_length_um", 10.0)
+        factor = self._UNIT_TO_UM.get(unit, 1.0)
+        self.scale_bar_length.setValue(length_um / factor)
+        
+        sb_color = data.get("scale_bar_color", "#FFFFFF")
+        self.scale_bar_color.set_color(sb_color)
+        self.scale_bar_show_text.setChecked(data.get("scale_bar_show_text", True))
+        self.scale_bar_custom_text.setText(data.get("scale_bar_custom_text", "") or "")
+        self.scale_bar_text_size.setValue(data.get("scale_bar_text_size_mm", 2.0))
+        self.scale_bar_thickness.setValue(data.get("scale_bar_thickness_mm", 0.5))
+        self.scale_bar_position.setCurrentText(data.get("scale_bar_position", "bottom_right"))
+        self.scale_bar_offset_x.setValue(data.get("scale_bar_offset_x", 2.0))
+        self.scale_bar_offset_y.setValue(data.get("scale_bar_offset_y", 2.0))
+        
+        self.scale_bar_group.show()

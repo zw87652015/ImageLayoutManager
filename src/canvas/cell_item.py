@@ -227,37 +227,63 @@ class CropHandleItem(QGraphicsItem):
         idx = self.ANCHORS.index((anchor_col, anchor_row))
         self.setCursor(self.CURSORS[idx])
 
+    def _get_dims(self):
+        """Calculate dynamic dimensions based on zoom and crop box size."""
+        scale = self.cell_item._pip_scene_scale()
+        # Target sizes in screen pixels
+        arm_px = 18.0
+        thick_px = 3.5
+        hit_px = 6.0
+        
+        # Convert to scene units
+        A = arm_px / max(scale, 0.01)
+        T = thick_px / max(scale, 0.01)
+        H = hit_px / max(scale, 0.01)
+        
+        # Safeguard: Ensure handles don't cover more than 30% of the crop area
+        crop_rect = self.cell_item._get_crop_canvas_rect()
+        if crop_rect and crop_rect.width() > 0 and crop_rect.height() > 0:
+            max_arm = min(crop_rect.width(), crop_rect.height()) * 0.25
+            A = min(A, max_arm)
+        else:
+            # Fallback if crop_rect is invalid or zero
+            A = min(A, 2.0) 
+            
+        return A, T, H
+
     def boundingRect(self):
-        A, H = self.ARM, self.HIT
+        A, _, H = self._get_dims()
         ac, ar = self.anchor_col, self.anchor_row
+        
         # Each arm starts at (0,0) and extends inward along the crop border.
-        # col 0 → arm goes +x;  col 2 → arm goes -x;  col 1 → symmetric bar
-        # row 0 → arm goes +y;  row 2 → arm goes -y;  row 1 → symmetric bar
-        # Extend H outward (for easy grabbing) and A+H inward (to cover the arm).
         if ac == 0:
             x_min, x_max = -H, A + H
         elif ac == 2:
             x_min, x_max = -(A + H), H
-        else:
+        else: # col 1 (middle)
             x_min, x_max = -(A * 0.5 + H), A * 0.5 + H
+            
         if ar == 0:
             y_min, y_max = -H, A + H
         elif ar == 2:
             y_min, y_max = -(A + H), H
-        else:
+        else: # row 1 (middle)
             y_min, y_max = -(A * 0.5 + H), A * 0.5 + H
+            
         return QRectF(x_min, y_min, x_max - x_min, y_max - y_min)
 
     def paint(self, painter: QPainter, option, widget):
+        A, T, _ = self._get_dims()
         painter.save()
+        
+        # Set pen to dynamic thickness
         pen = QPen(QColor("#000000"))
-        pen.setWidthF(self.THICK)
+        pen.setWidthF(T)
         pen.setCapStyle(Qt.PenCapStyle.FlatCap)
         pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
 
-        A = self.ARM
         ac, ar = self.anchor_col, self.anchor_row
 
         # Corners: two perpendicular arms; edges: single bar
@@ -316,7 +342,7 @@ class CropHandleItem(QGraphicsItem):
         dfy = delta.y() / full_rect.height()
 
         cl, ct, cr, cb = self._drag_start_crop
-        MIN_FRAC = 0.02
+        MIN_FRAC = 0.05
 
         is_corner = (self.anchor_col in [0, 2] and self.anchor_row in [0, 2])
         shift_held = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -420,6 +446,7 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_offset_y = 2.0
         self.scale_bar_custom_text = None
         self.scale_bar_text_size_mm = 2.0
+        self.scale_bar_unit = "µm"
         
         # Visual settings
         self.setAcceptHoverEvents(True)
@@ -930,10 +957,13 @@ class CellItem(QGraphicsRectItem):
         self.update()
 
     def update_data(self, image_path, fit_mode, padding, is_placeholder, rotation=0, align_h="center", align_v="center",
-                     scale_bar_enabled=False, scale_bar_mode="rgb", scale_bar_um_per_px=0.1301, scale_bar_length_um=10.0,
+                     scale_bar_enabled: bool = False,
+                     scale_bar_mode: str = "rgb",
+                     scale_bar_um_per_px: float = 0.0,  # 0.0 means inherit from parent if zoom type
+                     scale_bar_length_um: float = 10.0,
                      scale_bar_color="#FFFFFF", scale_bar_show_text=True, scale_bar_thickness_mm=0.5,
                      scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0,
-                     scale_bar_custom_text=None, scale_bar_text_size_mm=2.0,
+                     scale_bar_custom_text=None, scale_bar_text_size_mm=2.0, scale_bar_unit="µm",
                      crop_left=0.0, crop_top=0.0, crop_right=1.0, crop_bottom=1.0):
         self.image_path = image_path
         self.fit_mode = FitMode(fit_mode)
@@ -962,6 +992,7 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_offset_y = scale_bar_offset_y
         self.scale_bar_custom_text = scale_bar_custom_text
         self.scale_bar_text_size_mm = scale_bar_text_size_mm
+        self.scale_bar_unit = scale_bar_unit
         
         if self.image_path:
             import os
@@ -1035,6 +1066,40 @@ class CellItem(QGraphicsRectItem):
             pip.h * cr.height(),
         )
 
+    def _get_pip_intrinsic_aspect_ratio(self, pip) -> float:
+        """Return the physical aspect ratio (W/H) of the PiP image content."""
+        import os
+        if pip.pip_type == "external":
+            if pip.image_path and os.path.exists(pip.image_path):
+                # Try cache
+                pix = self.proxy.get_pixmap(pip.image_path)
+                if pix and not pix.isNull():
+                    return pix.width() / pix.height()
+                # Fallback to PIL
+                try:
+                    from PIL import Image
+                    with Image.open(pip.image_path) as img:
+                        return img.width / img.height
+                except:
+                    pass
+        elif pip.pip_type == "zoom":
+            if self._pixmap and not self._pixmap.isNull():
+                img_w = self._pixmap.width()
+                img_h = self._pixmap.height()
+                crop_w = max(0.001, pip.crop_right - pip.crop_left)
+                crop_h = max(0.001, pip.crop_bottom - pip.crop_top)
+                return (crop_w * img_w) / (crop_h * img_h) if crop_h > 0 and img_h > 0 else 1.0
+        return 1.0
+
+    def _sync_pip_height_from_width(self, pip, content_rect: QRectF):
+        """Update pip.h to match pip.w based on intrinsic aspect ratio."""
+        R = self._get_pip_intrinsic_aspect_ratio(pip)
+        if R <= 0 or content_rect.width() <= 0 or content_rect.height() <= 0:
+            return
+        # R = (w * cw) / (h * ch)  =>  h = (w * cw) / (R * ch)
+        cw, ch = content_rect.width(), content_rect.height()
+        pip.h = (pip.w * cw) / (R * ch)
+
     def _pip_origin_rect(self, pip, content_rect: QRectF) -> QRectF:
         """Origin box on parent image (zoom type only), in item coords."""
         cr = content_rect
@@ -1052,7 +1117,7 @@ class CellItem(QGraphicsRectItem):
         r = inset_rect
         cx, cy = r.center().x(), r.center().y()
         draw_px = 5.0
-        hit_px  = 10.0  # generous grab radius
+        hit_px  = 16.0  # generous grab radius
         s = (hit_px if hit else draw_px) / max(scene_scale, 0.01)
         positions = {
             "resize_nw": QPointF(r.left(), r.top()),
@@ -1088,17 +1153,20 @@ class CellItem(QGraphicsRectItem):
 
     def _pip_hit_test(self, item_pos: QPointF):
         """Returns (pip_id, drag_mode) or (None, None).
-        Resize handles are only hit-tested when _pip_resize_active is True for that PiP."""
+        Handles are prioritized over PiP bodies to ensure reliable resizing."""
         cr = self._pip_content_rect()
         scale = self._pip_scene_scale()
-        # Test in reverse order so topmost (last drawn) is picked first
-        for pip in reversed(self._pip_items):
-            inset_rect = self._pip_inset_rect(pip, cr)
-            # Handle hit-test: only when resize mode is explicitly active for this PiP
-            if pip.id == self._selected_pip_id and self._pip_resize_active:
+        
+        # Pass 1: Check handles of the SELECTED PiP (highest priority)
+        if self._selected_pip_id and self._pip_resize_active:
+            pip = next((p for p in self._pip_items if p.id == self._selected_pip_id), None)
+            if pip:
+                inset_rect = self._pip_inset_rect(pip, cr)
+                # Resize handles
                 for mode, hrect in self._pip_handle_rects(inset_rect, scale, hit=True).items():
                     if hrect.contains(item_pos):
                         return pip.id, mode
+                # Origin box handles (zoom type only)
                 if pip.pip_type == "zoom" and pip.show_origin_box:
                     origin_rect = self._pip_origin_rect(pip, cr)
                     for mode, hrect in self._pip_origin_handle_rects(origin_rect, scale, hit=True).items():
@@ -1106,6 +1174,10 @@ class CellItem(QGraphicsRectItem):
                             return pip.id, mode
                     if origin_rect.contains(item_pos):
                         return pip.id, "origin_move"
+
+        # Pass 2: Check bodies of all PiPs (Z-order picks topmost first)
+        for pip in reversed(self._pip_items):
+            inset_rect = self._pip_inset_rect(pip, cr)
             if inset_rect.contains(item_pos):
                 return pip.id, "move"
         return None, None
@@ -1122,8 +1194,9 @@ class CellItem(QGraphicsRectItem):
             if pip.pip_type == "zoom" and pip.show_origin_box:
                 origin_rect = self._pip_origin_rect(pip, cr)
                 pen = QPen(QColor(pip.origin_box_color))
-                pen.setWidthF(pip.origin_box_width_pt)
-                pen.setCosmetic(True)
+                # Convert points to mm (canvas units are mm)
+                pen.setWidthF(pip.origin_box_width_pt * (25.4 / 72.0))
+                pen.setCosmetic(False)
                 if pip.origin_box_style == "dashed":
                     pen.setStyle(Qt.PenStyle.DashLine)
                 else:
@@ -1136,13 +1209,24 @@ class CellItem(QGraphicsRectItem):
             painter.save()
             painter.setClipRect(inset_rect)
             if pip.pip_type == "zoom" and self._pixmap and not self._pixmap.isNull():
+                img_w, img_h = self._pixmap.width(), self._pixmap.height()
                 src_rect = QRectF(
-                    pip.crop_left * self._pixmap.width(),
-                    pip.crop_top * self._pixmap.height(),
-                    (pip.crop_right - pip.crop_left) * self._pixmap.width(),
-                    (pip.crop_bottom - pip.crop_top) * self._pixmap.height(),
+                    pip.crop_left * img_w,
+                    pip.crop_top * img_h,
+                    (pip.crop_right - pip.crop_left) * img_w,
+                    (pip.crop_bottom - pip.crop_top) * img_h
                 )
-                painter.drawPixmap(inset_rect, self._pixmap, src_rect)
+                # Use containment logic to ensure tight wrapping even if inset_rect is off by a hair
+                if src_rect.width() > 0 and src_rect.height() > 0:
+                    ratio = min(inset_rect.width() / src_rect.width(), inset_rect.height() / src_rect.height())
+                    dw = src_rect.width() * ratio
+                    dh = src_rect.height() * ratio
+                    dest = QRectF(
+                        inset_rect.x() + (inset_rect.width() - dw) / 2,
+                        inset_rect.y() + (inset_rect.height() - dh) / 2,
+                        dw, dh
+                    )
+                    painter.drawPixmap(dest, self._pixmap, src_rect)
             elif pip.pip_type == "external" and pip.image_path:
                 ext_pix = self.proxy.get_pixmap(pip.image_path) if os.path.exists(pip.image_path) else None
                 if ext_pix and not ext_pix.isNull():
@@ -1160,8 +1244,9 @@ class CellItem(QGraphicsRectItem):
             # Draw inset border
             if pip.border_enabled:
                 bpen = QPen(QColor(pip.border_color))
-                bpen.setWidthF(pip.border_width_pt)
-                bpen.setCosmetic(True)
+                # Convert points to mm
+                bpen.setWidthF(pip.border_width_pt * (25.4 / 72.0))
+                bpen.setCosmetic(False)
                 if getattr(pip, "border_style", "solid") == "dashed":
                     bpen.setStyle(Qt.PenStyle.DashLine)
                 else:
@@ -1169,6 +1254,31 @@ class CellItem(QGraphicsRectItem):
                 painter.setPen(bpen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(inset_rect)
+
+            # Draw PiP scale bar if enabled
+            pip_params = self._get_scale_bar_params(pip)
+            if pip_params["enabled"]:
+                # If it's a zoom PiP, it should inherit um_per_px from parent if not set
+                if pip.pip_type == "zoom" and pip_params["um_per_px"] <= 0:
+                    pip_params["um_per_px"] = self.scale_bar_um_per_px
+                
+                # If still 0, use legacy default
+                if pip_params["um_per_px"] <= 0:
+                    pip_params["um_per_px"] = 0.1301
+                
+                # Determine the image path and crop for scale calculation
+                pip_path = pip.image_path if pip.pip_type == "external" else self.image_path
+                
+                # For zoom type, use the PiP's crop. For external, usually full image.
+                if pip.pip_type == "zoom":
+                    pip_crop = (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom)
+                    pip_fit = "stretch"  # Zoom PiPs are stretched to the inset rect
+                else:
+                    pip_crop = (0, 0, 1, 1)
+                    pip_fit = FitMode.CONTAIN # External PiPs use CONTAIN
+                
+                # Draw scale bar relative to the inset
+                self._draw_scale_bar_logic(painter, inset_rect, pip_params, pip_path, pip_crop, 0, pip_fit)
 
             # Draw selection highlight; resize handles only when resize mode is active
             if is_sel:
@@ -1235,23 +1345,39 @@ class CellItem(QGraphicsRectItem):
             new_x = max(0.0, min(1.0 - ow, ox + dx_norm))
             new_y = max(0.0, min(1.0 - oh, oy + dy_norm))
             pip.x, pip.y = new_x, new_y
-        elif mode in ("resize_nw", "resize_n", "resize_ne", "resize_e",
-                      "resize_se", "resize_s", "resize_sw", "resize_w"):
-            x, y, w, h = ox, oy, ow, oh
-            if "w" in mode:
-                new_w = max(MIN_SIZE, ow - dx_norm)
-                if new_w != ow:
-                    x = ox + ow - new_w
-                    w = new_w
-            if "e" in mode:
+        elif mode.startswith("resize_"):
+            dir_part = mode.split("_")[1] if "_" in mode else ""
+            R = self._get_pip_intrinsic_aspect_ratio(pip)
+            cw, ch = cr.width(), cr.height()
+            
+            w, h = ow, oh
+            if "w" in dir_part:
+                w = max(MIN_SIZE, ow - dx_norm)
+            elif "e" in dir_part:
                 w = max(MIN_SIZE, ow + dx_norm)
-            if "n" in mode:
-                new_h = max(MIN_SIZE, oh - dy_norm)
-                if new_h != oh:
-                    y = oy + oh - new_h
-                    h = new_h
-            if "s" in mode:
+            
+            if "n" in dir_part:
+                h = max(MIN_SIZE, oh - dy_norm)
+            elif "s" in dir_part:
                 h = max(MIN_SIZE, oh + dy_norm)
+                
+            # Enforce aspect ratio lock R = (w*cw) / (h*ch)
+            if len(dir_part) == 2: # Corner
+                if abs(w - ow)/max(0.001, ow) > abs(h - oh)/max(0.001, oh):
+                    h = (w * cw) / (R * ch) if ch > 0 and R > 0 else oh
+                else:
+                    w = (h * ch * R) / cw if cw > 0 else ow
+            elif dir_part in ("e", "w"):
+                h = (w * cw) / (R * ch) if ch > 0 and R > 0 else oh
+            elif dir_part in ("n", "s"):
+                w = (h * ch * R) / cw if cw > 0 else ow
+            
+            x, y = ox, oy
+            if "w" in dir_part:
+                x = ox + ow - w
+            if "n" in dir_part:
+                y = oy + oh - h
+            
             pip.x, pip.y, pip.w, pip.h = x, y, w, h
         elif mode == "origin_move":
             ocl, oct, ocr, ocb = self._pip_drag_old_crop
@@ -1263,17 +1389,20 @@ class CellItem(QGraphicsRectItem):
             pip.crop_top = new_ct
             pip.crop_right = new_cl + ow_crop
             pip.crop_bottom = new_ct + oh_crop
-        elif mode in ("origin_resize_nw", "origin_resize_ne", "origin_resize_sw", "origin_resize_se"):
+            self._sync_pip_height_from_width(pip, cr)
+        elif mode.startswith("origin_resize_"):
             ocl, oct, ocr, ocb = self._pip_drag_old_crop
             MIN_CROP = 0.05
-            if "w" in mode:
+            dir_part = mode.split("_")[-1] if "_" in mode else ""
+            if "w" in dir_part:
                 pip.crop_left = max(0.0, min(ocr - MIN_CROP, ocl + dx_norm))
-            else:
+            elif "e" in dir_part:
                 pip.crop_right = min(1.0, max(ocl + MIN_CROP, ocr + dx_norm))
-            if "n" in mode:
+            if "n" in dir_part:
                 pip.crop_top = max(0.0, min(ocb - MIN_CROP, oct + dy_norm))
-            else:
+            elif "s" in dir_part:
                 pip.crop_bottom = min(1.0, max(oct + MIN_CROP, ocb + dy_norm))
+            self._sync_pip_height_from_width(pip, cr)
 
     def paint(self, painter: QPainter, option: QStyleOptionGraphicsItem, widget):
         # Draw background
@@ -1686,110 +1815,155 @@ class CellItem(QGraphicsRectItem):
         text_rect = rect.adjusted(5, 0, -5, -s * 1.5)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignBottom, "Drop Image Here")
 
-    def _draw_scale_bar(self, painter: QPainter, rect: QRectF):
-        """Draw scale bar on the image."""
+    def _get_scale_bar_params(self, obj):
+        """Helper to get scale bar params from either a CellItem or a PiPItem-like dict/object."""
+        return {
+            "enabled": getattr(obj, "scale_bar_enabled", False),
+            "um_per_px": getattr(obj, "scale_bar_um_per_px", 0.1301),
+            "length_um": getattr(obj, "scale_bar_length_um", 10.0),
+            "unit": getattr(obj, "scale_bar_unit", "µm"),
+            "color": getattr(obj, "scale_bar_color", "#FFFFFF"),
+            "show_text": getattr(obj, "scale_bar_show_text", True),
+            "custom_text": getattr(obj, "scale_bar_custom_text", None),
+            "text_size_mm": getattr(obj, "scale_bar_text_size_mm", 2.0),
+            "thickness_mm": getattr(obj, "scale_bar_thickness_mm", 0.5),
+            "position": getattr(obj, "scale_bar_position", "bottom_right"),
+            "offset_x": getattr(obj, "scale_bar_offset_x", 2.0),
+            "offset_y": getattr(obj, "scale_bar_offset_y", 2.0),
+        }
+
+    def _draw_scale_bar_logic(self, painter: QPainter, rect: QRectF, params: dict, 
+                              img_path: str, crop: tuple, rotation: int, fit_mode, padding: tuple = (0,0,0,0)):
+        """Shared logic for scale bar rendering. 
+        fit_mode can be FitMode instance or "stretch".
+        """
+        if not params["enabled"]:
+            return
+
         # Calculate content rect (inside padding)
         content_rect = rect.adjusted(
-            self.padding[3], self.padding[0], 
-            -self.padding[1], -self.padding[2]
+            padding[3], padding[0], 
+            -padding[1], -padding[2]
         )
         
         if content_rect.width() <= 0 or content_rect.height() <= 0:
             return
         
-        # µm per pixel — value stored on the cell (set by the user via the inspector)
-        um_per_px = self.scale_bar_um_per_px if self.scale_bar_um_per_px > 0 else 0.1301
+        # µm per pixel
+        um_per_px = params["um_per_px"] if params["um_per_px"] > 0 else 0.1301
         
         # Calculate bar length in pixels (source image pixels)
-        bar_length_px = self.scale_bar_length_um / um_per_px
+        bar_length_px = params["length_um"] / um_per_px
         
-        # Get ORIGINAL image dimensions (not thumbnail) for accurate scale calculation
+        # Get ORIGINAL image dimensions
         from PIL import Image
+        import os
         try:
-            with Image.open(self.image_path) as img:
-                orig_w, orig_h = img.size
+            if img_path and os.path.exists(img_path):
+                with Image.open(img_path) as img:
+                    orig_w, orig_h = img.size
+            else:
+                # Fallback to a placeholder size if image missing
+                orig_w, orig_h = 1000, 1000
         except Exception:
-            # Fallback to pixmap if PIL fails
-            orig_w = self._pixmap.width()
-            orig_h = self._pixmap.height()
+            orig_w, orig_h = 1000, 1000
         
-        # Apply crop to get effective source dimensions (what is actually displayed)
-        crop_w_frac = max(0.001, self.crop_right - self.crop_left)
-        crop_h_frac = max(0.001, self.crop_bottom - self.crop_top)
+        # Apply crop
+        cl, ct, cr, cb = crop
+        crop_w_frac = max(0.001, cr - cl)
+        crop_h_frac = max(0.001, cb - ct)
         eff_orig_w = orig_w * crop_w_frac
         eff_orig_h = orig_h * crop_h_frac
 
-        # Adjust dimensions if rotated 90 or 270 degrees
-        is_sideways = self.rotation in [90, 270]
+        # Adjust dimensions if rotated
+        is_sideways = rotation in [90, 270]
         eff_pix_w = eff_orig_h if is_sideways else eff_orig_w
         eff_pix_h = eff_orig_w if is_sideways else eff_orig_h
 
-        if self.fit_mode == FitMode.CONTAIN:
-            scale_ratio = min(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
+        # Calculate actual image rectangle and scale factor
+        # Safety: avoid division by zero or extreme overflows for tiny crops
+        safe_pix_w = max(0.1, eff_pix_w)
+        safe_pix_h = max(0.1, eff_pix_h)
+
+        if fit_mode == "stretch":
+            scale_ratio = content_rect.width() / safe_pix_w
+            img_rect = content_rect
+        elif fit_mode == FitMode.CONTAIN:
+            scale_ratio = min(content_rect.width() / safe_pix_w, content_rect.height() / safe_pix_h)
+            new_w = eff_pix_w * scale_ratio
+            new_h = eff_pix_h * scale_ratio
+            img_rect = QRectF(
+                content_rect.left() + (content_rect.width() - new_w) / 2,
+                content_rect.top() + (content_rect.height() - new_h) / 2,
+                new_w, new_h
+            )
         else:  # COVER
-            scale_ratio = max(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
+            scale_ratio = max(content_rect.width() / safe_pix_w, content_rect.height() / safe_pix_h)
+            new_w = eff_pix_w * scale_ratio
+            new_h = eff_pix_h * scale_ratio
+            img_rect = QRectF(
+                content_rect.left() + (content_rect.width() - new_w) / 2,
+                content_rect.top() + (content_rect.height() - new_h) / 2,
+                new_w, new_h
+            )
         
-        # Bar length in mm (canvas units)
+        # Clamp scale ratio to avoid extreme bar lengths that could crash renderer
+        scale_ratio = min(scale_ratio, 100000.0)
+        
+        # Bar length in mm
         bar_length_mm = bar_length_px * scale_ratio
+        bar_thickness = params["thickness_mm"]
         
-        # Bar thickness in mm
-        bar_thickness = self.scale_bar_thickness_mm
+        ox, oy = params["offset_x"], params["offset_y"]
+        bar_y = img_rect.bottom() - oy - bar_thickness
         
-        # Calculate position based on scale_bar_position and offsets
-        ox = self.scale_bar_offset_x
-        oy = self.scale_bar_offset_y
-        
-        # Y position (always at bottom)
-        bar_y = content_rect.bottom() - oy - bar_thickness
-        
-        # X position based on horizontal alignment
-        if self.scale_bar_position == "bottom_left":
-            bar_x = content_rect.left() + ox
-        elif self.scale_bar_position == "bottom_center":
-            bar_x = content_rect.left() + (content_rect.width() - bar_length_mm) / 2
+        if params["position"] == "bottom_left":
+            bar_x = img_rect.left() + ox
+        elif params["position"] == "bottom_center":
+            bar_x = img_rect.left() + (img_rect.width() - bar_length_mm) / 2
         else:  # bottom_right
-            bar_x = content_rect.right() - ox - bar_length_mm
+            bar_x = img_rect.right() - ox - bar_length_mm
         
         # Draw the bar
-        bar_rect = QRectF(bar_x, bar_y, bar_length_mm, bar_thickness)
-        painter.fillRect(bar_rect, QColor(self.scale_bar_color))
+        painter.fillRect(QRectF(bar_x, bar_y, bar_length_mm, bar_thickness), QColor(params["color"]))
         
-        # Draw text if enabled
-        if self.scale_bar_show_text:
-            # Use custom text if provided, otherwise auto-generate from length
-            if self.scale_bar_custom_text:
-                text = self.scale_bar_custom_text
+        # Draw text
+        if params["show_text"]:
+            if params["custom_text"]:
+                text = params["custom_text"]
             else:
-                text = f"{self.scale_bar_length_um:.0f} µm" if self.scale_bar_length_um >= 1 else f"{self.scale_bar_length_um:.2f} µm"
+                unit = params["unit"]
+                factor = {"m": 1e6, "cm": 1e4, "dm": 1e5, "mm": 1e3, "µm": 1.0, "nm": 1e-3, "pm": 1e-6, "fm": 1e-9}.get(unit, 1.0)
+                display_val = params["length_um"] / factor
+                text = f"{display_val:.0f} {unit}" if display_val >= 1 or display_val == 0 else f"{display_val:.2f} {unit}"
 
-            # Render via QGraphicsTextItem at a large base point size and then
-            # scale DOWN to the target mm size. This matches how labels render
-            # in the exporters and avoids Qt's minimum-rendered-pixel-size floor
-            # (~6-8 px) that would otherwise make the small scale-bar text
-            # appear oversized relative to the bar at normal zoom levels.
             base_pt = 24
-            text_scale = self.scale_bar_text_size_mm / base_pt
+            text_scale = params["text_size_mm"] / base_pt
 
             temp_item = QGraphicsTextItem()
             temp_item.setPlainText(text)
-            font = QFont("Arial", base_pt)
-            temp_item.setFont(font)
-            temp_item.setDefaultTextColor(QColor(self.scale_bar_color))
+            temp_item.setFont(QFont("Arial", base_pt))
+            temp_item.setDefaultTextColor(QColor(params["color"]))
 
             br = temp_item.boundingRect()
             tw_mm = br.width() * text_scale
             th_mm = br.height() * text_scale
 
-            # Horizontally centre the text on the bar; sit it just above the bar.
-            tx_mm = bar_x + (bar_length_mm - tw_mm) / 2
-            ty_mm = bar_y - th_mm
+            tx = bar_x + (bar_length_mm - tw_mm) / 2
+            ty = bar_y - th_mm
 
             painter.save()
-            painter.translate(tx_mm, ty_mm)
+            painter.translate(tx, ty)
             painter.scale(text_scale, text_scale)
             option = QStyleOptionGraphicsItem()
             temp_item.paint(painter, option, None)
             painter.restore()
+
+    def _draw_scale_bar(self, painter: QPainter, rect: QRectF):
+        """Draw scale bar on the main image."""
+        params = self._get_scale_bar_params(self)
+        crop = (self.crop_left, self.crop_top, self.crop_right, self.crop_bottom)
+        self._draw_scale_bar_logic(painter, rect, params, self.image_path, crop, self.rotation, self.fit_mode, self.padding)
 
     def _update_tooltip(self):
         """Build tooltip from image metadata."""
@@ -1929,6 +2103,16 @@ class CellItem(QGraphicsRectItem):
 
         painter.restore()
 
+    def boundingRect(self) -> QRectF:
+        """Extend bounding box to include PiP resize handles that might stick out."""
+        r = self.rect()
+        if self._selected_pip_id and self._pip_resize_active:
+            scale = self._pip_scene_scale()
+            # Grab radius in mm (scene units). Needs to be >= hit_px in _pip_handle_rects
+            s = 20.0 / max(scale, 0.01)
+            return r.adjusted(-s, -s, s, s)
+        return r
+
     def hoverEnterEvent(self, event):
         self.is_hovered = True
         self._update_tooltip()
@@ -1936,12 +2120,42 @@ class CellItem(QGraphicsRectItem):
         super().hoverEnterEvent(event)
 
     def hoverMoveEvent(self, event):
+        # 1. Crop mode cursor logic
         if self._in_crop_mode:
             crop_rect = self._get_crop_canvas_rect()
             if crop_rect and crop_rect.contains(event.pos()):
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
             else:
                 self.unsetCursor()
+            super().hoverMoveEvent(event)
+            return
+
+        # 2. PiP handle cursor logic
+        if self._selected_pip_id and self._pip_resize_active:
+            _, mode = self._pip_hit_test(event.pos())
+            if mode:
+                cursors = {
+                    "resize_nw": Qt.CursorShape.SizeFDiagCursor,
+                    "resize_n":  Qt.CursorShape.SizeVerCursor,
+                    "resize_ne": Qt.CursorShape.SizeBDiagCursor,
+                    "resize_e":  Qt.CursorShape.SizeHorCursor,
+                    "resize_se": Qt.CursorShape.SizeFDiagCursor,
+                    "resize_s":  Qt.CursorShape.SizeVerCursor,
+                    "resize_sw": Qt.CursorShape.SizeBDiagCursor,
+                    "resize_w":  Qt.CursorShape.SizeHorCursor,
+                    "origin_resize_nw": Qt.CursorShape.SizeFDiagCursor,
+                    "origin_resize_ne": Qt.CursorShape.SizeBDiagCursor,
+                    "origin_resize_sw": Qt.CursorShape.SizeBDiagCursor,
+                    "origin_resize_se": Qt.CursorShape.SizeFDiagCursor,
+                    "origin_move": Qt.CursorShape.SizeAllCursor,
+                }
+                if mode in cursors:
+                    self.setCursor(cursors[mode])
+                    super().hoverMoveEvent(event)
+                    return
+        
+        # 3. Default cursor
+        self.unsetCursor()
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):

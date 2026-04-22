@@ -83,6 +83,21 @@ class PiPItem:
     origin_box_style: str = "solid"
     origin_box_width_pt: float = 1.0
 
+    # Scale bar properties
+    scale_bar_enabled: bool = False
+    scale_bar_mode: str = "rgb"
+    scale_bar_um_per_px: float = 0.0  # 0.0 means inherit from parent if zoom type
+    scale_bar_length_um: float = 10.0
+    scale_bar_unit: str = "µm"
+    scale_bar_color: str = "#FFFFFF"
+    scale_bar_show_text: bool = True
+    scale_bar_thickness_mm: float = 0.5
+    scale_bar_position: str = "bottom_right"
+    scale_bar_offset_x: float = 2.0
+    scale_bar_offset_y: float = 2.0
+    scale_bar_custom_text: Optional[str] = None
+    scale_bar_text_size_mm: float = 2.0
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -104,6 +119,19 @@ class PiPItem:
             "origin_box_color": self.origin_box_color,
             "origin_box_style": self.origin_box_style,
             "origin_box_width_pt": self.origin_box_width_pt,
+            "scale_bar_enabled": self.scale_bar_enabled,
+            "scale_bar_mode": self.scale_bar_mode,
+            "scale_bar_um_per_px": self.scale_bar_um_per_px,
+            "scale_bar_length_um": self.scale_bar_length_um,
+            "scale_bar_unit": self.scale_bar_unit,
+            "scale_bar_color": self.scale_bar_color,
+            "scale_bar_show_text": self.scale_bar_show_text,
+            "scale_bar_thickness_mm": self.scale_bar_thickness_mm,
+            "scale_bar_position": self.scale_bar_position,
+            "scale_bar_offset_x": self.scale_bar_offset_x,
+            "scale_bar_offset_y": self.scale_bar_offset_y,
+            "scale_bar_custom_text": self.scale_bar_custom_text,
+            "scale_bar_text_size_mm": self.scale_bar_text_size_mm,
         }
 
     @classmethod
@@ -221,6 +249,7 @@ class Cell:
     scale_bar_offset_y: float = 2.0
     scale_bar_custom_text: Optional[str] = None  # If set, overrides auto-generated "X µm" text
     scale_bar_text_size_mm: float = 2.0  # Font size in mm for scale bar text
+    scale_bar_unit: str = "µm"  # Display unit for the length field (m/cm/dm/mm/µm/nm/pm/fm)
 
     # Freeform layout (used when Project.layout_mode == "freeform")
     freeform_x_mm: float = 0.0
@@ -284,6 +313,7 @@ class Cell:
             "scale_bar_offset_y": self.scale_bar_offset_y,
             "scale_bar_custom_text": self.scale_bar_custom_text,
             "scale_bar_text_size_mm": self.scale_bar_text_size_mm,
+            "scale_bar_unit": self.scale_bar_unit,
             "freeform_x_mm": self.freeform_x_mm,
             "freeform_y_mm": self.freeform_y_mm,
             "freeform_w_mm": self.freeform_w_mm,
@@ -323,6 +353,7 @@ class Cell:
         payload.setdefault("scale_bar_offset_y", 2.0)
         payload.setdefault("scale_bar_custom_text", None)
         payload.setdefault("scale_bar_text_size_mm", 2.0)
+        payload.setdefault("scale_bar_unit", "µm")
         payload.setdefault("freeform_x_mm", 0.0)
         payload.setdefault("freeform_y_mm", 0.0)
         payload.setdefault("freeform_w_mm", 50.0)

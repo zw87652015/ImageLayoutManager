@@ -1,6 +1,6 @@
 import os
 import math
-from typing import Optional
+from typing import Optional, Tuple, List, Dict
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -1026,12 +1026,10 @@ class MainWindow(QMainWindow):
                 tab.undo_stack.setUndoLimit(limit)
 
     def _on_undo_text_changed(self, text: str):
-        prefix = tr("action_undo")
-        self._undo_action.setText(f"{prefix} {text}" if text else prefix)
+        self._undo_action.setText(tr("action_undo"))
 
     def _on_redo_text_changed(self, text: str):
-        prefix = tr("action_redo")
-        self._redo_action.setText(f"{prefix} {text}" if text else prefix)
+        self._redo_action.setText(tr("action_redo"))
 
     def retranslate_ui(self):
         """Update all UI text to the current language."""
@@ -1436,6 +1434,28 @@ class MainWindow(QMainWindow):
         if not cell:
             return
         pip = PiPItem(pip_type="external", image_path=file_path, show_origin_box=False)
+        
+        # Initialize size based on aspect ratio
+        ratio = self._get_pip_intrinsic_aspect_ratio(pip)
+        default_w = 0.3
+        default_h = 0.3
+        
+        # Calculate h such that (w * cw) / (h * ch) = ratio
+        # cw/ch for the parent cell is needed for normalized coords
+        if cell and ratio > 0:
+            cw_mm, ch_mm = self._get_cell_content_size_mm(cell)
+            if cw_mm > 0 and ch_mm > 0:
+                # ratio = (w * cw_mm) / (h * ch_mm) => h = (w * cw_mm) / (ratio * ch_mm)
+                default_h = (default_w * cw_mm) / (ratio * ch_mm)
+                # If h is too large, scale both down
+                if default_h > 0.6:
+                    scale_down = 0.6 / default_h
+                    default_w *= scale_down
+                    default_h *= scale_down
+
+        pip.w = default_w
+        pip.h = default_h
+        
         cmd = AddPiPItemCommand(cell, pip, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
@@ -1476,6 +1496,51 @@ class MainWindow(QMainWindow):
         pip_id = getattr(item, '_selected_pip_id', None)
         if cell_id and pip_id:
             self._on_pip_removed(cell_id, pip_id)
+
+    def _get_cell_content_size_mm(self, cell) -> Tuple[float, float]:
+        """Return the (width, height) in mm of the cell's content area (after padding)."""
+        from src.model.layout_engine import LayoutEngine
+        layout = LayoutEngine.calculate_layout(self.project)
+        rect = layout.cell_rects.get(cell.id)
+        if not rect:
+            return 0.0, 0.0
+        
+        _, _, w, h = rect
+        # Adjust for padding
+        cw = max(0.0, w - cell.padding_left - cell.padding_right)
+        ch = max(0.0, h - cell.padding_top - cell.padding_bottom)
+        return cw, ch
+
+    def _get_pip_intrinsic_aspect_ratio(self, pip) -> float:
+        """Helper to get physical aspect ratio (W/H) of a PiP inset."""
+        import os
+        from PIL import Image
+        if pip.pip_type == "external":
+            if pip.image_path and os.path.exists(pip.image_path):
+                try:
+                    with Image.open(pip.image_path) as img:
+                        return img.width / img.height
+                except:
+                    pass
+        elif pip.pip_type == "zoom":
+            # For zoom PiPs, the intrinsic ratio is the cropped parent image's ratio
+            parent_cell = None
+            # Find which cell owns this PiP
+            for c in self.project.get_all_leaf_cells():
+                if any(p.id == pip.id for p in getattr(c, 'pip_items', [])):
+                    parent_cell = c
+                    break
+            
+            if parent_cell and parent_cell.image_path and os.path.exists(parent_cell.image_path):
+                try:
+                    with Image.open(parent_cell.image_path) as img:
+                        img_w, img_h = img.width, img.height
+                        crop_w = max(0.001, pip.crop_right - pip.crop_left)
+                        crop_h = max(0.001, pip.crop_bottom - pip.crop_top)
+                        return (crop_w * img_w) / (crop_h * img_h)
+                except:
+                    pass
+        return 1.0
 
     def _on_pip_removed(self, cell_id: str, pip_id: str):
         """Handle Delete key press or Inspector delete button for selected PiP."""
@@ -1726,7 +1791,9 @@ class MainWindow(QMainWindow):
         if hasattr(item, 'text_item_id'):
              text = next((t for t in self.project.text_items if t.id == item.text_item_id), None)
              if text:
-                 self.inspector.set_selection('text', text.to_dict())
+                 text_dict = text.to_dict()
+                 text_dict["label_scheme"] = self.project.label_scheme
+                 self.inspector.set_selection('text', text_dict)
                  return
                  
         self.inspector.set_selection(None, self.project.to_dict())
@@ -1893,6 +1960,19 @@ class MainWindow(QMainWindow):
         pip = next((p for p in getattr(cell, 'pip_items', []) if p.id == pip_id), None)
         if not pip:
             return
+
+        # Maintain aspect ratio for size changes
+        changes = dict(changes) # Copy
+        if "w" in changes or "h" in changes:
+            ratio = self._get_pip_intrinsic_aspect_ratio(pip)
+            cw_mm, ch_mm = self._get_cell_content_size_mm(cell)
+            if ratio > 0 and cw_mm > 0 and ch_mm > 0:
+                if "w" in changes and "h" not in changes:
+                    # h = (w * cw_mm) / (ratio * ch_mm)
+                    changes["h"] = (changes["w"] * cw_mm) / (ratio * ch_mm)
+                elif "h" in changes and "w" not in changes:
+                    # w = (h * ch_mm * ratio) / cw_mm
+                    changes["w"] = (changes["h"] * ch_mm * ratio) / cw_mm
 
         cmd = PropertyChangeCommand(pip, changes, self._refresh_and_update, "Change PiP Property")
         self.undo_stack.push(cmd)

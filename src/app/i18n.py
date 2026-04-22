@@ -148,6 +148,7 @@ _T: dict[str, dict[str, str]] = {
     "tip_align_ml":         {"en": "Middle Left",       "zh": "居中左侧"},
     "tip_align_mc":         {"en": "Center",            "zh": "居中"},
     "tip_align_mr":         {"en": "Middle Right",      "zh": "居中右侧"},
+    "grp_scale_bar":        {"en": "Scale Bar Settings", "zh": "比例尺设置"},
     "tip_align_bl":         {"en": "Bottom Left",       "zh": "左下"},
     "tip_align_bc":         {"en": "Bottom Center",     "zh": "居中底部"},
     "tip_align_br":         {"en": "Bottom Right",      "zh": "右下"},

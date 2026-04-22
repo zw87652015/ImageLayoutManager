@@ -181,6 +181,12 @@ def main() -> int:
     for mod in used_qt_modules:
         args.append(f"--collect-submodules={mod}")
 
+    # Ensure Qt6 C++ DLLs, platform plugins (e.g., qwindows.dll), styles, and data files are bundled.
+    args.append("--collect-binaries=PyQt6")
+    args.append("--collect-data=PyQt6")
+    args.append("--hidden-import=PyQt6.sip")
+    args.append("--hidden-import=shiboken6")
+
     for mod in unused_qt_modules:
         args.append(f"--exclude-module={mod}")
 

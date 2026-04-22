@@ -1,7 +1,11 @@
 from PyQt6.QtGui import QUndoCommand
 import copy
 import uuid
+import time
 from src.model.data_model import RowTemplate, Cell, PiPItem
+
+# Commands that occur within this window (seconds) on the same property are merged.
+MERGE_TIMEOUT = 5.0
 
 
 class FreeformGeometryCommand(QUndoCommand):
@@ -18,6 +22,7 @@ class FreeformGeometryCommand(QUndoCommand):
         self.new_w = new_w
         self.new_h = new_h
         self.update_callback = update_callback
+        self.timestamp = time.time()
 
     def redo(self):
         self.cell.freeform_x_mm = self.new_x
@@ -43,10 +48,14 @@ class FreeformGeometryCommand(QUndoCommand):
         """Collapse consecutive moves of the same cell into a single undo step."""
         if not isinstance(other, FreeformGeometryCommand) or other.cell is not self.cell:
             return False
+        if time.time() - self.timestamp > MERGE_TIMEOUT:
+            return False
+            
         self.new_x = other.new_x
         self.new_y = other.new_y
         self.new_w = other.new_w
         self.new_h = other.new_h
+        self.timestamp = time.time()
         return True
 
 
@@ -253,11 +262,29 @@ class PropertyChangeCommand(QUndoCommand):
         self.changes = changes
         self.old_values = {}
         self.update_callback = update_callback
+        self.timestamp = time.time()
         
         # Capture old values
         for k in changes.keys():
             if hasattr(target, k):
                 self.old_values[k] = getattr(target, k)
+
+    def id(self):
+        # Stable ID for target + specific set of properties
+        prop_key = tuple(sorted(self.changes.keys()))
+        return (id(self.target) ^ hash(prop_key)) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        if not isinstance(other, PropertyChangeCommand) or other.target is not self.target:
+            return False
+        if other.changes.keys() != self.changes.keys():
+            return False
+        if time.time() - self.timestamp > MERGE_TIMEOUT:
+            return False
+            
+        self.changes = other.changes
+        self.timestamp = time.time()
+        return True
 
     def redo(self):
         for k, v in self.changes.items():
@@ -281,6 +308,7 @@ class MultiPropertyChangeCommand(QUndoCommand):
         self.changes = changes
         self.old_values = []  # List of dicts, one per target
         self.update_callback = update_callback
+        self.timestamp = time.time()
         
         # Capture old values for each target
         for target in targets:
@@ -289,6 +317,26 @@ class MultiPropertyChangeCommand(QUndoCommand):
                 if hasattr(target, k):
                     old[k] = getattr(target, k)
             self.old_values.append(old)
+
+    def id(self):
+        # Hash of all target IDs and properties
+        target_key = tuple(sorted([id(t) for t in self.targets]))
+        prop_key = tuple(sorted(self.changes.keys()))
+        return (hash(target_key) ^ hash(prop_key)) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        if not isinstance(other, MultiPropertyChangeCommand):
+            return False
+        if len(other.targets) != len(self.targets) or any(t1 is not t2 for t1, t2 in zip(other.targets, self.targets)):
+            return False
+        if other.changes.keys() != self.changes.keys():
+            return False
+        if time.time() - self.timestamp > MERGE_TIMEOUT:
+            return False
+            
+        self.changes = other.changes
+        self.timestamp = time.time()
+        return True
 
     def redo(self):
         for target in self.targets:
@@ -1410,6 +1458,7 @@ class SetPiPGeometryCommand(QUndoCommand):
         self.old_geom = old_geom  # (x, y, w, h)
         self.new_geom = new_geom
         self.update_callback = update_callback
+        self.timestamp = time.time()
 
     def redo(self):
         self.pip_item.x, self.pip_item.y, self.pip_item.w, self.pip_item.h = self.new_geom
@@ -1427,7 +1476,10 @@ class SetPiPGeometryCommand(QUndoCommand):
     def mergeWith(self, other):
         if not isinstance(other, SetPiPGeometryCommand) or other.pip_item is not self.pip_item:
             return False
+        if time.time() - self.timestamp > MERGE_TIMEOUT:
+            return False
         self.new_geom = other.new_geom
+        self.timestamp = time.time()
         return True
 
 
@@ -1439,6 +1491,7 @@ class SetPiPOriginCommand(QUndoCommand):
         self.old_crop = old_crop  # (crop_left, crop_top, crop_right, crop_bottom)
         self.new_crop = new_crop
         self.update_callback = update_callback
+        self.timestamp = time.time()
 
     def redo(self):
         self.pip_item.crop_left, self.pip_item.crop_top, self.pip_item.crop_right, self.pip_item.crop_bottom = self.new_crop
@@ -1456,5 +1509,8 @@ class SetPiPOriginCommand(QUndoCommand):
     def mergeWith(self, other):
         if not isinstance(other, SetPiPOriginCommand) or other.pip_item is not self.pip_item:
             return False
+        if time.time() - self.timestamp > MERGE_TIMEOUT:
+            return False
         self.new_crop = other.new_crop
+        self.timestamp = time.time()
         return True

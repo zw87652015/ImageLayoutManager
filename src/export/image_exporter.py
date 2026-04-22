@@ -115,7 +115,7 @@ class ImageExporter:
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
 
-                ImageExporter._draw_pip_items(painter, cell, content_rect)
+                ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
 
             # 1b. Draw Label Cells (label rows above picture rows)
             if label_row_above:
@@ -206,7 +206,7 @@ class ImageExporter:
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
 
-                ImageExporter._draw_pip_items(painter, cell, content_rect)
+                ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
 
             if label_row_above:
                 ImageExporter._draw_label_cells(painter, project, layout_result, scale)
@@ -226,7 +226,7 @@ class ImageExporter:
         return image
 
     @staticmethod
-    def _draw_pip_items(painter: QPainter, cell, content_rect: QRectF):
+    def _draw_pip_items(painter: QPainter, project, cell, content_rect: QRectF, scale: float):
         """Draw all PiP insets for a cell onto the given content_rect."""
         pip_items = getattr(cell, 'pip_items', [])
         if not pip_items:
@@ -247,15 +247,35 @@ class ImageExporter:
                 src_crop = (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom)
                 ImageExporter._draw_raster(painter, cell.image_path, inset_rect, "contain", 0, src_crop)
             elif pip.pip_type == "external" and pip.image_path and os.path.exists(pip.image_path):
-                ImageExporter._draw_image(painter, pip.image_path, inset_rect, "contain", 0,
-                                          (0.0, 0.0, 1.0, 1.0))
+                ImageExporter._draw_image(painter, pip.image_path, inset_rect, "contain", 0)
             painter.restore()
+
+            # Draw PiP scale bar if enabled
+            if getattr(pip, "scale_bar_enabled", False):
+                # Determine correct mapping inheritance
+                current_um_per_px = getattr(pip, "scale_bar_um_per_px", 0.0)
+                if pip.pip_type == "zoom" and current_um_per_px <= 0:
+                    current_um_per_px = getattr(cell, "scale_bar_um_per_px", 0.1301)
+                if current_um_per_px <= 0:
+                    current_um_per_px = 0.1301
+                
+                # Temporarily set for _draw_scale_bar logic
+                old_um = getattr(pip, "scale_bar_um_per_px", 0.0)
+                pip.scale_bar_um_per_px = current_um_per_px
+                
+                # PiP zoom type is STRETCH, external is CONTAIN
+                pip_fit = "stretch" if pip.pip_type == "zoom" else "contain"
+                ImageExporter._draw_scale_bar(painter, pip, inset_rect, scale, fit_mode_override=pip_fit)
+                
+                # Restore
+                pip.scale_bar_um_per_px = old_um
             # Draw border
             if pip.border_enabled:
                 from PyQt6.QtGui import QPen
                 bpen = QPen(QColor(pip.border_color))
-                bpen.setWidthF(pip.border_width_pt)
-                bpen.setCosmetic(True)
+                # Convert points to pixels (1pt = 1/72 inch)
+                bpen.setWidthF(pip.border_width_pt * (project.dpi / 72.0))
+                bpen.setCosmetic(False)
                 if getattr(pip, 'border_style', 'solid') == 'dashed':
                     bpen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(bpen)
@@ -263,16 +283,17 @@ class ImageExporter:
                 painter.drawRect(inset_rect)
             # Draw zoom origin box
             if pip.pip_type == "zoom" and getattr(pip, 'show_origin_box', False):
-                from PyQt6.QtGui import QPen
                 origin_rect = QRectF(
                     content_rect.x() + pip.crop_left * cw,
                     content_rect.y() + pip.crop_top * ch,
                     (pip.crop_right - pip.crop_left) * cw,
                     (pip.crop_bottom - pip.crop_top) * ch,
                 )
+                from PyQt6.QtGui import QPen
                 open_pen = QPen(QColor(pip.origin_box_color))
-                open_pen.setWidthF(pip.origin_box_width_pt)
-                open_pen.setCosmetic(True)
+                # Convert points to pixels
+                open_pen.setWidthF(pip.origin_box_width_pt * (project.dpi / 72.0))
+                open_pen.setCosmetic(False)
                 if getattr(pip, 'origin_box_style', 'solid') == 'dashed':
                     open_pen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(open_pen)
@@ -575,7 +596,6 @@ class ImageExporter:
         font = QFont(text_item.font_family, base_pt)
         if text_item.font_weight == "bold":
             font.setBold(True)
-        temp_item.setFont(font)
         temp_item.setDefaultTextColor(QColor(text_item.color))
 
         base_rect = temp_item.boundingRect()
@@ -691,91 +711,107 @@ class ImageExporter:
             painter.restore()
 
     @staticmethod
-    def _draw_scale_bar(painter: QPainter, cell, content_rect: QRectF, scale: float):
-        """Draw scale bar on the exported image."""
-        from PIL import Image as PILImage
+    def _draw_scale_bar(painter: QPainter, obj, content_rect: QRectF, scale: float, fit_mode_override=None):
+        """Draw scale bar on the exported image (works for Cell or PiPItem)."""
+        # Ensure we have all necessary attributes (PiPItem/Cell compatibility)
+        um_per_px = getattr(obj, "scale_bar_um_per_px", 0.1301)
+        if um_per_px <= 0:
+            um_per_px = 0.1301
         
-        # Get image dimensions for scale calculation
-        try:
-            with PILImage.open(cell.image_path) as img:
-                orig_w, orig_h = img.size
-        except Exception:
-            return
-        
-        # Apply crop to get effective source dimensions (the visible region)
-        crop_w_frac = max(0.001, getattr(cell, 'crop_right', 1.0) - getattr(cell, 'crop_left', 0.0))
-        crop_h_frac = max(0.001, getattr(cell, 'crop_bottom', 1.0) - getattr(cell, 'crop_top', 0.0))
-        eff_orig_w = orig_w * crop_w_frac
-        eff_orig_h = orig_h * crop_h_frac
+        length_um = getattr(obj, "scale_bar_length_um", 10.0)
+        unit = getattr(obj, "scale_bar_unit", "µm")
+        thickness_mm = getattr(obj, "scale_bar_thickness_mm", 0.5)
+        color = getattr(obj, "scale_bar_color", "#FFFFFF")
+        show_text = getattr(obj, "scale_bar_show_text", True)
+        custom_text = getattr(obj, "scale_bar_custom_text", None)
+        text_size_mm = getattr(obj, "scale_bar_text_size_mm", 2.0)
+        position = getattr(obj, "scale_bar_position", "bottom_right")
+        offset_x = getattr(obj, "scale_bar_offset_x", 2.0)
+        offset_y = getattr(obj, "scale_bar_offset_y", 2.0)
 
-        # Adjust dimensions if rotated 90 or 270 degrees
-        rotation = getattr(cell, 'rotation', 0)
+        # Get image dimensions for scale calculation
+        from PIL import Image
+        img_path = getattr(obj, "image_path", None)
+        try:
+            if img_path and os.path.exists(img_path):
+                with Image.open(img_path) as img:
+                    orig_w, orig_h = img.size
+            else:
+                orig_w, orig_h = 1000, 1000
+        except Exception:
+            orig_w, orig_h = 1000, 1000
+        
+        # Crop
+        cl = getattr(obj, "crop_left", 0.0)
+        ct = getattr(obj, "crop_top", 0.0)
+        cr = getattr(obj, "crop_right", 1.0)
+        cb = getattr(obj, "crop_bottom", 1.0)
+        eff_orig_w = orig_w * max(0.001, cr - cl)
+        eff_orig_h = orig_h * max(0.001, cb - ct)
+
+        # Rotation
+        rotation = getattr(obj, 'rotation', 0)
         is_sideways = rotation in [90, 270]
         eff_pix_w = eff_orig_h if is_sideways else eff_orig_w
         eff_pix_h = eff_orig_w if is_sideways else eff_orig_h
 
-        # µm per pixel — value stored on the cell (set by the user via the inspector)
-        um_per_px = getattr(cell, 'scale_bar_um_per_px', 0.1301)
-        if um_per_px <= 0:
-            um_per_px = 0.1301
-
-        # Calculate bar length in source image pixels
-        bar_length_px = cell.scale_bar_length_um / um_per_px
-
-        # Calculate scale factor from image to content rect (in pixels)
-        from src.model.enums import FitMode
-        fit_mode = FitMode(cell.fit_mode)
-        if fit_mode == FitMode.CONTAIN:
-            scale_ratio = min(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
-        else:  # COVER
-            scale_ratio = max(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
+        # Calculate bar length in source pixels
+        bar_length_px = length_um / um_per_px
+        
+        # Calculate actual image rectangle and scale factor
+        if fit_mode_override == "stretch":
+            scale_ratio = content_rect.width() / eff_pix_w
+            img_rect = content_rect
+        else:
+            fit_mode_str = getattr(obj, "fit_mode", "contain")
+            from src.model.enums import FitMode
+            fit_mode = FitMode(fit_mode_str)
+            if fit_mode == FitMode.CONTAIN:
+                scale_ratio = min(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
+            else:  # COVER
+                scale_ratio = max(content_rect.width() / eff_pix_w, content_rect.height() / eff_pix_h)
+            
+            new_w = eff_pix_w * scale_ratio
+            new_h = eff_pix_h * scale_ratio
+            img_rect = QRectF(
+                content_rect.left() + (content_rect.width() - new_w) / 2,
+                content_rect.top() + (content_rect.height() - new_h) / 2,
+                new_w, new_h
+            )
         
         # Bar length in output pixels
         bar_length_out = bar_length_px * scale_ratio
+        bar_thickness_out = thickness_mm * scale
         
-        # Bar thickness in output pixels
-        bar_thickness_out = cell.scale_bar_thickness_mm * scale
+        ox = offset_x * scale
+        oy = offset_y * scale
+        bar_y = img_rect.bottom() - oy - bar_thickness_out
         
-        # Calculate position based on scale_bar_position and offsets
-        ox = cell.scale_bar_offset_x * scale
-        oy = cell.scale_bar_offset_y * scale
-        
-        # Y position (always at bottom)
-        bar_y = content_rect.bottom() - oy - bar_thickness_out
-        
-        # X position based on horizontal alignment
-        if cell.scale_bar_position == "bottom_left":
-            bar_x = content_rect.left() + ox
-        elif cell.scale_bar_position == "bottom_center":
-            bar_x = content_rect.left() + (content_rect.width() - bar_length_out) / 2
+        if position == "bottom_left":
+            bar_x = img_rect.left() + ox
+        elif position == "bottom_center":
+            bar_x = img_rect.left() + (img_rect.width() - bar_length_out) / 2
         else:  # bottom_right
-            bar_x = content_rect.right() - ox - bar_length_out
+            bar_x = img_rect.right() - ox - bar_length_out
         
-        # Draw the bar
-        bar_rect = QRectF(bar_x, bar_y, bar_length_out, bar_thickness_out)
-        painter.fillRect(bar_rect, QColor(cell.scale_bar_color))
+        painter.fillRect(QRectF(bar_x, bar_y, bar_length_out, bar_thickness_out), QColor(color))
         
-        # Draw text if enabled
-        if cell.scale_bar_show_text:
-            # Use custom text if provided, otherwise auto-generate from length
-            custom_text = getattr(cell, 'scale_bar_custom_text', None)
+        if show_text:
             if custom_text:
                 text = custom_text
             else:
-                text = f"{cell.scale_bar_length_um:.0f} µm" if cell.scale_bar_length_um >= 1 else f"{cell.scale_bar_length_um:.2f} µm"
+                factor = {"m": 1e6, "cm": 1e4, "dm": 1e5, "mm": 1e3, "µm": 1.0, "nm": 1e-3, "pm": 1e-6, "fm": 1e-9}.get(unit, 1.0)
+                display_val = length_um / factor
+                text = f"{display_val:.0f} {unit}" if display_val >= 1 or display_val == 0 else f"{display_val:.2f} {unit}"
 
-            # WYSIWYG: render with the same QGraphicsTextItem + painter.scale()
-            # pattern used by the canvas and the label exporter, so the text
-            # size matches the canvas preview pixel-for-pixel.
-            text_size_mm = getattr(cell, 'scale_bar_text_size_mm', 2.0)
             base_pt = 24
-            text_scale = text_size_mm / base_pt  # 1 local unit → text_scale mm
-            render_scale = text_scale * scale    # 1 local unit → render_scale output-pixels
+            text_scale = text_size_mm / base_pt
+            render_scale = text_scale * scale
 
             temp_item = QGraphicsTextItem()
             temp_item.setPlainText(text)
             temp_item.setFont(QFont("Arial", base_pt))
-            temp_item.setDefaultTextColor(QColor(cell.scale_bar_color))
+            temp_item.setDefaultTextColor(QColor(color))
 
             br = temp_item.boundingRect()
             tw_out = br.width() * render_scale

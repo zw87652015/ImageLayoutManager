@@ -20,7 +20,7 @@ _BUILTIN_DEFAULTS: List[Tuple[str, float]] = [
 
 
 def _default_mappings() -> List[dict]:
-    return [{"name": name, "um_per_px": val} for name, val in _BUILTIN_DEFAULTS]
+    return [{"name": name, "um_per_px": val, "unit": "µm"} for name, val in _BUILTIN_DEFAULTS]
 
 
 def load_mappings() -> List[dict]:
@@ -30,8 +30,12 @@ def load_mappings() -> List[dict]:
             with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
             mappings = data.get("mappings", [])
-            # Validate entries
-            valid = [m for m in mappings if isinstance(m.get("name"), str) and isinstance(m.get("um_per_px"), (int, float))]
+            # Validate entries and ensure 'unit' exists
+            valid = []
+            for m in mappings:
+                if isinstance(m.get("name"), str) and isinstance(m.get("um_per_px"), (int, float)):
+                    m.setdefault("unit", "µm")
+                    valid.append(m)
             if valid:
                 return valid
         except Exception:

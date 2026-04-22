@@ -219,6 +219,7 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'scale_bar_offset_y', 2.0),
                     getattr(cell, 'scale_bar_custom_text', None),
                     getattr(cell, 'scale_bar_text_size_mm', 2.0),
+                    getattr(cell, 'scale_bar_unit', 'µm'),
                     getattr(cell, 'crop_left', 0.0),
                     getattr(cell, 'crop_top', 0.0),
                     getattr(cell, 'crop_right', 1.0),
