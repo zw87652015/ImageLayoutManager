@@ -11,9 +11,23 @@ class AutoLabel:
         """
         # 1. Calculate Layout to know where cells are
         layout = LayoutEngine.calculate_layout(project)
-        
-        # 2. Sort leaf cells by row, then col (includes sub-cells)
-        sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: (c.row_index, c.col_index))
+
+        # 2. Sort leaf cells by *spatial* position (top-to-bottom, then
+        #    left-to-right). `row_index`/`col_index` only reflect the
+        #    top-level row/col and are identical for every sub-cell of a
+        #    split parent, which would otherwise collapse ordering inside
+        #    split rows and produce scrambled labels (e.g. a, e, f, …).
+        Y_TOL = 0.5  # mm; cells within this vertical gap count as same row
+        def _spatial_key(c):
+            rect = layout.cell_rects.get(c.id)
+            if rect is None:
+                # Cells outside the current layout (shouldn't happen for
+                # leaves) fall to the end, ordered by index tuple.
+                return (float("inf"), float("inf"), c.row_index, c.col_index)
+            x, y, _w, _h = rect
+            # Quantize y so tiny rounding differences don't reorder peers.
+            return (round(y / Y_TOL), x)
+        sorted_cells = sorted(project.get_all_leaf_cells(), key=_spatial_key)
         
         # 3. Generate labels
         start_char = 'a'
