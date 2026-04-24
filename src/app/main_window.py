@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
     QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack
 from PyQt6.QtWidgets import QUndoView
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
@@ -169,6 +169,16 @@ class MainWindow(QMainWindow):
         self.project = None
         self.undo_stack = None
         self.scene = None
+
+        # Hot reload: watch source image files for external edits (Illustrator,
+        # MATLAB, etc.) and refresh the canvas automatically when they change.
+        self._image_watcher = QFileSystemWatcher(self)
+        self._image_watcher.fileChanged.connect(self._on_watched_image_changed)
+        self._hot_reload_timer = QTimer(self)
+        self._hot_reload_timer.setSingleShot(True)
+        self._hot_reload_timer.setInterval(200)  # debounce bursts of save events
+        self._hot_reload_timer.timeout.connect(self._apply_hot_reload)
+        self._pending_reload_paths: set[str] = set()
         self.view = None
         self._current_project_path = None
         self._current_theme = LIGHT
@@ -471,6 +481,30 @@ class MainWindow(QMainWindow):
 
         layout_menu.addSeparator()
 
+        # ── Label Placement submenu ──
+        from PyQt6.QtGui import QActionGroup
+        placement_menu = layout_menu.addMenu(tr("menu_label_placement"))
+        self._placement_action_group = QActionGroup(self)
+        self._placement_action_group.setExclusive(True)
+        self._placement_actions = {}
+        for label_key, value in (
+            ("placement_in_cell",        "in_cell"),
+            ("placement_row_above",      "label_row_above"),
+            ("placement_row_below",      "label_row_below"),
+            ("placement_col_left",       "label_col_left"),
+            ("placement_col_right",      "label_col_right"),
+        ):
+            act = QAction(tr(label_key), self)
+            act.setCheckable(True)
+            act.setData(value)
+            act.triggered.connect(lambda _checked=False, v=value: self._on_set_label_placement(v))
+            placement_menu.addAction(act)
+            self._placement_action_group.addAction(act)
+            self._placement_actions[value] = act
+        self._act_placement_menu = placement_menu
+
+        layout_menu.addSeparator()
+
         # ── Export Region ──
         set_export_region_action = QAction(tr("action_set_export_region"), self)
         set_export_region_action.setCheckable(True)
@@ -517,6 +551,9 @@ class MainWindow(QMainWindow):
         export_menu.addAction(export_tiff_action)
         export_menu.addAction(export_jpg_action)
         export_menu.addAction(export_png_action)
+        export_menu.addSeparator()
+        export_menu.addAction(set_export_region_action)
+        export_menu.addAction(clear_export_region_action)
         export_button.setMenu(export_menu)
         self._export_button = export_button  # icon applied via _refresh_toolbar_icons
         self.toolbar.addWidget(export_button)
@@ -1257,8 +1294,59 @@ class MainWindow(QMainWindow):
         self.canvas_size_label.setText(f"Canvas: {int(rect.width())}x{int(rect.height())}")
         # Re-sync inspector so pip/cell spinboxes reflect any model changes
         self._on_selection_changed()
-        
-        # Check for low-res images
+        # Keep hot-reload watcher in sync with current image paths
+        self._sync_image_watcher()
+        # Keep Layout → Label Placement radio state in sync with project
+        self._sync_placement_menu()
+
+    def _collect_image_paths(self) -> list[str]:
+        """Return every on-disk image path referenced by the current project."""
+        import os
+        paths: set[str] = set()
+        if not self.project:
+            return []
+        for c in self.project.get_all_leaf_cells():
+            if c.image_path and os.path.isfile(c.image_path):
+                paths.add(c.image_path)
+            for pip in getattr(c, 'pip_items', []):
+                if getattr(pip, 'image_path', None) and os.path.isfile(pip.image_path):
+                    paths.add(pip.image_path)
+        return sorted(paths)
+
+    def _sync_image_watcher(self):
+        """Ensure QFileSystemWatcher tracks exactly the current image set."""
+        want = set(self._collect_image_paths())
+        cur = set(self._image_watcher.files())
+        to_remove = cur - want
+        to_add = want - cur
+        if to_remove:
+            self._image_watcher.removePaths(list(to_remove))
+        if to_add:
+            self._image_watcher.addPaths(list(to_add))
+
+    def _on_watched_image_changed(self, path: str):
+        """Debounce: editors often write a file in multiple steps.
+
+        Re-add the path if the file was replaced (atomic save deletes + rewrites,
+        which drops it from the watcher silently).
+        """
+        self._pending_reload_paths.add(path)
+        self._hot_reload_timer.start()
+
+    def _apply_hot_reload(self):
+        import os
+        from src.utils.image_proxy import get_image_proxy
+        proxy = get_image_proxy()
+        paths = list(self._pending_reload_paths)
+        self._pending_reload_paths.clear()
+        for p in paths:
+            proxy.invalidate(p)
+            # Re-subscribe if atomic-save removed us from the watch list
+            if os.path.isfile(p) and p not in self._image_watcher.files():
+                self._image_watcher.addPath(p)
+        # Trigger a canvas refresh so proxy.get_pixmap re-loads from disk
+        if self.scene is not None:
+            self.scene.refresh_layout()
 
     def _on_undo_clean_changed(self, clean: bool):
         self.setWindowModified(not clean)
@@ -3066,16 +3154,56 @@ class MainWindow(QMainWindow):
         cmd = DividerDragCommand(self.project, div, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
+    def _on_set_label_placement(self, value: str):
+        """Layout → Label Placement → <option>. Undoable project property change."""
+        if not self.project:
+            return
+        if getattr(self.project, 'label_placement', 'in_cell') == value:
+            return
+        cmd = PropertyChangeCommand(
+            self.project, {"label_placement": value},
+            self._refresh_and_update, "Change Label Placement",
+        )
+        self.undo_stack.push(cmd)
+
+    def _sync_placement_menu(self):
+        """Keep the Layout → Label Placement radio state in sync with the project."""
+        if not hasattr(self, '_placement_actions') or not self.project:
+            return
+        current = getattr(self.project, 'label_placement', 'in_cell')
+        for val, act in self._placement_actions.items():
+            act.blockSignals(True)
+            act.setChecked(val == current)
+            act.blockSignals(False)
+
     # --- Export Region handlers ---
     def _on_toggle_define_export_region(self, checked: bool):
-        """Layout → Set Export Region (checkable): toggle rubber-band mode on the canvas."""
-        if checked:
-            if self.scene:
-                self.scene.begin_define_export_region()
-            self.statusBar().showMessage(tr("msg_define_export_region_hint"), 4000)
-        else:
+        """Layout → Set Export Region: immediately create a full-canvas region
+        the user can resize/move, rather than forcing a rubber-band drag.
+        """
+        if not self.project:
+            if hasattr(self, '_act_set_export_region'):
+                self._act_set_export_region.blockSignals(True)
+                self._act_set_export_region.setChecked(False)
+                self._act_set_export_region.blockSignals(False)
+            return
+        if not checked:
             if self.scene:
                 self.scene.cancel_define_export_region()
+            return
+        # Auto-create a region spanning the full canvas.
+        pw = float(self.project.page_width_mm)
+        ph = float(self.project.page_height_mm)
+        cmd = SetExportRegionCommand(
+            self.project, (0.0, 0.0, pw, ph), self._refresh_and_update,
+            description="Set Export Region",
+        )
+        self.undo_stack.push(cmd)
+        self.statusBar().showMessage(tr("msg_define_export_region_hint"), 4000)
+        if hasattr(self, '_act_set_export_region'):
+            self._act_set_export_region.blockSignals(True)
+            self._act_set_export_region.setChecked(False)
+            self._act_set_export_region.blockSignals(False)
 
     def _on_export_region_defined(self, x: float, y: float, w: float, h: float):
         """Committed via drag in defining mode."""
@@ -3148,10 +3276,58 @@ class MainWindow(QMainWindow):
 
     def _on_export_tiff(self):
         default_dir = self._get_export_default_dir()
-        path, _ = QFileDialog.getSaveFileName(self, "Export TIFF", default_dir, "TIFF Files (*.tiff *.tif)")
-        if path:
-            ImageExporter.export(self.project, path, "TIFF")
-            QMessageBox.information(self, "Export", f"Exported to {path}")
+        rgb_filter = "TIFF – RGB / sRGB (*.tiff *.tif)"
+        cmyk_filter = "TIFF – CMYK (print) (*.tiff *.tif)"
+        current_cmyk = str(getattr(self.project, 'tiff_color_mode', 'rgb')).lower() == 'cmyk'
+        initial_filter = cmyk_filter if current_cmyk else rgb_filter
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "Export TIFF", default_dir,
+            f"{rgb_filter};;{cmyk_filter}",
+            initial_filter,
+        )
+        if not path:
+            return
+        if not path.lower().endswith(('.tif', '.tiff')):
+            path += '.tiff'
+        color_mode = 'cmyk' if selected_filter == cmyk_filter else 'rgb'
+        self.project.tiff_color_mode = color_mode
+
+        # For CMYK, open the ICC management dialog so the user clearly sees
+        # the profile + rendering intent that will be used.
+        icc_path = None
+        intent = 1  # Relative Colorimetric
+        if color_mode == 'cmyk':
+            from src.app.cmyk_icc_dialog import CmykIccDialog
+            dlg = CmykIccDialog(
+                self,
+                current_path=getattr(self.project, 'cmyk_icc_profile_path', None),
+                current_intent=getattr(self.project, 'cmyk_rendering_intent', 1),
+            )
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                return  # user cancelled the whole export
+            icc_path = dlg.selected_profile_path()
+            intent = dlg.selected_intent()
+            if dlg.remember_choice():
+                self.project.cmyk_icc_profile_path = icc_path
+                # Stored on the object even if not in the dataclass schema;
+                # harmless either way — exporter reads it defensively.
+                self.project.cmyk_rendering_intent = intent
+
+        ImageExporter.export(
+            self.project, path, "TIFF",
+            color_mode=color_mode, icc_profile_path=icc_path,
+            rendering_intent=intent,
+        )
+        info_tail = ""
+        if color_mode == 'cmyk':
+            if icc_path:
+                info_tail = f"\nICC profile: {os.path.basename(icc_path)}"
+            else:
+                info_tail = "\n(no ICC profile — naive conversion)"
+        QMessageBox.information(
+            self, "Export",
+            f"Exported to {path} ({color_mode.upper()}){info_tail}"
+        )
 
     def _on_export_png(self):
         default_dir = self._get_export_default_dir()

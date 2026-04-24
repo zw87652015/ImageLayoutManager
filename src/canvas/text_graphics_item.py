@@ -40,6 +40,11 @@ class TextGraphicsItem(QGraphicsTextItem):
         self._font_weight = "normal"
         self._color_hex = "#000000"
 
+        # Background box behind the text (label aesthetic).
+        self._bg_enabled = False
+        self._bg_color = "#FFFFFF"
+        self._bg_padding_mm = 0.6
+
     def update_style(self, font_family, font_size_pt, font_weight, color_hex):
         self._font_family = font_family
         self._font_size_pt = font_size_pt
@@ -91,10 +96,23 @@ class TextGraphicsItem(QGraphicsTextItem):
         # Math items render at natural scene size; no font scale needed
         self.setScale(1.0)
 
+    def set_background(self, enabled: bool, color_hex: str, padding_mm: float):
+        self._bg_enabled = bool(enabled)
+        self._bg_color = color_hex or "#FFFFFF"
+        self._bg_padding_mm = max(0.0, float(padding_mm))
+        self.update()
+
     def boundingRect(self) -> QRectF:
         if self._math_rect is not None:
-            return self._math_rect
-        return super().boundingRect()
+            rect = QRectF(self._math_rect)
+        else:
+            rect = super().boundingRect()
+        if self._bg_enabled and self._bg_padding_mm > 0:
+            # Bounding rect is in item coords; scale applies to the whole item.
+            s = self.scale() or 1.0
+            pad = self._bg_padding_mm / s
+            rect = rect.adjusted(-pad, -pad, pad, pad)
+        return rect
 
     def mouseDoubleClickEvent(self, event):
         if self.textInteractionFlags() == Qt.TextInteractionFlag.NoTextInteraction:
@@ -163,6 +181,12 @@ class TextGraphicsItem(QGraphicsTextItem):
                 })
 
     def paint(self, painter, option, widget):
+        if self._bg_enabled:
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self._bg_color))
+            painter.drawRect(self.boundingRect())
+            painter.restore()
         if self._math_pixmap is not None and not self._math_pixmap.isNull():
             painter.drawPixmap(self._math_rect.toRect(), self._math_pixmap)
             return

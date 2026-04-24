@@ -151,6 +151,13 @@ class ImageProxy(QObject):
         self._cache.clear()
         self._loading.clear()
 
+    def invalidate(self, path: str):
+        """Drop a single cached entry so the next get_pixmap reloads from disk."""
+        if not path:
+            return
+        self._cache.pop(path, None)
+        self._loading.discard(path)
+
     def set_svg_override(self, path: str, content: bytes):
         """Set pre-computed modified SVG bytes for a path and invalidate its cache entry."""
         self._svg_overrides[path] = content

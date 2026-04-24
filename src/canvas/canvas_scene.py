@@ -230,9 +230,10 @@ class CanvasScene(QGraphicsScene):
                 # PiP insets
                 item.update_pip_items(getattr(cell, 'pip_items', []))
 
-        # Sync Label Cell Items (label rows above picture rows)
+        # Sync Label Cell Items (out-of-cell label placements)
         label_rects = getattr(layout_result, 'label_rects', {})
-        label_row_above = getattr(self.project, 'label_placement', 'in_cell') == 'label_row_above'
+        placement = getattr(self.project, 'label_placement', 'in_cell')
+        label_row_above = placement in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
 
         # Build a map of cell_id -> numbering label text from existing TextItems
         numbering_texts = {}
@@ -303,6 +304,11 @@ class CanvasScene(QGraphicsScene):
                 text_model.font_size_pt, 
                 text_model.font_weight, 
                 text_model.color
+            )
+            t_item.set_background(
+                getattr(text_model, 'bg_enabled', False),
+                getattr(text_model, 'bg_color', '#FFFFFF'),
+                getattr(text_model, 'bg_padding_mm', 0.6),
             )
             
             # Position logic: cell-scoped labels follow their parent cell

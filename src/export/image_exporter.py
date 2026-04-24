@@ -13,7 +13,9 @@ class ImageExporter:
     """Export project to raster image formats (TIFF, JPG, PNG)."""
     
     @staticmethod
-    def export(project: Project, output_path: str, format: str = "TIFF"):
+    def export(project: Project, output_path: str, format: str = "TIFF",
+               color_mode: str = "rgb", icc_profile_path: str = None,
+               rendering_intent: int = 1):
         """
         Export project to a raster image.
         
@@ -74,7 +76,7 @@ class ImageExporter:
             painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
         
         try:
-            label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
+            label_row_above = getattr(project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
             label_rects = getattr(layout_result, 'label_rects', {})
 
             # 1. Draw Images, Scale Bars, and Nested Layouts (sorted by z_index for freeform overlap support)
@@ -140,7 +142,11 @@ class ImageExporter:
         format_upper = format.upper()
         if format_upper == "TIFF":
             # Use PIL for TIFF to ensure proper compression and metadata
-            ImageExporter._save_as_tiff(image, output_path, project.dpi)
+            ImageExporter._save_as_tiff(
+                image, output_path, project.dpi,
+                color_mode=color_mode, icc_profile_path=icc_profile_path,
+                rendering_intent=rendering_intent,
+            )
         elif format_upper in ("JPG", "JPEG"):
             image.save(output_path, "JPEG", quality=95)
         elif format_upper == "PNG":
@@ -149,6 +155,61 @@ class ImageExporter:
             # Default to PNG
             image.save(output_path, "PNG")
     
+    @staticmethod
+    def _paint_scene(painter: QPainter, project: Project, layout_result, scale: float):
+        """Shared painting logic: draws all cells, labels, and text items.
+
+        Extracted so raster export, in-memory render, and SVG export can share it.
+        """
+        label_row_above = getattr(project, 'label_placement', 'in_cell') in (
+            'label_row_above', 'label_row_below', 'label_col_left', 'label_col_right'
+        )
+        label_rects = getattr(layout_result, 'label_rects', {})
+
+        sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
+        for cell in sorted_cells:
+            if cell.id not in layout_result.cell_rects:
+                continue
+            x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
+            target_rect = QRectF(x_mm * scale, y_mm * scale, w_mm * scale, h_mm * scale)
+            p_top = cell.padding_top * scale
+            p_right = cell.padding_right * scale
+            p_bottom = cell.padding_bottom * scale
+            p_left = cell.padding_left * scale
+            content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
+            if content_rect.width() <= 0 or content_rect.height() <= 0:
+                continue
+            nested_path = getattr(cell, 'nested_layout_path', None)
+            if nested_path and os.path.exists(nested_path):
+                ImageExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
+            elif cell.image_path and os.path.exists(cell.image_path):
+                rotation = getattr(cell, 'rotation', 0)
+                crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
+                        getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
+                svg_override = None
+                if cell.image_path.lower().endswith('.svg'):
+                    from src.utils.svg_text_utils import build_svg_overrides_for_path, apply_svg_font_overrides
+                    ov = build_svg_overrides_for_path(project, cell.image_path)
+                    if ov:
+                        svg_override = apply_svg_font_overrides(cell.image_path, ov)
+                ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
+                if getattr(cell, 'scale_bar_enabled', False):
+                    ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
+            ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
+
+        if label_row_above:
+            ImageExporter._draw_label_cells(painter, project, layout_result, scale)
+
+        for text_item in project.text_items:
+            if (
+                label_row_above
+                and text_item.scope == 'cell'
+                and getattr(text_item, 'subtype', None) != 'corner'
+                and text_item.parent_id in label_rects
+            ):
+                continue
+            ImageExporter._draw_text(painter, project, text_item, layout_result, scale)
+
     @staticmethod
     def render_to_qimage(project: Project) -> QImage:
         """Render project to a QImage (in-memory, no file save).
@@ -173,7 +234,7 @@ class ImageExporter:
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         try:
-            label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
+            label_row_above = getattr(project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
             label_rects = getattr(layout_result, 'label_rects', {})
 
             for cell in project.get_all_leaf_cells():
@@ -273,8 +334,8 @@ class ImageExporter:
             if pip.border_enabled:
                 from PyQt6.QtGui import QPen
                 bpen = QPen(QColor(pip.border_color))
-                # Convert points to pixels (1pt = 1/72 inch)
-                bpen.setWidthF(pip.border_width_pt * (project.dpi / 72.0))
+                # pt -> output units: pt * mm/pt * units/mm = pt * 25.4/72 * scale
+                bpen.setWidthF(pip.border_width_pt * (scale * 25.4 / 72.0))
                 bpen.setCosmetic(False)
                 if getattr(pip, 'border_style', 'solid') == 'dashed':
                     bpen.setStyle(Qt.PenStyle.DashLine)
@@ -291,8 +352,8 @@ class ImageExporter:
                 )
                 from PyQt6.QtGui import QPen
                 open_pen = QPen(QColor(pip.origin_box_color))
-                # Convert points to pixels
-                open_pen.setWidthF(pip.origin_box_width_pt * (project.dpi / 72.0))
+                # pt -> output units (see _draw_pip_items border comment above)
+                open_pen.setWidthF(pip.origin_box_width_pt * (scale * 25.4 / 72.0))
                 open_pen.setCosmetic(False)
                 if getattr(pip, 'origin_box_style', 'solid') == 'dashed':
                     open_pen.setStyle(Qt.PenStyle.DashLine)
@@ -335,25 +396,150 @@ class ImageExporter:
         painter.drawImage(target, sub_image)
 
     @staticmethod
-    def _save_as_tiff(qimage: QImage, output_path: str, dpi: int):
-        """Save QImage as TIFF with proper DPI metadata using PIL."""
-        # Convert QImage to PIL Image
+    def _save_as_tiff(qimage: QImage, output_path: str, dpi: int,
+                      color_mode: str = "rgb", icc_profile_path: str = None,
+                      rendering_intent: int = 1):
+        """Save QImage as TIFF with proper DPI metadata using PIL.
+
+        color_mode: "rgb" (default) or "cmyk" for print-ready output.
+        icc_profile_path: absolute path to a CMYK ICC profile (*.icc/*.icm).
+            When given and ``color_mode`` is ``cmyk``, performs an ICC-managed
+            sRGB -> CMYK conversion via Pillow's ImageCms and embeds the
+            profile in the saved TIFF.  When missing or the profile fails to
+            load, falls back to Pillow's naive ``convert('CMYK')`` and logs a
+            warning.
+        """
         width = qimage.width()
         height = qimage.height()
-        
-        # Get raw data from QImage
         ptr = qimage.bits()
         ptr.setsize(qimage.sizeInBytes())
-        
-        # QImage Format_ARGB32 is actually BGRA in memory on little-endian systems
+
         if qimage.format() == QImage.Format.Format_ARGB32:
             pil_image = Image.frombytes("RGBA", (width, height), bytes(ptr), "raw", "BGRA")
-        else:  # Format_RGB32
+        else:
             pil_image = Image.frombytes("RGBA", (width, height), bytes(ptr), "raw", "BGRA")
             pil_image = pil_image.convert("RGB")
-        
-        # Save as TIFF with DPI metadata
-        pil_image.save(output_path, "TIFF", dpi=(dpi, dpi), compression="tiff_lzw")
+
+        save_kwargs = {"dpi": (dpi, dpi), "compression": "tiff_lzw"}
+
+        if str(color_mode).lower() == "cmyk":
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+            pil_image, profile_bytes = ImageExporter._convert_rgb_to_cmyk(
+                pil_image, icc_profile_path, rendering_intent=rendering_intent,
+            )
+            if profile_bytes:
+                save_kwargs["icc_profile"] = profile_bytes
+
+        pil_image.save(output_path, "TIFF", **save_kwargs)
+
+    @staticmethod
+    def _convert_rgb_to_cmyk(pil_rgb, icc_profile_path: str = None,
+                             rendering_intent: int = 1):
+        """Return (cmyk_image, profile_bytes_or_None).
+
+        Uses PIL.ImageCms for colour-managed conversion when a CMYK profile is
+        supplied or discoverable on the system.  Falls back to ``convert('CMYK')``
+        with a printed warning when no usable profile is found.
+        """
+        import os
+        from PIL import ImageCms
+
+        # 1. Resolve a CMYK output profile.
+        candidate_paths = []
+        if icc_profile_path:
+            candidate_paths.append(icc_profile_path)
+        # Windows system colour profiles (common install locations).
+        win_dir = os.path.join(os.environ.get("WINDIR", r"C:\Windows"),
+                               "System32", "spool", "drivers", "color")
+        if os.path.isdir(win_dir):
+            for name in (
+                "USWebCoatedSWOP.icc", "USWebCoatedSWOP.icm",
+                "CoatedFOGRA39.icc", "CoatedFOGRA39.icm",
+                "JapanColor2001Coated.icc",
+            ):
+                candidate_paths.append(os.path.join(win_dir, name))
+        # macOS default
+        candidate_paths.append("/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc")
+
+        out_profile_path = next(
+            (p for p in candidate_paths if p and os.path.isfile(p)),
+            None,
+        )
+
+        if out_profile_path is None:
+            print("[tiff-export] No CMYK ICC profile found; using naive RGB->CMYK. "
+                  "Set a profile via File > Export TIFF for colour-accurate print.")
+            return pil_rgb.convert("CMYK"), None
+
+        # Resolve an sRGB input profile. LittleCMS often refuses transforms
+        # from the synthetic createProfile("sRGB") profile, so prefer a real
+        # on-disk profile when available.
+        srgb_candidates = []
+        if os.path.isdir(win_dir):
+            # Scan the whole colour directory for any sRGB-named profile.
+            for name in sorted(os.listdir(win_dir)):
+                low = name.lower()
+                if low.endswith((".icc", ".icm")) and "srgb" in low:
+                    srgb_candidates.append(os.path.join(win_dir, name))
+        srgb_candidates.extend([
+            "/System/Library/ColorSync/Profiles/sRGB Profile.icc",
+            "/usr/share/color/icc/sRGB.icc",
+            "/usr/share/color/icc/colord/sRGB.icc",
+        ])
+        srgb_path = next((p for p in srgb_candidates if os.path.isfile(p)), None)
+
+        # Profile descriptions for diagnostics.
+        def _desc(p):
+            try:
+                return ImageCms.getProfileDescription(ImageCms.getOpenProfile(p)).strip()
+            except Exception:
+                return os.path.basename(p) if isinstance(p, str) else str(p)
+
+        print(f"[tiff-export] CMYK profile: {_desc(out_profile_path)}")
+        if srgb_path:
+            print(f"[tiff-export] sRGB profile: {_desc(srgb_path)}")
+        else:
+            print("[tiff-export] sRGB profile: synthetic (no on-disk sRGB found)")
+
+        with open(out_profile_path, "rb") as fh:
+            profile_bytes = fh.read()
+
+        # Try progressively more forgiving strategies.
+        attempts = []
+        if srgb_path:
+            attempts.append(("profileToProfile(srgb_file)",
+                             lambda: ImageCms.profileToProfile(
+                                 pil_rgb, srgb_path, out_profile_path,
+                                 renderingIntent=int(rendering_intent),
+                                 outputMode="CMYK")))
+        attempts.append(("profileToProfile(synthetic_sRGB)",
+                         lambda: ImageCms.profileToProfile(
+                             pil_rgb, ImageCms.createProfile("sRGB"), out_profile_path,
+                             renderingIntent=int(rendering_intent),
+                             outputMode="CMYK")))
+        attempts.append(("perceptual intent",
+                         lambda: ImageCms.profileToProfile(
+                             pil_rgb,
+                             srgb_path if srgb_path else ImageCms.createProfile("sRGB"),
+                             out_profile_path,
+                             renderingIntent=0,
+                             outputMode="CMYK")))
+
+        for label, fn in attempts:
+            try:
+                cmyk = fn()
+                if cmyk is not None:
+                    print(f"[tiff-export] ICC transform OK via {label}.")
+                    return cmyk, profile_bytes
+            except Exception as exc:
+                print(f"[tiff-export]   strategy '{label}' failed: {exc!r}")
+
+        # All transforms failed. Still tag the output with the CMYK profile so
+        # downstream tools know the intended colour space — pixels are the
+        # naive conversion, which is the best we can do without a working CMS.
+        print("[tiff-export] All ICC strategies failed; embedding profile tag on naive CMYK.")
+        return pil_rgb.convert("CMYK"), profile_bytes
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
@@ -609,6 +795,14 @@ class ImageExporter:
         render_scale = text_scale * scale
         painter.save()
         painter.translate(x_px, y_px)
+        if getattr(text_item, 'bg_enabled', False):
+            from PyQt6.QtGui import QBrush as _QB
+            pad = float(getattr(text_item, 'bg_padding_mm', 0.6)) * scale
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(_QB(QColor(getattr(text_item, 'bg_color', '#FFFFFF'))))
+            painter.drawRect(QRectF(-pad, -pad, tw_mm * scale + 2 * pad, th_mm * scale + 2 * pad))
+            painter.restore()
         painter.scale(render_scale, render_scale)
         option = QStyleOptionGraphicsItem()
         temp_item.paint(painter, option, None)
@@ -673,7 +867,6 @@ class ImageExporter:
             if not text:
                 continue
 
-            # Create a temporary QGraphicsTextItem to measure and render
             temp_item = QGraphicsTextItem()
             temp_item.setPlainText(text)
             temp_item.setFont(font)
@@ -683,29 +876,20 @@ class ImageExporter:
             tw_mm = base_rect.width() * text_scale
             th_mm = base_rect.height() * text_scale
 
-            # Position within label cell (mm), applying alignment and offsets
             cell_x_mm = lx + ox_mm
             cell_y_mm = ly + oy_mm
-            cell_w_mm = lw
-            cell_h_mm = lh
-
-            # Vertical: center in label cell
-            y_mm = cell_y_mm + (cell_h_mm - th_mm) / 2.0
-
-            # Horizontal: align within label cell
+            y_mm = cell_y_mm + (lh - th_mm) / 2.0
             if align == 'left':
                 x_mm = cell_x_mm
             elif align == 'right':
-                x_mm = cell_x_mm + cell_w_mm - tw_mm
+                x_mm = cell_x_mm + lw - tw_mm
             else:
-                x_mm = cell_x_mm + (cell_w_mm - tw_mm) / 2.0
+                x_mm = cell_x_mm + (lw - tw_mm) / 2.0
 
-            # Render using painter.scale — same approach as _draw_text
             render_scale = text_scale * scale
             painter.save()
             painter.translate(x_mm * scale, y_mm * scale)
             painter.scale(render_scale, render_scale)
-
             option = QStyleOptionGraphicsItem()
             temp_item.paint(painter, option, None)
             painter.restore()

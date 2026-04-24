@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, pyqtSignal
 from PyQt6.QtGui import QFont, QDesktopServices
 from PyQt6.QtCore import QUrl
 from src.app.i18n import tr
@@ -15,8 +15,12 @@ from src.app.i18n import tr
 GITHUB_OWNER = "zw87652015"
 GITHUB_REPO  = "ImageLayoutManager"
 GITHUB_URL   = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
-RELEASES_API = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/latest"
 WEBSITE_URL  = "https://luojiajiang.uk/image-layout-manager"
+# Self-hosted version manifest. Schema:
+#   { "version": "3.2", "url": "<download_page_url>", "notes": "optional" }
+# Served as a static file from the author's website so update checks don't
+# depend on api.github.com being reachable (often blocked in mainland China).
+RELEASES_API = "https://luojiajiang.uk/image-layout-manager/latest.json"
 
 
 def _parse_version(v: str):
@@ -28,16 +32,24 @@ def _parse_version(v: str):
         return (0,)
 
 
-class StartupUpdateChecker(QThread):
+class StartupUpdateChecker(QObject):
     """Silent background update check used at app startup.
 
-    Emits `update_available(latest_tag, url)` only when a strictly newer
-    release exists on GitHub. Stays silent on network failures, parse errors,
-    same version, or pre-releases — so it never nags users.
+    Runs on a daemon ``threading.Thread`` (not ``QThread``) so the Python
+    interpreter can exit even while the blocking urllib call is in flight —
+    avoids ``QThread: Destroyed while thread '' is still running`` when the
+    user quits the app before the network response arrives. Emits
+    ``update_available(latest_tag, url)`` only when a strictly newer release
+    exists on GitHub; silent on failures, parse errors, same version, or
+    pre-releases.
     """
     update_available = pyqtSignal(str, str)  # latest_tag, url
 
-    def run(self):
+    def start(self):
+        threading.Thread(target=self._run, daemon=True,
+                         name="StartupUpdateChecker").start()
+
+    def _run(self):
         try:
             req = urllib.request.Request(
                 RELEASES_API,
@@ -45,22 +57,33 @@ class StartupUpdateChecker(QThread):
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode())
-            latest_tag = data.get("tag_name", "")
-            latest_url = data.get("html_url", WEBSITE_URL)
+            latest_tag = data.get("version") or data.get("tag_name") or ""
+            latest_url = data.get("url") or data.get("html_url") or WEBSITE_URL
             if not latest_tag:
                 return
             from src.version import APP_VERSION
             if _parse_version(latest_tag) > _parse_version(APP_VERSION):
+                # Signal emission is auto-queued to the UI thread.
                 self.update_available.emit(latest_tag, latest_url)
         except Exception:
             # Silent on all failures: user can still check manually via About.
             pass
 
 
-class _UpdateChecker(QThread):
+class _UpdateChecker(QObject):
+    """Manual update check from the About dialog — daemon-thread based.
+
+    See ``StartupUpdateChecker`` for the rationale. The caller must keep a
+    reference to this instance until ``result_ready`` fires (or the dialog
+    closes, at which point the signal should be disconnected).
+    """
     result_ready = pyqtSignal(str)   # emits status message
 
-    def run(self):
+    def start(self):
+        threading.Thread(target=self._run, daemon=True,
+                         name="UpdateChecker").start()
+
+    def _run(self):
         try:
             req = urllib.request.Request(
                 RELEASES_API,
@@ -68,8 +91,8 @@ class _UpdateChecker(QThread):
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode())
-            latest_tag = data.get("tag_name", "")
-            latest_url = data.get("html_url", GITHUB_URL)
+            latest_tag = data.get("version") or data.get("tag_name") or ""
+            latest_url = data.get("url") or data.get("html_url") or WEBSITE_URL
             if not latest_tag:
                 self.result_ready.emit("⚠ No release information found.")
                 return
@@ -209,12 +232,37 @@ class AboutDialog(QDialog):
         root.addLayout(btn_row)
 
     def _on_check_updates(self):
+        from PyQt6.QtWidgets import QApplication
         self._check_btn.setEnabled(False)
         self._update_label.setText(tr("about_checking"))
-        self._checker = _UpdateChecker(self)
+        # Parent to QApplication so the QObject outlives this dialog; the
+        # daemon thread may still be running when the user closes About.
+        self._checker = _UpdateChecker(QApplication.instance())
         self._checker.result_ready.connect(self._on_update_result)
         self._checker.start()
 
     def _on_update_result(self, message: str):
         self._update_label.setText(message)
         self._check_btn.setEnabled(True)
+
+    def closeEvent(self, event):
+        # Drop the signal connection so a late thread reply can't call into
+        # a deleted widget. The QObject itself is parented to QApplication
+        # and will be collected when the daemon thread exits.
+        if self._checker is not None:
+            try:
+                self._checker.result_ready.disconnect(self._on_update_result)
+            except (TypeError, RuntimeError):
+                pass
+            self._checker = None
+        super().closeEvent(event)
+
+    def done(self, result):
+        # Same cleanup when the dialog is closed via accept()/reject().
+        if self._checker is not None:
+            try:
+                self._checker.result_ready.disconnect(self._on_update_result)
+            except (TypeError, RuntimeError):
+                pass
+            self._checker = None
+        super().done(result)

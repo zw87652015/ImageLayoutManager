@@ -89,22 +89,28 @@ class LayoutEngine:
             return LayoutResult({}, {})
             
         num_rows = len(row_templates)
-        label_row_above = getattr(project, "label_placement", "in_cell") == "label_row_above"
-        if label_row_above:
+        placement = getattr(project, "label_placement", "in_cell")
+        label_row_above = placement == "label_row_above"
+        label_row_below = placement == "label_row_below"
+        label_col_left = placement == "label_col_left"
+        label_col_right = placement == "label_col_right"
+        out_of_cell = label_row_above or label_row_below or label_col_left or label_col_right
+
+        if label_row_above or label_row_below:
             custom_h = getattr(project, 'label_row_height', 0.0)
             label_row_h = custom_h if custom_h > 0 else LayoutEngine._label_row_height_mm(project)
         else:
             label_row_h = 0.0
+        label_col_w = float(getattr(project, 'label_col_width', 10.0)) if (label_col_left or label_col_right) else 0.0
 
         # Build set of cell_ids that have numbering labels and determine
-        # which row indices need a label row.
+        # which row indices need a label row/column.
         labeled_cell_ids: set = set()
         rows_with_labels: set = set()
-        if label_row_above:
+        if out_of_cell:
             for t in project.text_items:
                 if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
                     labeled_cell_ids.add(t.parent_id)
-            # Map cell_id -> row_index
             for c in project.cells:
                 if c.id in labeled_cell_ids:
                     rows_with_labels.add(c.row_index)
@@ -112,7 +118,7 @@ class LayoutEngine:
         # 3. Calculate row heights
         # Subtract vertical gaps between rows.
         # Only rows that actually have labels get a label row above them.
-        num_label_rows = len(rows_with_labels) if label_row_above else 0
+        num_label_rows = len(rows_with_labels) if (label_row_above or label_row_below) else 0
         total_vertical_gaps = (num_rows - 1) * gap_mm if num_rows > 1 else 0
         if num_label_rows > 0:
             total_vertical_gaps += num_label_rows * gap_mm
@@ -144,6 +150,11 @@ class LayoutEngine:
                 pic_y = current_y + label_row_h + gap_mm
                 calculated_row_geometries.append((lbl_y, label_row_h, pic_y, pic_h, r_temp))
                 current_y = pic_y + pic_h + gap_mm
+            elif label_row_below and r_temp.index in rows_with_labels:
+                pic_y = current_y
+                lbl_y = pic_y + pic_h + gap_mm
+                calculated_row_geometries.append((lbl_y, label_row_h, pic_y, pic_h, r_temp))
+                current_y = lbl_y + label_row_h + gap_mm
             else:
                 calculated_row_geometries.append((None, 0, current_y, pic_h, r_temp))
                 current_y += pic_h + gap_mm
@@ -200,16 +211,34 @@ class LayoutEngine:
                     x_pos += col_widths[i] + gap_mm
                 
                 col_w = col_widths[cell.col_index]
-                cell_rects[cell.id] = (x_pos, pic_y, col_w, pic_h)
+
+                # Reserve a label strip on the left or right edge of the picture cell.
+                pic_x_eff = x_pos
+                pic_w_eff = col_w
+                lbl_side_rect = None
+                if (label_col_left or label_col_right) and cell.id in labeled_cell_ids:
+                    strip = min(label_col_w, col_w - 1.0) if col_w > 1.0 else 0.0
+                    if strip > 0:
+                        if label_col_left:
+                            lbl_side_rect = (x_pos, pic_y, strip, pic_h)
+                            pic_x_eff = x_pos + strip + gap_mm
+                            pic_w_eff = max(0.0, col_w - strip - gap_mm)
+                        else:  # label_col_right
+                            lbl_side_rect = (x_pos + col_w - strip, pic_y, strip, pic_h)
+                            pic_w_eff = max(0.0, col_w - strip - gap_mm)
+
+                cell_rects[cell.id] = (pic_x_eff, pic_y, pic_w_eff, pic_h)
 
                 # Label cell rect: for top-level cells (leaf or container) that have a numbering label
-                if label_row_above and lbl_y is not None and cell.id in labeled_cell_ids:
+                if (label_row_above or label_row_below) and lbl_y is not None and cell.id in labeled_cell_ids:
                     label_rects[cell.id] = (x_pos, lbl_y, col_w, lbl_h)
+                elif lbl_side_rect is not None:
+                    label_rects[cell.id] = lbl_side_rect
 
                 # Recursively layout sub-cells
                 if not cell.is_leaf:
                     LayoutEngine._layout_subcells(
-                        cell, (x_pos, pic_y, col_w, pic_h),
+                        cell, (pic_x_eff, pic_y, pic_w_eff, pic_h),
                         gap_mm, cell_rects, label_rects,
                         labeled_cell_ids, label_row_above, label_row_h
                     )
@@ -275,10 +304,10 @@ class LayoutEngine:
                 row_width = content_width
 
             if _lbl_y is not None:
-                # Label row sits above picture row; include both in the bounding rect
-                top_y = _lbl_y
-                total_h = (pic_y - _lbl_y) + pic_h
-                row_rects[r_temp.index] = (x_offset, top_y, row_width, total_h)
+                # Label row sits above or below the picture row; include both.
+                top_y = min(_lbl_y, pic_y)
+                bot_y = max(_lbl_y + _lbl_h, pic_y + pic_h)
+                row_rects[r_temp.index] = (x_offset, top_y, row_width, bot_y - top_y)
             else:
                 row_rects[r_temp.index] = (x_offset, pic_y, row_width, pic_h)
 

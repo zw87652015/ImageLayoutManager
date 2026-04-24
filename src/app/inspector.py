@@ -337,6 +337,38 @@ class Inspector(QWidget):
         self.corner_label_color.colorChanged.connect(self._on_corner_label_color_changed)
         self.project_layout.addRow(self._fl("lbl_color"), self.corner_label_color)
         
+        # Label Placement (out-of-cell variants: above/below/left/right or in_cell)
+        self._sec_label_placement = QLabel("<b>Label Placement</b>")
+        self.project_layout.addRow(self._sec_label_placement)
+
+        self.label_placement_combo = QComboBox()
+        # (label, value)
+        self._label_placement_options = [
+            ("In-Cell",             "in_cell"),
+            ("Row Above",           "label_row_above"),
+            ("Row Below",           "label_row_below"),
+            ("Column Left",         "label_col_left"),
+            ("Column Right",        "label_col_right"),
+        ]
+        for text, _val in self._label_placement_options:
+            self.label_placement_combo.addItem(text)
+        self.label_placement_combo.currentIndexChanged.connect(
+            lambda i: self.project_property_changed.emit(
+                {"label_placement": self._label_placement_options[i][1]}
+            )
+        )
+        self.project_layout.addRow(self._fl("lbl_label_placement"), self.label_placement_combo)
+
+        self.label_col_width_spin = QDoubleSpinBox()
+        self.label_col_width_spin.setRange(1.0, 200.0)
+        self.label_col_width_spin.setSingleStep(0.5)
+        self.label_col_width_spin.setDecimals(1)
+        self.label_col_width_spin.setSuffix(" mm")
+        self.label_col_width_spin.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"label_col_width": float(v)})
+        )
+        self.project_layout.addRow(self._fl("lbl_label_col_width"), self.label_col_width_spin)
+
         # Gap between cells
         self._sec_layout = QLabel("<b>Layout</b>")
         self.project_layout.addRow(self._sec_layout)
@@ -905,6 +937,29 @@ class Inspector(QWidget):
         )
         self.text_layout.addRow(self._fl("lbl_offset_y"), self.offset_y)
 
+        # ── Background box (for dark-image label aesthetics) ────────────
+        self.text_bg_enabled = QCheckBox("Background Box")
+        self.text_bg_enabled.toggled.connect(
+            lambda b: self.text_property_changed.emit({"bg_enabled": bool(b)})
+        )
+        self.text_layout.addRow("", self.text_bg_enabled)
+
+        self.text_bg_color = ColorPickerWidget()
+        self.text_bg_color.colorChanged.connect(
+            lambda c: self.text_property_changed.emit({"bg_color": c or "#FFFFFF"})
+        )
+        self.text_layout.addRow(self._fl("lbl_bg_color"), self.text_bg_color)
+
+        self.text_bg_padding = QDoubleSpinBox()
+        self.text_bg_padding.setRange(0.0, 20.0)
+        self.text_bg_padding.setSingleStep(0.2)
+        self.text_bg_padding.setDecimals(2)
+        self.text_bg_padding.setSuffix(" mm")
+        self.text_bg_padding.valueChanged.connect(
+            lambda v: self.text_property_changed.emit({"bg_padding_mm": float(v)})
+        )
+        self.text_layout.addRow(self._fl("lbl_bg_padding"), self.text_bg_padding)
+
         # Scheme selector — only shown for in-cell numbering labels (not corner labels)
         self._incell_scheme = QComboBox()
         self._incell_scheme.addItems(["(a)", "(A)", "a", "A"])
@@ -1376,6 +1431,7 @@ class Inspector(QWidget):
             self.row_group.hide()
             self.text_group.hide()
             self.subcell_group.hide()
+            self.scale_bar_group.hide()
             self.label_cell_group.show()
 
             if data:
@@ -1493,6 +1549,7 @@ class Inspector(QWidget):
             self.row_group.hide()
             self.label_cell_group.hide()
             self.subcell_group.hide()
+            self.scale_bar_group.hide()
             self.text_group.show()
             
             self.blockSignals(True)
@@ -1547,6 +1604,12 @@ class Inspector(QWidget):
                 self.text_pos_x.setValue(float(data.get("x", 0.0)))
                 self.text_pos_y.setValue(float(data.get("y", 0.0)))
                 self.text_rotation.setValue(float(data.get("rotation", 0.0)))
+
+            # Background-box fields
+            self.text_bg_enabled.setChecked(bool(data.get("bg_enabled", False)))
+            self.text_bg_color.set_color(data.get("bg_color", "#FFFFFF"))
+            self.text_bg_padding.setValue(float(data.get("bg_padding_mm", 0.6)))
+
             self.blockSignals(False)
             
         elif item_type == 'pip':
@@ -1613,7 +1676,19 @@ class Inspector(QWidget):
                 self.corner_label_color.set_color(corner_label_color_hex)
 
                 self.gap_spin.setValue(effective_project_data.get("gap_mm", 2.0))
-                
+
+                # Label placement
+                placement_val = effective_project_data.get("label_placement", "in_cell")
+                idx_found = 0
+                for i, (_t, val) in enumerate(self._label_placement_options):
+                    if val == placement_val:
+                        idx_found = i
+                        break
+                self.label_placement_combo.setCurrentIndex(idx_found)
+                self.label_col_width_spin.setValue(
+                    float(effective_project_data.get("label_col_width", 10.0))
+                )
+
                 self.blockSignals(False)
             else:
                 self.project_group.hide()

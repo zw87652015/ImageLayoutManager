@@ -35,6 +35,11 @@ class TextItem:
     offset_x: float = 0.0
     offset_y: float = 0.0
 
+    # Background box (for label aesthetics on dark images).
+    bg_enabled: bool = False
+    bg_color: str = "#FFFFFF"
+    bg_padding_mm: float = 0.6
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "id": self.id,
@@ -52,6 +57,9 @@ class TextItem:
             "anchor": self.anchor,
             "offset_x": self.offset_x,
             "offset_y": self.offset_y,
+            "bg_enabled": self.bg_enabled,
+            "bg_color": self.bg_color,
+            "bg_padding_mm": self.bg_padding_mm,
         }
 
     @classmethod
@@ -484,6 +492,16 @@ class Project:
     label_offset_x: float = 0.0  # mm, horizontal offset for fine-tuning label position
     label_offset_y: float = 0.0  # mm, vertical offset for fine-tuning label position
     label_row_height: float = 0.0  # mm, 0 = auto (computed from font size)
+    label_col_width: float = 10.0  # mm, width of label column for label_col_left/right placement
+
+    # TIFF export colour model: "rgb" (default) or "cmyk" (print-ready).
+    tiff_color_mode: str = "rgb"
+    # Absolute path to a CMYK ICC profile (*.icc/*.icm). None = auto-detect a
+    # system-installed profile, falling back to naive convert('CMYK') if none.
+    cmyk_icc_profile_path: Optional[str] = None
+    # ICC rendering intent for sRGB->CMYK conversion (PIL.ImageCms ints):
+    # 0 Perceptual, 1 Relative Colorimetric (default), 2 Saturation, 3 Absolute.
+    cmyk_rendering_intent: int = 1
 
     # Export Region (None = export full page). If set, exporters clip to this rect.
     export_region: Optional[ExportRegion] = None
@@ -579,6 +597,10 @@ class Project:
             "label_offset_x": self.label_offset_x,
             "label_offset_y": self.label_offset_y,
             "label_row_height": self.label_row_height,
+            "label_col_width": self.label_col_width,
+            "tiff_color_mode": self.tiff_color_mode,
+            "cmyk_icc_profile_path": self.cmyk_icc_profile_path,
+            "cmyk_rendering_intent": self.cmyk_rendering_intent,
             "corner_label_font_family": self.corner_label_font_family,
             "corner_label_font_size": self.corner_label_font_size,
             "corner_label_font_weight": self.corner_label_font_weight,
@@ -626,6 +648,10 @@ class Project:
         p.label_offset_x = data.get("label_offset_x", 0.0)
         p.label_offset_y = data.get("label_offset_y", 0.0)
         p.label_row_height = data.get("label_row_height", 0.0)
+        p.label_col_width = data.get("label_col_width", 10.0)
+        p.tiff_color_mode = data.get("tiff_color_mode", "rgb")
+        p.cmyk_icc_profile_path = data.get("cmyk_icc_profile_path", None)
+        p.cmyk_rendering_intent = int(data.get("cmyk_rendering_intent", 1))
         
         er = data.get("export_region")
         p.export_region = ExportRegion.from_dict(er) if er else None

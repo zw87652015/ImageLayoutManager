@@ -80,7 +80,7 @@ class PdfExporter:
             if region_dx_mm != 0.0 or region_dy_mm != 0.0:
                 painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
             
-            label_row_above = getattr(project, 'label_placement', 'in_cell') == 'label_row_above'
+            label_row_above = getattr(project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
             label_rects = getattr(layout_result, 'label_rects', {})
 
             # 1. Draw Images, Scale Bars, and Nested Layouts (sorted by z_index for freeform overlap support)
@@ -467,7 +467,7 @@ class PdfExporter:
             PdfExporter._draw_pip_items(painter, cell, sub_content)
 
         # Draw sub-project label cells
-        sub_label_above = getattr(sub_project, 'label_placement', 'in_cell') == 'label_row_above'
+        sub_label_above = getattr(sub_project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
         sub_label_rects = getattr(sub_layout, 'label_rects', {})
         if sub_label_above:
             PdfExporter._draw_label_cells(painter, sub_project, sub_layout, sub_scale)
@@ -776,7 +776,7 @@ class PdfExporter:
                                  and text_item.parent_id in layout_result.cell_rects)
                 rotation_deg = float(getattr(text_item, 'rotation', 0.0)) if is_global else 0.0
 
-                from PyQt6.QtCore import QRectF, QByteArray
+                from PyQt6.QtCore import QByteArray
                 from PyQt6.QtSvg import QSvgRenderer
                 target = QRectF(0, 0, tw_mm * scale, th_mm * scale)
                 renderer = QSvgRenderer(QByteArray(svg_bytes))
@@ -808,7 +808,6 @@ class PdfExporter:
                                  and text_item.parent_id in layout_result.cell_rects)
                 rotation_deg = float(getattr(text_item, 'rotation', 0.0)) if is_global else 0.0
 
-                from PyQt6.QtCore import QRectF
                 target = QRectF(0, 0, tw_mm * scale, th_mm * scale)
                 
                 painter.save()
@@ -864,6 +863,15 @@ class PdfExporter:
             painter.translate(tw_mm * scale / 2.0, th_mm * scale / 2.0)
             painter.rotate(rotation_deg)
             painter.translate(-tw_mm * scale / 2.0, -th_mm * scale / 2.0)
+        # Background box (before scaling so padding is in mm).
+        if getattr(text_item, 'bg_enabled', False):
+            from PyQt6.QtGui import QBrush as _QB
+            pad = float(getattr(text_item, 'bg_padding_mm', 0.6)) * scale
+            painter.save()
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(_QB(QColor(getattr(text_item, 'bg_color', '#FFFFFF'))))
+            painter.drawRect(QRectF(-pad, -pad, tw_mm * scale + 2 * pad, th_mm * scale + 2 * pad))
+            painter.restore()
         painter.scale(render_scale, render_scale)
         
         # Paint the QGraphicsTextItem directly to the PDF painter
