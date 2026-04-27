@@ -890,7 +890,6 @@ class SplitCellCommand(QUndoCommand):
             padding_left=cell.padding_left,
             padding_right=cell.padding_right,
             is_placeholder=cell.is_placeholder,
-            nested_layout_path=cell.nested_layout_path,
             scale_bar_enabled=cell.scale_bar_enabled,
             scale_bar_mode=cell.scale_bar_mode,
             scale_bar_length_um=cell.scale_bar_length_um,
@@ -910,7 +909,6 @@ class SplitCellCommand(QUndoCommand):
         # Clear the parent's content (it's now a container)
         cell.image_path = None
         cell.is_placeholder = False
-        cell.nested_layout_path = None
         cell.scale_bar_enabled = False
         if self.update_callback:
             self.update_callback()
@@ -989,7 +987,6 @@ class DeleteSubCellCommand(QUndoCommand):
             parent.is_placeholder = sole.is_placeholder
             parent.fit_mode = sole.fit_mode
             parent.rotation = sole.rotation
-            parent.nested_layout_path = sole.nested_layout_path
             parent.scale_bar_enabled = sole.scale_bar_enabled
             if not parent.children:
                 parent.split_direction = "none"
@@ -1059,7 +1056,6 @@ class WrapAndInsertCommand(QUndoCommand):
             cell.split_ratios = [1.0, 1.0]
             cell.image_path = None
             cell.is_placeholder = False
-            cell.nested_layout_path = None
             cell.scale_bar_enabled = False
 
             # Re-point text items that referenced the original cell to the clone

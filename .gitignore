@@ -11,6 +11,7 @@ Timeline.md
 Timeline_zh.md
 *.exe
 *.spec
+/build/_pyinstaller_hooks/
 /build
 /dist
 build_exe.cmd
@@ -24,3 +25,5 @@ nuitka-crash-report.xml
 /.windsurf
 Code_*.md
 Review_Prompt.md
+/tests
+plan.md

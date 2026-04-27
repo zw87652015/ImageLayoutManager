@@ -6,5 +6,9 @@ dependencies:
   - pip
   - pip:
       - PyQt6
+      - PyQt6-Qt6
+      - PyQt6-sip
       - Pillow
+      - matplotlib
+      - PyMuPDF
       - pyinstaller

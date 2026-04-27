@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <clipPath id="bg">
+      <rect x="8" y="8" width="240" height="240" rx="40"/>
+    </clipPath>
+    <!-- Panel B/C are shorter to open a wide gap for the strap -->
+    <clipPath id="clipA">
+      <rect x="28" y="32" width="85" height="192" rx="5"/>
+    </clipPath>
+    <clipPath id="clipB">
+      <rect x="123" y="32" width="105" height="76" rx="5"/>
+    </clipPath>
+    <clipPath id="clipC">
+      <rect x="123" y="148" width="105" height="76" rx="5"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background: teal-navy -->
+  <rect x="8" y="8" width="240" height="240" rx="40" fill="#1b3545"/>
+
+  <!-- Stack depth layers (+3 / +6 px offset) -->
+  <rect x="31"  y="35"  width="85"  height="192" rx="5" fill="#fff" opacity="0.18"/>
+  <rect x="126" y="35"  width="105" height="76"  rx="5" fill="#fff" opacity="0.18"/>
+  <rect x="126" y="151" width="105" height="76"  rx="5" fill="#fff" opacity="0.18"/>
+
+  <rect x="34"  y="38"  width="85"  height="192" rx="5" fill="#fff" opacity="0.10"/>
+  <rect x="129" y="38"  width="105" height="76"  rx="5" fill="#fff" opacity="0.10"/>
+  <rect x="129" y="154" width="105" height="76"  rx="5" fill="#fff" opacity="0.10"/>
+
+  <!-- Main panels -->
+  <rect x="28"  y="32"  width="85"  height="192" rx="5" fill="#f5f7fa"/>
+  <rect x="123" y="32"  width="105" height="76"  rx="5" fill="#f5f7fa"/>
+  <rect x="123" y="148" width="105" height="76"  rx="5" fill="#f5f7fa"/>
+
+  <!-- Panel A: scatter plot with regression line -->
+  <g clip-path="url(#clipA)">
+    <line x1="42" y1="200" x2="42"  y2="62"  stroke="#c5cad4" stroke-width="1.2"/>
+    <line x1="42" y1="200" x2="104" y2="200" stroke="#c5cad4" stroke-width="1.2"/>
+    <line x1="46" y1="194" x2="102" y2="78"  stroke="#4a90d9" stroke-width="1.8" stroke-dasharray="3 2" opacity="0.7"/>
+    <circle cx="50"  cy="189" r="3.2" fill="#e8b84b"/>
+    <circle cx="56"  cy="179" r="3.2" fill="#e8b84b"/>
+    <circle cx="62"  cy="164" r="3.2" fill="#e8b84b"/>
+    <circle cx="68"  cy="157" r="3.2" fill="#e8b84b"/>
+    <circle cx="74"  cy="143" r="3.2" fill="#e8b84b"/>
+    <circle cx="80"  cy="131" r="3.2" fill="#e8b84b"/>
+    <circle cx="86"  cy="117" r="3.2" fill="#e8b84b"/>
+    <circle cx="92"  cy="106" r="3.2" fill="#e8b84b"/>
+    <circle cx="98"  cy="93"  r="3.2" fill="#e8b84b"/>
+    <circle cx="101" cy="82"  r="3.2" fill="#e8b84b"/>
+  </g>
+
+  <!-- Panel B: time-series curve -->
+  <g clip-path="url(#clipB)">
+    <line x1="134" y1="93"  x2="134" y2="42"  stroke="#c5cad4" stroke-width="1.2"/>
+    <line x1="134" y1="93"  x2="220" y2="93"  stroke="#c5cad4" stroke-width="1.2"/>
+    <path d="M138 86 C148 86 152 48 162 62 C172 76 177 44 188 52 C199 60 206 72 220 66"
+          fill="none" stroke="#5cb85c" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M138 86 C148 86 152 48 162 62 C172 76 177 44 188 52 C199 60 206 72 220 66 L220 93 L138 93 Z"
+          fill="#5cb85c" opacity="0.15"/>
+  </g>
+
+  <!-- Panel C: bar chart -->
+  <g clip-path="url(#clipC)">
+    <line x1="134" y1="208" x2="134" y2="158" stroke="#c5cad4" stroke-width="1.2"/>
+    <line x1="134" y1="208" x2="220" y2="208" stroke="#c5cad4" stroke-width="1.2"/>
+    <rect x="140" y="185" width="16" height="23" rx="2" fill="#4a90d9" opacity="0.85"/>
+    <rect x="160" y="170" width="16" height="38" rx="2" fill="#4a90d9" opacity="0.85"/>
+    <rect x="180" y="177" width="16" height="31" rx="2" fill="#4a90d9" opacity="0.85"/>
+    <rect x="200" y="162" width="16" height="46" rx="2" fill="#e8b84b" opacity="0.90"/>
+  </g>
+
+  <!-- Panel labels -->
+  <text x="33"  y="52"  font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" fill="#e8b84b">A</text>
+  <text x="128" y="52"  font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" fill="#e8b84b">B</text>
+  <text x="128" y="168" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="700" fill="#e8b84b">C</text>
+
+  <!-- Strap on top layer — crosses over all panels -->
+  <g clip-path="url(#bg)">
+    <rect x="8" y="100" width="240" height="56" fill="#c8880c" opacity="0.95"/>
+    <rect x="8" y="100" width="240" height="6"  fill="#f0c040" opacity="0.30"/>
+  </g>
+
+  <!-- Buckle on top, centered over the strap -->
+  <rect x="154" y="108" width="68" height="40" rx="6" fill="#9e6508"/>
+  <rect x="159" y="113" width="24" height="30" rx="4" fill="#f0c040"/>
+  <rect x="191" y="113" width="24" height="30" rx="4" fill="#f0c040"/>
+</svg>

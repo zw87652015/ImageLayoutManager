@@ -23,7 +23,6 @@ class CanvasScene(QGraphicsScene):
     selection_changed_custom = pyqtSignal(list) # list of selected item ids
     cell_context_menu = pyqtSignal(str, bool, object) # cell_id, is_label_cell, QPointF(screen_pos)
     empty_context_menu = pyqtSignal(object, object)   # scene_pos (QPointF, in mm), screen_pos (QPoint)
-    nested_layout_open_requested = pyqtSignal(str, str) # cell_id, figlayout_path
     insert_row_requested = pyqtSignal(int)   # insert at row_index
     insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
     cell_freeform_geometry_changed = pyqtSignal(str, float, float, float, float) # cell_id, x, y, w, h
@@ -225,8 +224,6 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'crop_right', 1.0),
                     getattr(cell, 'crop_bottom', 1.0),
                 )
-                # Nested layout
-                item.set_nested_layout(getattr(cell, 'nested_layout_path', None))
                 # PiP insets
                 item.update_pip_items(getattr(cell, 'pip_items', []))
 
@@ -507,7 +504,7 @@ class CanvasScene(QGraphicsScene):
 
         urls = event.mimeData().urls()
         local_path = urls[0].toLocalFile() if urls else ""
-        is_image = local_path and not local_path.lower().endswith(('.figlayout', '.json'))
+        is_image = local_path and not local_path.lower().endswith(('.figlayout', '.json', '.figpack'))
 
         pos = event.scenePos()
         target_cell = next(
@@ -550,7 +547,8 @@ class CanvasScene(QGraphicsScene):
                 return
 
             # Check if it's a project file
-            if local_path.lower().endswith('.figlayout') or local_path.lower().endswith('.json'):
+            lp = local_path.lower()
+            if lp.endswith('.figlayout') or lp.endswith('.json') or lp.endswith('.figpack'):
                 if self._drag_target_cell is not None:
                     self._drag_target_cell.end_ext_drag()
                     self._drag_target_cell = None

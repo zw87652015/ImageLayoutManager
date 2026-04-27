@@ -164,6 +164,38 @@ def main() -> int:
             pl['CFBundleName'] = "ImageLayoutManager"
             pl['CFBundleDisplayName'] = "ImageLayoutManager"
             pl['NSHumanReadableCopyright'] = "Copyright © 2026. All rights reserved."
+            pl['CFBundleDocumentTypes'] = [
+                {
+                    'CFBundleTypeName': 'Academic Figure Layout',
+                    'CFBundleTypeRole': 'Editor',
+                    'LSHandlerRank': 'Owner',
+                    'LSItemContentTypes': ['com.imagelayoutmanager.figlayout'],
+                    'CFBundleTypeExtensions': ['figlayout'],
+                    'CFBundleTypeIconFile': 'icon',
+                },
+                {
+                    'CFBundleTypeName': 'Academic Figure Bundle',
+                    'CFBundleTypeRole': 'Editor',
+                    'LSHandlerRank': 'Owner',
+                    'LSItemContentTypes': ['com.imagelayoutmanager.figpack'],
+                    'CFBundleTypeExtensions': ['figpack'],
+                    'CFBundleTypeIconFile': 'icon_figpack',
+                },
+            ]
+            pl['UTExportedTypeDeclarations'] = [
+                {
+                    'UTTypeIdentifier': 'com.imagelayoutmanager.figlayout',
+                    'UTTypeDescription': 'Academic Figure Layout',
+                    'UTTypeConformsTo': ['public.data'],
+                    'UTTypeTagSpecification': {'public.filename-extension': ['figlayout']},
+                },
+                {
+                    'UTTypeIdentifier': 'com.imagelayoutmanager.figpack',
+                    'UTTypeDescription': 'Academic Figure Bundle',
+                    'UTTypeConformsTo': ['public.zip-archive'],
+                    'UTTypeTagSpecification': {'public.filename-extension': ['figpack']},
+                },
+            ]
             
             with open(plist_path, 'wb') as f:
                 plistlib.dump(pl, f)

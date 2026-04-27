@@ -22,11 +22,15 @@ Additional highlights:
 - **Hierarchical cell splitting**
   Split cells infinitely in vertical or horizontal stacks with proportional sizing. Label cells can be added above sub-cell groups without disrupting the layout.
 - **WYSIWYG export**
-  PDF and raster exports are designed to match the on-canvas layout and label placement.
+  PDF, raster, and SVG exports match the on-canvas layout and label placement exactly.
 - **Vector image import (SVG)**
-  SVG can be placed into cells and will render as vector graphics in PDF export.
+  SVG can be placed into cells and renders as vector graphics in PDF and SVG export.
 - **Label editing**
   Labels are editable per-item. Label color can be applied to a single label, or synced to all labels in the same group via an explicit “Apply to All” button.
+- **Portable project bundles (.figpack)**
+  Pack a project and all its referenced images into a single portable `.figpack` file. Share it with collaborators without worrying about broken image paths.
+- **File locking**
+  Opening a project file locks it so the same file cannot be opened twice — in the same instance or in a separate one — preventing accidental concurrent edits.
 
 ## Downloads
 
@@ -77,17 +81,31 @@ Typical workflow:
 
 ## File types
 
-- Layout files are stored as `*.figlayout` (ignored by default in `.gitignore` in this repo).
-- Supported image imports include common raster formats (PNG/JPG/TIFF/...) and SVG.
-- Exports include:
-  - `*.pdf`
-  - `*.tif` / `*.tiff`
-  - `*.jpg` / `*.jpeg`
+### Project files
 
-Notes:
+| Extension | Description |
+|---|---|
+| `*.figlayout` | Default project format. A JSON file that stores the layout; image files are referenced by path and stay separate. Lightweight and VCS-friendly. |
+| `*.figpack` | Portable bundle format. A ZIP archive containing the layout JSON and all referenced images. Use **File → Convert to .figpack…** to bundle an open `.figlayout` project. Ideal for sharing or archiving a completed figure. |
 
-- **DPI** mainly affects raster exports (TIFF/JPG) by controlling output pixel dimensions.
-- PDF export is page-size based; DPI affects internal rendering resolution but not the intended physical layout size.
+When a project file is open, a hidden presence file (`~$filename`) is written next to it. If you try to open the same file in another instance, the app will refuse and show the owner's username. The lock is released automatically when the tab is closed.
+
+### Image import
+
+Supported raster formats: PNG, JPG, TIFF, BMP, GIF, WebP.  
+SVG files are also supported and render as vector graphics in PDF and SVG export.
+
+### Export formats
+
+| Format | Notes |
+|---|---|
+| `*.pdf` | Vector text; images embedded at project DPI. |
+| `*.tif` / `*.tiff` | Raster; output pixel dimensions = physical size × DPI. |
+| `*.jpg` / `*.jpeg` | Raster; same as TIFF but lossy. |
+| `*.png` | Raster; lossless. |
+| `*.svg` | Vector; text and layout are vector; raster images are embedded. |
+
+**DPI** controls output pixel dimensions for raster exports and the internal rendering resolution for PDF. It does not affect physical layout size.
 
 ## Support
 

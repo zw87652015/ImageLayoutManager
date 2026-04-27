@@ -83,7 +83,7 @@ class PdfExporter:
             label_row_above = getattr(project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
             label_rects = getattr(layout_result, 'label_rects', {})
 
-            # 1. Draw Images, Scale Bars, and Nested Layouts (sorted by z_index for freeform overlap support)
+            # 1. Draw Images and Scale Bars (sorted by z_index for freeform overlap support)
             sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
             for cell in sorted_cells:
                 if cell.id not in layout_result.cell_rects:
@@ -105,11 +105,7 @@ class PdfExporter:
                 if content_rect.width() <= 0 or content_rect.height() <= 0:
                     continue
 
-                # Nested layout: vector render the sub-project into this cell
-                nested_path = getattr(cell, 'nested_layout_path', None)
-                if nested_path and os.path.exists(nested_path):
-                    PdfExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
-                elif cell.image_path and os.path.exists(cell.image_path):
+                if cell.image_path and os.path.exists(cell.image_path):
                     ext = os.path.splitext(cell.image_path)[1].lower()
                     if ext in ('.pdf', '.eps'):
                         # Skip in Pass 1 — will be stamped as vector in Pass 2
@@ -387,103 +383,6 @@ class PdfExporter:
                 painter.setPen(open_pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(origin_rect)
-
-    @staticmethod
-    def _draw_nested_layout(painter: QPainter, figlayout_path: str, content_rect: QRectF, parent_dpi: int):
-        """Render a nested .figlayout as vector graphics into the given content_rect.
-        
-        The sub-project is loaded, laid out, and all its elements (images, text,
-        labels) are drawn using the same vector pipeline, translated and scaled
-        to fit inside content_rect while preserving aspect ratio.
-        """
-        try:
-            from src.model.data_model import Project as SubProject
-            sub_project = SubProject.load_from_file(figlayout_path)
-        except Exception as e:
-            print(f"Failed to load nested layout {figlayout_path}: {e}")
-            return
-
-        sub_layout = LayoutEngine.calculate_layout(sub_project)
-
-        # Sub-project page dimensions in mm
-        sub_w_mm = sub_project.page_width_mm
-        sub_h_mm = sub_project.page_height_mm
-        if sub_w_mm <= 0 or sub_h_mm <= 0:
-            return
-
-        # content_rect is in dots (parent_dpi). Convert to mm for ratio calc.
-        parent_scale = parent_dpi / 25.4
-        cr_w_mm = content_rect.width() / parent_scale
-        cr_h_mm = content_rect.height() / parent_scale
-
-        # Fit sub-project page into content_rect (contain mode)
-        fit_ratio = min(cr_w_mm / sub_w_mm, cr_h_mm / sub_h_mm)
-
-        # Centered offset in mm
-        fitted_w_mm = sub_w_mm * fit_ratio
-        fitted_h_mm = sub_h_mm * fit_ratio
-        offset_x_mm = (cr_w_mm - fitted_w_mm) / 2.0
-        offset_y_mm = (cr_h_mm - fitted_h_mm) / 2.0
-
-        # The sub-project's internal scale: mm -> dots for the sub-project
-        # We need to map sub-project mm coordinates into parent dots.
-        # sub_mm * fit_ratio * parent_scale = parent_dots
-        sub_scale = fit_ratio * parent_scale
-
-        painter.save()
-        painter.translate(
-            content_rect.left() + offset_x_mm * parent_scale,
-            content_rect.top() + offset_y_mm * parent_scale,
-        )
-
-        # Draw sub-project images
-        for cell in sub_project.get_all_leaf_cells():
-            if cell.id not in sub_layout.cell_rects:
-                continue
-            sx, sy, sw, sh = sub_layout.cell_rects[cell.id]
-            sub_target = QRectF(sx * sub_scale, sy * sub_scale, sw * sub_scale, sh * sub_scale)
-
-            sp_top = cell.padding_top * sub_scale
-            sp_right = cell.padding_right * sub_scale
-            sp_bottom = cell.padding_bottom * sub_scale
-            sp_left = cell.padding_left * sub_scale
-            sub_content = sub_target.adjusted(sp_left, sp_top, -sp_right, -sp_bottom)
-
-            if sub_content.width() <= 0 or sub_content.height() <= 0:
-                continue
-
-            # Recurse for nested-in-nested
-            nested = getattr(cell, 'nested_layout_path', None)
-            if nested and os.path.exists(nested):
-                PdfExporter._draw_nested_layout(painter, nested, sub_content, parent_dpi)
-            elif cell.image_path and os.path.exists(cell.image_path):
-                rotation = getattr(cell, 'rotation', 0)
-                crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
-                        getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                PdfExporter._draw_image(painter, cell.image_path, sub_content, cell.fit_mode, rotation, crop)
-                if getattr(cell, 'scale_bar_enabled', False):
-                    PdfExporter._draw_scale_bar(painter, cell, sub_content, sub_scale)
-
-            PdfExporter._draw_pip_items(painter, cell, sub_content)
-
-        # Draw sub-project label cells
-        sub_label_above = getattr(sub_project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
-        sub_label_rects = getattr(sub_layout, 'label_rects', {})
-        if sub_label_above:
-            PdfExporter._draw_label_cells(painter, sub_project, sub_layout, sub_scale)
-
-        # Draw sub-project text items
-        for text_item in sub_project.text_items:
-            if (
-                sub_label_above
-                and text_item.scope == 'cell'
-                and getattr(text_item, 'subtype', None) != 'corner'
-                and text_item.parent_id in sub_label_rects
-            ):
-                continue
-            PdfExporter._draw_text(painter, sub_project, text_item, sub_layout, sub_scale)
-
-        painter.restore()
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,

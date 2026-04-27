@@ -79,7 +79,7 @@ class ImageExporter:
             label_row_above = getattr(project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
             label_rects = getattr(layout_result, 'label_rects', {})
 
-            # 1. Draw Images, Scale Bars, and Nested Layouts (sorted by z_index for freeform overlap support)
+            # 1. Draw Images and Scale Bars (sorted by z_index for freeform overlap support)
             sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
             for cell in sorted_cells:
                 if cell.id not in layout_result.cell_rects:
@@ -99,10 +99,7 @@ class ImageExporter:
                 if content_rect.width() <= 0 or content_rect.height() <= 0:
                     continue
 
-                nested_path = getattr(cell, 'nested_layout_path', None)
-                if nested_path and os.path.exists(nested_path):
-                    ImageExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
-                elif cell.image_path and os.path.exists(cell.image_path):
+                if cell.image_path and os.path.exists(cell.image_path):
                     rotation = getattr(cell, 'rotation', 0)
                     crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                             getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
@@ -179,10 +176,7 @@ class ImageExporter:
             content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
             if content_rect.width() <= 0 or content_rect.height() <= 0:
                 continue
-            nested_path = getattr(cell, 'nested_layout_path', None)
-            if nested_path and os.path.exists(nested_path):
-                ImageExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
-            elif cell.image_path and os.path.exists(cell.image_path):
+            if cell.image_path and os.path.exists(cell.image_path):
                 rotation = getattr(cell, 'rotation', 0)
                 crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                         getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
@@ -212,10 +206,7 @@ class ImageExporter:
 
     @staticmethod
     def render_to_qimage(project: Project) -> QImage:
-        """Render project to a QImage (in-memory, no file save).
-        
-        Used for generating nested layout thumbnails on the canvas.
-        """
+        """Render project to a QImage (in-memory, no file save)."""
         layout_result = LayoutEngine.calculate_layout(project)
         scale = project.dpi / 25.4
         width_px = int(project.page_width_mm * scale)
@@ -250,10 +241,7 @@ class ImageExporter:
                 if content_rect.width() <= 0 or content_rect.height() <= 0:
                     continue
 
-                nested_path = getattr(cell, 'nested_layout_path', None)
-                if nested_path and os.path.exists(nested_path):
-                    ImageExporter._draw_nested_layout(painter, nested_path, content_rect, project.dpi)
-                elif cell.image_path and os.path.exists(cell.image_path):
+                if cell.image_path and os.path.exists(cell.image_path):
                     rotation = getattr(cell, 'rotation', 0)
                     crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                             getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
@@ -360,40 +348,6 @@ class ImageExporter:
                 painter.setPen(open_pen)
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(origin_rect)
-
-    @staticmethod
-    def _draw_nested_layout(painter: QPainter, figlayout_path: str, content_rect: QRectF, parent_dpi: int):
-        """Render a nested .figlayout into the given content_rect as raster graphics.
-        
-        Loads the sub-project, renders it to a QImage at the parent DPI,
-        then draws the image into content_rect with aspect ratio preserved.
-        """
-        try:
-            from src.model.data_model import Project as SubProject
-            sub_project = SubProject.load_from_file(figlayout_path)
-        except Exception as e:
-            print(f"Failed to load nested layout {figlayout_path}: {e}")
-            return
-
-        sub_project.dpi = parent_dpi
-        sub_image = ImageExporter.render_to_qimage(sub_project)
-        if sub_image is None or sub_image.isNull():
-            return
-
-        # Draw the rendered sub-image into content_rect (contain mode)
-        pix_w = sub_image.width()
-        pix_h = sub_image.height()
-        if pix_w <= 0 or pix_h <= 0:
-            return
-
-        ratio = min(content_rect.width() / pix_w, content_rect.height() / pix_h)
-        new_w = pix_w * ratio
-        new_h = pix_h * ratio
-        x = content_rect.left() + (content_rect.width() - new_w) / 2
-        y = content_rect.top() + (content_rect.height() - new_h) / 2
-        target = QRectF(x, y, new_w, new_h)
-
-        painter.drawImage(target, sub_image)
 
     @staticmethod
     def _save_as_tiff(qimage: QImage, output_path: str, dpi: int,
@@ -782,6 +736,7 @@ class ImageExporter:
         font = QFont(text_item.font_family, base_pt)
         if text_item.font_weight == "bold":
             font.setBold(True)
+        temp_item.setFont(font)
         temp_item.setDefaultTextColor(QColor(text_item.color))
 
         base_rect = temp_item.boundingRect()

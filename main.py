@@ -2,27 +2,28 @@ import sys
 import os
 
 # --- DLL Path Fix for PyInstaller + PyQt6 on Windows ---
+# PyInstaller's dependency scanner can bundle DLLs (like icuuc.dll) that
+# shadow the system copies with an ABI-incompatible version, causing
+# ERROR_PROC_NOT_FOUND (WinError 127).  The build script removes these
+# rogue DLLs; this block ensures the remaining Qt6 DLLs are findable.
 if getattr(sys, "frozen", False) and sys.platform == "win32":
-    # In PyInstaller, sys._MEIPASS is the root of the bundled files
     base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
-    
-    # Try all common locations for Qt binaries in both --onefile and --onedir layouts
+    exe_dir = os.path.dirname(sys.executable)
+
     dll_dirs = [
-        base_dir,
-        os.path.join(base_dir, "_internal"),
         os.path.join(base_dir, "PyQt6", "Qt6", "bin"),
-        os.path.join(base_dir, "_internal", "PyQt6", "Qt6", "bin"),
+        base_dir,
+        exe_dir,
     ]
-    
-    # Prepend to PATH for legacy DLL loading (fallback)
-    existing_path = os.environ.get("PATH", "")
-    new_paths = [d for d in dll_dirs if os.path.isdir(d)]
-    if new_paths:
-        os.environ["PATH"] = ";".join(new_paths) + ";" + existing_path
-    
-    # Use modern os.add_dll_directory
+    existing = [d for d in dll_dirs if os.path.isdir(d)]
+
+    # Prepend to PATH
+    path = os.environ.get("PATH", "")
+    os.environ["PATH"] = ";".join(existing) + ";" + path
+
+    # os.add_dll_directory (Python ≥ 3.8)
     if hasattr(os, "add_dll_directory"):
-        for d in new_paths:
+        for d in existing:
             try:
                 os.add_dll_directory(d)
             except Exception:
@@ -52,8 +53,8 @@ def main():
     
     window = MainWindow()
 
-    # Open a .figlayout file passed as a command-line argument.
-    # Windows Explorer calls: ImageLayoutManager.exe "C:\path\to\file.figlayout"
+    # Open a file passed as a command-line argument (double-click in Explorer).
+    # Windows Explorer calls: ImageLayoutManager.exe "C:\path\to\file.figpack"
     if len(sys.argv) > 1:
         cli_path = sys.argv[1]
         if os.path.isfile(cli_path):

@@ -261,14 +261,15 @@ class Inspector(QWidget):
         
         # Page Size Presets
         self.page_preset = QComboBox()
-        self.page_preset.addItems([
-            "Custom",
-            "A4 (210×297mm)",
-            "Letter (216×279mm)",
-            "Single Column (85×120mm)",
-            "1.5 Column (114×160mm)",
-            "Double Column (178×240mm)"
-        ])
+        self._page_preset_options = [
+            "opt_page_custom",
+            "opt_page_a4",
+            "opt_page_letter",
+            "opt_page_single",
+            "opt_page_1_5",
+            "opt_page_double"
+        ]
+        self.page_preset.addItems([tr(k) for k in self._page_preset_options])
         self.page_preset.currentTextChanged.connect(self._on_page_preset_changed)
         self.project_layout.addRow(self._fl("lbl_page_preset"), self.page_preset)
         
@@ -338,20 +339,20 @@ class Inspector(QWidget):
         self.project_layout.addRow(self._fl("lbl_color"), self.corner_label_color)
         
         # Label Placement (out-of-cell variants: above/below/left/right or in_cell)
-        self._sec_label_placement = QLabel("<b>Label Placement</b>")
+        self._sec_label_placement = QLabel(tr("sec_label_placement"))
         self.project_layout.addRow(self._sec_label_placement)
 
         self.label_placement_combo = QComboBox()
-        # (label, value)
+        # (i18n_key, value)
         self._label_placement_options = [
-            ("In-Cell",             "in_cell"),
-            ("Row Above",           "label_row_above"),
-            ("Row Below",           "label_row_below"),
-            ("Column Left",         "label_col_left"),
-            ("Column Right",        "label_col_right"),
+            ("placement_in_cell",   "in_cell"),
+            ("placement_row_above", "label_row_above"),
+            ("placement_row_below", "label_row_below"),
+            ("placement_col_left",  "label_col_left"),
+            ("placement_col_right", "label_col_right"),
         ]
-        for text, _val in self._label_placement_options:
-            self.label_placement_combo.addItem(text)
+        for key, _val in self._label_placement_options:
+            self.label_placement_combo.addItem(tr(key))
         self.label_placement_combo.currentIndexChanged.connect(
             lambda i: self.project_property_changed.emit(
                 {"label_placement": self._label_placement_options[i][1]}
@@ -463,7 +464,7 @@ class Inspector(QWidget):
         self.cell_layout.addRow(self._fl("lbl_height_mm"), self.override_h)
 
         # --- Size Group section -------------------------------------------
-        self._sec_size_group = QLabel("— Size Group —")
+        self._sec_size_group = QLabel(tr("sec_size_group"))
         self.cell_layout.addRow(self._sec_size_group)
 
         # Dropdown: None | <each group> | + Create New Group
@@ -530,10 +531,10 @@ class Inspector(QWidget):
         self.cell_layout.addRow(self._fl("lbl_corner_br"), self.corner_label_br)
 
         # --- Scale Bar Group ---
-        self.scale_bar_group = CollapsibleSection("Scale Bar")
+        self.scale_bar_group = CollapsibleSection(tr("grp_scale_bar"))
         self.scale_bar_layout = self.scale_bar_group._form
         
-        self.scale_bar_enabled = QCheckBox("Enable Scale Bar")
+        self.scale_bar_enabled = QCheckBox(tr("chk_scale_enabled"))
         self.scale_bar_enabled.stateChanged.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self.scale_bar_enabled)
         
@@ -573,12 +574,12 @@ class Inspector(QWidget):
         self.scale_bar_color.colorChanged.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self._fl("lbl_color"), self.scale_bar_color)
         
-        self.scale_bar_show_text = QCheckBox("Show Text")
+        self.scale_bar_show_text = QCheckBox(tr("chk_scale_text"))
         self.scale_bar_show_text.stateChanged.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self.scale_bar_show_text)
         
         self.scale_bar_custom_text = QLineEdit()
-        self.scale_bar_custom_text.setPlaceholderText("Auto (e.g. 10 µm)")
+        self.scale_bar_custom_text.setPlaceholderText(tr("placeholder_scale_bar_text"))
         self.scale_bar_custom_text.editingFinished.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self._fl("lbl_custom_text"), self.scale_bar_custom_text)
         
@@ -625,7 +626,7 @@ class Inspector(QWidget):
 
         self._current_label_text_id = None  # Track which text item is being edited
         self.label_text_edit = QLineEdit()
-        self.label_text_edit.setPlaceholderText("Label text")
+        self.label_text_edit.setPlaceholderText(tr("placeholder_label_text"))
         self.label_text_edit.editingFinished.connect(self._on_label_text_edited)
         self.label_cell_layout.addRow(self._fl("lbl_text"), self.label_text_edit)
 
@@ -651,7 +652,7 @@ class Inspector(QWidget):
         )
         self.label_cell_layout.addRow(self._fl("lbl_size_pt"), self.label_size)
 
-        self.label_bold = QCheckBox("Bold")
+        self.label_bold = QCheckBox(tr("chk_bold"))
         self.label_bold.setChecked(True)
         self.label_bold.toggled.connect(
             lambda b: self.project_property_changed.emit({"label_font_weight": "bold" if b else "normal"})
@@ -694,7 +695,7 @@ class Inspector(QWidget):
         self.label_row_height.setSingleStep(0.5)
         self.label_row_height.setDecimals(1)
         self.label_row_height.setSuffix(" mm")
-        self.label_row_height.setSpecialValueText("Auto")
+        self.label_row_height.setSpecialValueText(tr("special_auto"))
         self.label_row_height.setValue(0.0)
         self.label_row_height.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"label_row_height": v})
@@ -718,7 +719,7 @@ class Inspector(QWidget):
         
         # Column ratios (comma-separated, e.g. "1,2,1" for 25%-50%-25%)
         self.col_ratios_edit = QLineEdit()
-        self.col_ratios_edit.setPlaceholderText("e.g. 1,2,1 (equal if empty)")
+        self.col_ratios_edit.setPlaceholderText(tr("placeholder_col_ratios"))
         self.col_ratios_edit.editingFinished.connect(self._emit_column_ratios)
         self.row_layout.addRow(self._fl("lbl_col_ratios"), self.col_ratios_edit)
         
@@ -747,9 +748,9 @@ class Inspector(QWidget):
         self.subcell_fixed_size.setSingleStep(1.0)
         self.subcell_fixed_size.setDecimals(2)
         self.subcell_fixed_size.setSuffix(" mm")
-        self.subcell_fixed_size.setSpecialValueText("Auto (use ratio)")
+        self.subcell_fixed_size.setSpecialValueText(tr("special_auto_ratio"))
         self.subcell_fixed_size.valueChanged.connect(self._emit_subcell_fixed_size)
-        self._subcell_fixed_size_label = QLabel("Fixed Width:")
+        self._subcell_fixed_size_label = QLabel(tr("lbl_fixed_width"))
         self.subcell_layout.addRow(self._subcell_fixed_size_label, self.subcell_fixed_size)
 
         self.layout.addWidget(self.subcell_group)
@@ -800,14 +801,14 @@ class Inspector(QWidget):
         )
         self.pip_layout.addRow(self._fl("lbl_pip_h"), self.pip_h)
 
-        self.pip_border_enabled = QCheckBox("Enable Border")
+        self.pip_border_enabled = QCheckBox(tr("chk_border_enabled"))
         self.pip_border_enabled.toggled.connect(
             lambda b: self.pip_property_changed.emit({"border_enabled": b})
         )
         self.pip_layout.addRow(self.pip_border_enabled)
 
         self.pip_border_style = QComboBox()
-        self.pip_border_style.addItems(["solid", "dashed"])
+        self.pip_border_style.addItems([tr("opt_border_solid"), tr("opt_border_dashed")])
         self.pip_border_style.currentTextChanged.connect(
             lambda t: self.pip_property_changed.emit({"border_style": t})
         )
@@ -1006,6 +1007,7 @@ class Inspector(QWidget):
 
         self._sec_grid.setText(tr("sec_grid"))
         self._sec_corner.setText(tr("sec_corner_labels"))
+        self._sec_label_placement.setText(tr("sec_label_placement"))
         self._sec_layout.setText(tr("sec_layout"))
         self.freeform_section_label.setText(tr("sec_freeform"))
         self._sec_grid_override.setText(tr("sec_grid_override"))
@@ -1037,7 +1039,16 @@ class Inspector(QWidget):
         _retranslate_combo(self.grid_mode,         [tr("opt_grid_stretch"), tr("opt_grid_fixed")])
         _retranslate_combo(self.row_alignment,      [tr("opt_row_left"),     tr("opt_row_center"),    tr("opt_row_right")])
         _retranslate_combo(self.label_align,        [tr("opt_align_left"),   tr("opt_align_center"),  tr("opt_align_right")])
-        _retranslate_combo(self.pip_border_style,   ["solid", "dashed"])
+        _retranslate_combo(self.label_placement_combo, [tr(key) for key, _ in self._label_placement_options])
+        _retranslate_combo(self.page_preset,        [tr(k) for k in self._page_preset_options])
+        _retranslate_combo(self.pip_border_style,   [tr("opt_border_solid"), tr("opt_border_dashed")])
+        
+        self.scale_bar_custom_text.setPlaceholderText(tr("placeholder_scale_bar_text"))
+        self.label_text_edit.setPlaceholderText(tr("placeholder_label_text"))
+        self.label_row_height.setSpecialValueText(tr("special_auto"))
+        self.col_ratios_edit.setPlaceholderText(tr("placeholder_col_ratios"))
+        self.subcell_fixed_size.setSpecialValueText(tr("special_auto_ratio"))
+
         self.corner_label_color.retranslate_ui()
         self.scale_bar_color.retranslate_ui()
         self.label_color.retranslate_ui()

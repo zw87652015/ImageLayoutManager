@@ -30,10 +30,14 @@ _SHORTCUTS_EN = [
     ("Ctrl + O",          "Open project"),
     ("Ctrl + S",          "Save project"),
     ("Ctrl + Shift+S",    "Save As…"),
+    ("Ctrl + T",          "New Tab"),
+    ("Ctrl + W",          "Close current Tab"),
     ("Ctrl + Z",          "Undo"),
     ("Ctrl + Y",          "Redo"),
-    ("Ctrl + Shift+L",    "Auto Label all cells"),
+    ("Ctrl + Shift+L",    "Auto Label (in-cell)"),
+    ("Ctrl + Shift+K",    "Auto Label (row above)"),
     ("Ctrl + Shift+A",    "Auto Layout"),
+    ("Ctrl + Shift+P",    "Toggle Export Preview"),
     ("Ctrl + ]",          "Bring selected cell to front"),
     ("Ctrl + [",          "Send selected cell to back"),
     ("Ctrl + Delete",     "Delete image from selected cell"),
@@ -42,6 +46,7 @@ _SHORTCUTS_EN = [
     ("Scroll wheel",      "Zoom canvas in / out"),
     ("Middle-click drag", "Pan canvas"),
     ("Ctrl + Shift+T",    "Toggle light / dark theme"),
+    ("Ctrl + \\",         "Toggle Layers panel"),
     ("Arrow keys",        "Nudge selected cell (freeform mode)"),
     ("Shift + Arrow",     "Navigate between cells"),
 ]
@@ -51,10 +56,14 @@ _SHORTCUTS_ZH = [
     ("Ctrl + O",          "打开项目"),
     ("Ctrl + S",          "保存项目"),
     ("Ctrl + Shift+S",    "另存为…"),
+    ("Ctrl + T",          "新建标签页"),
+    ("Ctrl + W",          "关闭当前标签页"),
     ("Ctrl + Z",          "撤销"),
     ("Ctrl + Y",          "重做"),
-    ("Ctrl + Shift+L",    "自动标注所有单元格"),
+    ("Ctrl + Shift+L",    "自动标注（嵌入图片）"),
+    ("Ctrl + Shift+K",    "自动标注（上方行）"),
     ("Ctrl + Shift+A",    "自动布局"),
+    ("Ctrl + Shift+P",    "切换导出预览模式"),
     ("Ctrl + ]",          "将选中单元格置于顶层"),
     ("Ctrl + [",          "将选中单元格置于底层"),
     ("Ctrl + Delete",     "删除选中单元格的图片"),
@@ -63,6 +72,7 @@ _SHORTCUTS_ZH = [
     ("滚轮",              "缩放画布"),
     ("中键拖动",          "平移画布"),
     ("Ctrl + Shift+T",    "切换浅色/深色主题"),
+    ("Ctrl + \\",         "显示/隐藏图层面板"),
     ("方向键",            "微移选中单元格（自由布局模式）"),
     ("Shift + 方向键",    "在单元格间导航"),
 ]
@@ -172,6 +182,18 @@ _IMAGES_HTML_EN = """
   <li>Hold <b>Ctrl</b> while dragging to swap multiple selected cells at once.</li>
 </ul>
 
+<h3>Picture-in-Picture (PiP) / Insets</h3>
+<ul>
+  <li><b>Right-click</b> an image cell and choose <b>Insert → PiP</b> to add a smaller sub-image on top.</li>
+  <li>Drag the PiP to move it; use the Inspector to adjust its size, border, and position (in % of parent).</li>
+</ul>
+
+<h3>Cropping</h3>
+<ul>
+  <li><b>Right-click</b> a cell and choose <b>Crop Image</b>.</li>
+  <li>Drag handles to adjust; hold <b>Shift</b> to lock aspect ratio. Press <b>Enter</b> to apply.</li>
+</ul>
+
 <h3>Fit Mode (Inspector → Cell)</h3>
 <ul>
   <li><b>Contain</b> — image fits entirely inside the cell, letter-boxed.</li>
@@ -204,7 +226,19 @@ _IMAGES_HTML_ZH = """
   <li>按住 <b>Ctrl</b> 拖动可同时交换多个选中的单元格。</li>
 </ul>
 
-<h3>填充模式（检查器 → 单元格）</h3>
+<h3>画中画 (PiP) / 插图</h3>
+<ul>
+  <li><b>右键点击</b>图片单元格并选择<b>插入 → 以子图插入</b>，可在上方添加较小的子图。</li>
+  <li>拖动子图可移动位置；使用检查器调整其大小、边框和位置（占父单元格的百分比）。</li>
+</ul>
+
+<h3>裁剪</h3>
+<ul>
+  <li><b>右键点击</b>单元格并选择<b>裁剪图片</b>。</li>
+  <li>拖动手柄进行调整；按住 <b>Shift</b> 可锁定比例。按 <b>Enter</b> 确认应用。</li>
+</ul>
+
+<h3>缩放模式（检查器 → 单元格）</h3>
 <ul>
   <li><b>包含</b> — 图片完整显示在单元格内，保留空白边。</li>
   <li><b>覆盖</b> — 图片填满单元格，超出部分被裁剪。</li>
@@ -212,7 +246,7 @@ _IMAGES_HTML_ZH = """
 </ul>
 
 <h3>旋转</h3>
-<p>在检查器中设置 0 / 90 / 180 / 270° 旋转。旋转在填充模式之前应用。</p>
+<p>在检查器中设置 0 / 90 / 180 / 270° 旋转。旋转在缩放模式之前应用。</p>
 
 <h3>重新加载图片</h3>
 <p>按 <b>F5</b> 或 <b>文件 → 重新加载图片</b>，从磁盘重新读取所有源文件（适合外部编辑后刷新）。</p>
@@ -346,15 +380,17 @@ _EXPORT_HTML_EN = """
   <li><b>PDF</b> — vector-based; ideal for journal submission. Labels and SVG images remain vector.</li>
   <li><b>TIFF</b> — lossless raster at the DPI you specify (Inspector → Project → DPI).</li>
   <li><b>JPG</b> — compressed raster. Quality is fixed at 95%.</li>
+  <li><b>PNG / SVG</b> — web-friendly formats.</li>
 </ul>
 
-<h3>How to Export</h3>
-<ol>
-  <li>Click the <b>Export</b> toolbar button and pick a format,
-      or use the <b>File</b> menu.</li>
-  <li>Choose a destination file in the dialog.</li>
-  <li>The exported file matches the canvas layout exactly.</li>
-</ol>
+<h3>Project Bundles (.figpack)</h3>
+<p>Standard <code>.figlayout</code> files only save paths to images. If you move your images, the layout breaks.
+Use <b>File → Convert to .figpack</b> to create a self-contained archive that includes all source images.
+Ideal for sharing with co-authors or archiving projects.</p>
+
+<h3>Export Region</h3>
+<p>By default, the whole page is exported. Use <b>Layout → Set Export Region</b> to drag a selection on the canvas.
+Only the selected area will be saved in the exported file.</p>
 
 <h3>DPI Setting</h3>
 <p>DPI (dots per inch) controls the pixel dimensions of raster exports:</p>
@@ -362,16 +398,11 @@ _EXPORT_HTML_EN = """
 <p>For most journals, <b>300 DPI</b> is sufficient for TIFF/JPG.
 PDF export resolution is separate from this setting.</p>
 
-<h3>Canvas Size</h3>
-<p>Set <b>Width</b> and <b>Height</b> (in mm) in the Inspector.
-These define the physical dimensions of the exported figure regardless of DPI.</p>
-
 <h3>Tips for Publication</h3>
 <ul>
   <li>Keep gap ≥ 1 mm so panels don't touch.</li>
   <li>Use SVG source images when possible — they stay crisp in PDF exports.</li>
   <li>Set DPI ≥ 300 for raster exports submitted to journals.</li>
-  <li>Save a <code>.figlayout</code> file alongside your exported figure for reproducibility.</li>
 </ul>
 """
 
@@ -383,30 +414,62 @@ _EXPORT_HTML_ZH = """
   <li><b>PDF</b> — 基于矢量；适合期刊投稿，标注和 SVG 图片保持矢量质量。</li>
   <li><b>TIFF</b> — 无损光栅，分辨率由检查器 → 项目 → DPI 指定。</li>
   <li><b>JPG</b> — 压缩光栅，质量固定为 95%。</li>
+  <li><b>PNG / SVG</b> — 适合网页使用的格式。</li>
 </ul>
 
-<h3>导出步骤</h3>
-<ol>
-  <li>点击工具栏的<b>导出</b>按钮并选择格式，或使用<b>文件</b>菜单。</li>
-  <li>在对话框中选择目标文件路径。</li>
-  <li>导出文件与画布布局完全一致。</li>
-</ol>
+<h3>项目包 (.figpack)</h3>
+<p>标准的 <code>.figlayout</code> 文件仅保存图片路径。若移动图片，布局将失效。
+使用<b>文件 → 转换为 .figpack</b> 可创建一个包含所有源图片的自持归档包。
+非常适合与合作者分享或归档项目。</p>
+
+<h3>导出区域</h3>
+<p>默认导出整个页面。使用<b>布局 → 设置导出区域</b>在画布上拖拽选择，仅所选区域会被保存在导出文件中。</p>
 
 <h3>DPI 设置</h3>
 <p>DPI（每英寸像素数）决定光栅导出的像素尺寸：</p>
 <p style="margin-left:16px"><code>像素数 = (尺寸_mm / 25.4) × DPI</code></p>
 <p>大多数期刊要求 TIFF/JPG 导出时 <b>300 DPI</b> 即可。PDF 导出分辨率与此设置无关。</p>
 
-<h3>画布尺寸</h3>
-<p>在检查器中设置<b>宽度</b>和<b>高度</b>（单位 mm），这些值决定导出图表的物理尺寸，与 DPI 无关。</p>
-
 <h3>出版建议</h3>
 <ul>
   <li>间距保持 ≥ 1 mm，避免面板互相接触。</li>
   <li>尽量使用 SVG 源图片 — PDF 导出时保持清晰。</li>
   <li>向期刊投稿时，光栅导出 DPI 应 ≥ 300。</li>
-  <li>将 <code>.figlayout</code> 文件与导出图表一同保存，便于复现。</li>
 </ul>
+"""
+
+_ADVANCED_HTML_EN = """
+<h2 style="margin-top:0">Advanced Features</h2>
+
+<h3>SVG Text Groups</h3>
+<p>When using SVG cells, you can batch-edit text elements. 
+Go to <b>View → SVG Text Groups…</b> to open the inspector. 
+Group text elements across different cells to sync their font size and content.</p>
+
+<h3>Size Groups</h3>
+<p>Synchronize the dimensions of multiple cells or PiPs. 
+In the Inspector, assign a <b>Size Group</b> to selected items. 
+Changing the width or height of one member will automatically update all others in the group.</p>
+
+<h3>Layer Tree</h3>
+<p>Use the <b>Layers</b> panel on the left to see the hierarchical structure of your project. 
+You can select, hide, or reorder elements easily from here.</p>
+"""
+
+_ADVANCED_HTML_ZH = """
+<h2 style="margin-top:0">进阶功能</h2>
+
+<h3>SVG 文字组</h3>
+<p>使用 SVG 单元格时，您可以批量编辑文字元素。
+通过 <b>视图 → SVG 文字组…</b> 打开检查器。跨不同单元格对文字元素进行分组，以同步它们的字号和内容。</p>
+
+<h3>尺寸组</h3>
+<p>同步多个单元格或子图的尺寸。
+在检查器中为选中项分配<b>尺寸组</b>。更改其中一个成员的宽度或高度将自动更新组内所有其他成员。</p>
+
+<h3>图层树</h3>
+<p>使用左侧的<b>图层</b>面板查看项目的层级结构。
+您可以从这里轻松地选择、隐藏或重新排序元素。</p>
 """
 
 
@@ -434,6 +497,7 @@ class HelpDialog(QDialog):
         tabs.addTab(_scroll_page(_html(_CELLS_HTML_EN, _CELLS_HTML_ZH)),                    tr("help_tab_cells"))
         tabs.addTab(_scroll_page(_html(_LABELS_HTML_EN, _LABELS_HTML_ZH)),                  tr("help_tab_labels"))
         tabs.addTab(_scroll_page(_html(_EXPORT_HTML_EN, _EXPORT_HTML_ZH)),                  tr("help_tab_export"))
+        tabs.addTab(_scroll_page(_html(_ADVANCED_HTML_EN, _ADVANCED_HTML_ZH)),              tr("help_tab_advanced"))
         tabs.addTab(_shortcuts_page(),                                                       tr("help_tab_shortcuts"))
         root.addWidget(tabs)
 

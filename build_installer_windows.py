@@ -207,6 +207,40 @@ def main() -> int:
     print(f"PyInstaller OK: {dist_dir}")
 
     # ------------------------------------------------------------------ #
+    # Step 1b – Remove DLLs that shadow incompatible system copies         #
+    # ------------------------------------------------------------------ #
+    # PyInstaller's dependency scanner picks up DLLs from the conda env
+    # that shadow the system copies with ABI-incompatible versions,
+    # causing Qt6Core.dll to fail with ERROR_PROC_NOT_FOUND (WinError 127).
+    #
+    # Offenders:
+    #  - icuuc.dll / icudt*.dll / icuin.dll — PyInstaller finds a full ICU
+    #    (2.7 MB) from conda, but the PyQt6-Qt6 pip wheel was built against
+    #    Windows' built-in ICU stub (~37 KB in System32).  ABI mismatch.
+    #  - ucrtbase.dll / api-ms-win-* — can be from an older Windows SDK
+    #    than what Qt6 was compiled against.  Qt6 requires Win10+ which
+    #    always ships a current UCRT and resolves api-ms-win-* via the
+    #    API-set schema.
+    #
+    # Fix: remove them so the OS uses the correct system copies.
+
+    internal_dir = dist_dir / "_internal"
+
+    removed = 0
+    for p in internal_dir.iterdir():
+        name_lower = p.name.lower()
+        if (
+            name_lower.startswith("api-ms-win-")
+            or name_lower == "ucrtbase.dll"
+            or name_lower.startswith("icu")  # icuuc.dll, icudt*.dll, icuin.dll
+        ):
+            p.unlink()
+            print(f"  Removed: {p.name}")
+            removed += 1
+    print(f"Removed {removed} rogue/stale DLL(s) from _internal.")
+
+
+    # ------------------------------------------------------------------ #
     # Step 2 – Generate Inno Setup script and compile                     #
     # ------------------------------------------------------------------ #
 
@@ -264,9 +298,17 @@ def main() -> int:
         Name: "portuguese"; MessagesFile: "compiler:Languages\\BrazilianPortuguese.isl"
         Name: "russian";    MessagesFile: "compiler:Languages\\Russian.isl"
 
+        [CustomMessages]
+        english.AssocDescription=Associate .figlayout and .figpack files with ImageLayoutManager
+        english.AssocGroupDescription=File associations:
+        chinesesimplified.AssocDescription=将 .figlayout 和 .figpack 文件关联至 ImageLayoutManager
+        chinesesimplified.AssocGroupDescription=文件关联：
+        chinesetraditional.AssocDescription=將 .figlayout 和 .figpack 檔案關聯至 ImageLayoutManager
+        chinesetraditional.AssocGroupDescription=檔案關聯：
+
         [Tasks]
         Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"
-        Name: "assoc"; Description: "Associate .figlayout files with ImageLayoutManager"; GroupDescription: "File associations:"; Flags: checkedonce
+        Name: "assoc"; Description: "{{cm:AssocDescription}}"; GroupDescription: "{{cm:AssocGroupDescription}}"; Flags: checkedonce
 
         [Files]
         Source: "{dist_dir}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -278,21 +320,34 @@ def main() -> int:
 
         [Registry]
         ; .figlayout extension → ProgID
-        Root: HKCR; Subkey: ".figlayout";                                      ValueType: string; ValueName: "";              ValueData: "FigLayout.Document"; Flags: uninsdeletevalue; Tasks: assoc
-        Root: HKCR; Subkey: ".figlayout";                                      ValueType: string; ValueName: "Content Type";  ValueData: "application/x-figlayout"; Tasks: assoc
+        Root: HKCR; Subkey: ".figlayout";                                          ValueType: string; ValueName: "";                ValueData: "FigLayout.Document"; Flags: uninsdeletevalue; Tasks: assoc
+        Root: HKCR; Subkey: ".figlayout";                                          ValueType: string; ValueName: "Content Type";    ValueData: "application/x-figlayout"; Tasks: assoc
 
-        ; ProgID definition
-        Root: HKCR; Subkey: "FigLayout.Document";                              ValueType: string; ValueName: "";              ValueData: "Academic Figure Layout File"; Flags: uninsdeletekey; Tasks: assoc
-        Root: HKCR; Subkey: "FigLayout.Document\\DefaultIcon";                 ValueType: string; ValueName: "";              ValueData: "{{app}}\\ImageLayoutManager.exe,0"; Tasks: assoc
-        Root: HKCR; Subkey: "FigLayout.Document\\shell\\open";                 ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Academic Figure Layout"; Tasks: assoc
-        Root: HKCR; Subkey: "FigLayout.Document\\shell\\open\\command";        ValueType: string; ValueName: "";              ValueData: \"\"\"{{app}}\\ImageLayoutManager.exe\"\" \"\"%1\"\"\"; Tasks: assoc
+        ; .figlayout ProgID
+        Root: HKCR; Subkey: "FigLayout.Document";                                  ValueType: string; ValueName: "";                ValueData: "Academic Figure Layout File"; Flags: uninsdeletekey; Tasks: assoc
+        Root: HKCR; Subkey: "FigLayout.Document\\DefaultIcon";                     ValueType: string; ValueName: "";                ValueData: \"{{app}}\\ImageLayoutManager.exe,0\"; Tasks: assoc
+        Root: HKCR; Subkey: "FigLayout.Document\\shell\\open";                     ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Academic Figure Layout"; Tasks: assoc
+        Root: HKCR; Subkey: "FigLayout.Document\\shell\\open\\command";            ValueType: string; ValueName: "";                ValueData: \"\"\"{{app}}\\ImageLayoutManager.exe\"\" \"\"%1\"\"\"; Tasks: assoc
+
+        ; .figpack extension → ProgID
+        Root: HKCR; Subkey: ".figpack";                                            ValueType: string; ValueName: "";                ValueData: "FigPack.Document"; Flags: uninsdeletevalue; Tasks: assoc
+        Root: HKCR; Subkey: ".figpack";                                            ValueType: string; ValueName: "Content Type";    ValueData: "application/x-figpack"; Tasks: assoc
+
+        ; .figpack ProgID
+        Root: HKCR; Subkey: "FigPack.Document";                                    ValueType: string; ValueName: "";                ValueData: "Academic Figure Bundle"; Flags: uninsdeletekey; Tasks: assoc
+        ; NOTE: PyInstaller --onedir places extra files under _internal\, so the
+        ; icon lives at {{app}}\\_internal\\assets\\icon_figpack.ico, not {{app}}\\assets\\.
+        Root: HKCR; Subkey: "FigPack.Document\\DefaultIcon";                       ValueType: string; ValueName: "";                ValueData: \"{{app}}\\_internal\\assets\\icon_figpack.ico\"; Tasks: assoc
+        Root: HKCR; Subkey: "FigPack.Document\\shell\\open";                       ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Academic Figure Layout"; Tasks: assoc
+        Root: HKCR; Subkey: "FigPack.Document\\shell\\open\\command";              ValueType: string; ValueName: "";                ValueData: \"\"\"{{app}}\\ImageLayoutManager.exe\"\" \"\"%1\"\"\"; Tasks: assoc
 
         ; App Capabilities (powers the "Open with" dialog and Default Programs)
-        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager";                    ValueType: string; ValueName: "";              ValueData: "Academic Figure Layout"; Flags: uninsdeletekey
-        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities";      ValueType: string; ValueName: "ApplicationName"; ValueData: "Academic Figure Layout"
-        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities";      ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Multi-panel academic figure editor"
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager";                        ValueType: string; ValueName: "";                ValueData: "Academic Figure Layout"; Flags: uninsdeletekey
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities";          ValueType: string; ValueName: "ApplicationName"; ValueData: "Academic Figure Layout"
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities";          ValueType: string; ValueName: "ApplicationDescription"; ValueData: "Multi-panel academic figure editor"
         Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities\\FileAssociations"; ValueType: string; ValueName: ".figlayout"; ValueData: "FigLayout.Document"
-        Root: HKLM; Subkey: "SOFTWARE\\RegisteredApplications";                ValueType: string; ValueName: "ImageLayoutManager"; ValueData: "SOFTWARE\\ImageLayoutManager\\Capabilities"; Flags: uninsdeletevalue
+        Root: HKLM; Subkey: "SOFTWARE\\ImageLayoutManager\\Capabilities\\FileAssociations"; ValueType: string; ValueName: ".figpack";   ValueData: "FigPack.Document"
+        Root: HKLM; Subkey: "SOFTWARE\\RegisteredApplications";                    ValueType: string; ValueName: "ImageLayoutManager"; ValueData: "SOFTWARE\\ImageLayoutManager\\Capabilities"; Flags: uninsdeletevalue
 
         [Run]
         Filename: "{{app}}\\ImageLayoutManager.exe"; Description: "{{cm:LaunchProgram,ImageLayoutManager}}"; Flags: nowait postinstall skipifsilent
@@ -306,7 +361,8 @@ def main() -> int:
         procedure CurStepChanged(CurStep: TSetupStep);
         begin
           if CurStep = ssPostInstall then
-            SHChangeNotify($08000000, $0000, 0, 0);
+            // SHCNE_ASSOCCHANGED = $08000000, SHCNF_DWORD = $1000 (items are DWORDs, not PIDLs)
+            SHChangeNotify($08000000, $1000, 0, 0);
         end;
     """)
 

@@ -222,6 +222,10 @@ class Cell:
     
     # Content
     image_path: Optional[str] = None
+    # Sticky original-source path: set once at first pack/import, never
+    # rewritten by save. Used by figpack to keep deterministic asset
+    # paths stable across pack→unpack→repack cycles. See plan.md §6.5.
+    original_source_path: Optional[str] = None
     
     # Layout/Style
     fit_mode: str = FitMode.CONTAIN.value
@@ -235,9 +239,6 @@ class Cell:
     
     # If it is a placeholder
     is_placeholder: bool = False
-
-    # Nested layout (sub-figure from another .figlayout file)
-    nested_layout_path: Optional[str] = None  # absolute path to .figlayout file
 
     # Sub-cell hierarchy
     children: List['Cell'] = field(default_factory=list)
@@ -300,6 +301,7 @@ class Cell:
             "row_index": self.row_index,
             "col_index": self.col_index,
             "image_path": self.image_path,
+            "original_source_path": self.original_source_path,
             "fit_mode": self.fit_mode,
             "rotation": self.rotation,
             "align_h": self.align_h,
@@ -334,7 +336,6 @@ class Cell:
             "crop_top": self.crop_top,
             "crop_right": self.crop_right,
             "crop_bottom": self.crop_bottom,
-            "nested_layout_path": self.nested_layout_path,
             "children": [c.to_dict() for c in self.children],
             "split_direction": self.split_direction,
             "split_ratios": self.split_ratios,
@@ -370,7 +371,6 @@ class Cell:
         payload.setdefault("override_height_mm", 0.0)
         payload.setdefault("size_group_id", None)
         payload.setdefault("z_index", 0)
-        payload.setdefault("nested_layout_path", None)
         payload.setdefault("split_direction", "none")
         payload.setdefault("split_ratios", [])
         payload.setdefault("crop_left", 0.0)
@@ -378,6 +378,10 @@ class Cell:
         payload.setdefault("crop_right", 1.0)
         payload.setdefault("crop_bottom", 1.0)
         
+        # Drop legacy keys from removed features so older project files
+        # still load on newer builds (nested layouts removed Apr 2026).
+        payload.pop("nested_layout_path", None)
+
         # Handle children separately (recursive deserialization)
         children_data = payload.pop("children", [])
         pip_items_data = payload.pop("pip_items", [])

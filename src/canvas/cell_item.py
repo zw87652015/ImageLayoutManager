@@ -418,10 +418,6 @@ class CellItem(QGraphicsRectItem):
         self.rotation = 0
         self.is_placeholder = False
         
-        # Nested layout
-        self.nested_layout_path = None
-        self._nested_pixmap = None  # cached thumbnail of nested layout
-
         # Label cell mode
         self.is_label_cell = False
         self.label_text = ""
@@ -731,14 +727,6 @@ class CellItem(QGraphicsRectItem):
         if was_moved:
             self._emit_freeform_geometry()
 
-    def mouseDoubleClickEvent(self, event):
-        if self.nested_layout_path and not self.is_label_cell:
-            scene = self.scene()
-            if scene and hasattr(scene, 'nested_layout_open_requested'):
-                scene.nested_layout_open_requested.emit(self.cell_id, self.nested_layout_path)
-                event.accept()
-                return
-        super().mouseDoubleClickEvent(event)
 
     def mousePressEvent(self, event):
         if self._in_crop_mode:
@@ -1420,11 +1408,9 @@ class CellItem(QGraphicsRectItem):
         if self.is_hovered:
             painter.fillRect(rect, self.hover_brush)
             
-        # Draw nested layout or image
+        # Draw image
         import os
-        if self.nested_layout_path:
-            self._draw_nested_layout(painter, rect)
-        elif self.image_path and not os.path.exists(self.image_path) and not self.is_placeholder:
+        if self.image_path and not os.path.exists(self.image_path) and not self.is_placeholder:
              self._draw_missing_file_icon(painter, rect)
         elif self._pixmap and not self._pixmap.isNull():
             self._draw_image(painter, rect)
@@ -1557,94 +1543,6 @@ class CellItem(QGraphicsRectItem):
             painter.drawText(dev_text_rect, h_align | Qt.AlignmentFlag.AlignVCenter, self.label_text)
             painter.restore()
             
-    def set_nested_layout(self, path):
-        """Set the nested layout path and generate a thumbnail."""
-        if path == self.nested_layout_path and self._nested_pixmap is not None:
-            return
-        self.nested_layout_path = path
-        self._nested_pixmap = None
-        if path:
-            self._generate_nested_thumbnail()
-        self.update()
-
-    def _generate_nested_thumbnail(self):
-        """Render the nested layout to a QPixmap thumbnail for canvas display."""
-        import os
-        if not self.nested_layout_path or not os.path.exists(self.nested_layout_path):
-            self._nested_pixmap = None
-            return
-        try:
-            from src.model.data_model import Project
-            from src.model.layout_engine import LayoutEngine
-            from src.export.image_exporter import ImageExporter
-
-            sub_project = Project.load_from_file(self.nested_layout_path)
-            # Render at a moderate resolution for preview (screen DPI)
-            preview_dpi = 150
-            orig_dpi = sub_project.dpi
-            sub_project.dpi = preview_dpi
-            qimage = ImageExporter.render_to_qimage(sub_project)
-            sub_project.dpi = orig_dpi
-            if qimage and not qimage.isNull():
-                self._nested_pixmap = QPixmap.fromImage(qimage)
-            else:
-                self._nested_pixmap = None
-        except Exception as e:
-            print(f"Failed to generate nested layout thumbnail: {e}")
-            self._nested_pixmap = None
-
-    def _draw_nested_layout(self, painter: QPainter, rect: QRectF):
-        """Draw the nested layout thumbnail inside the cell."""
-        content_rect = rect.adjusted(
-            self.padding[3], self.padding[0],
-            -self.padding[1], -self.padding[2]
-        )
-        if content_rect.width() <= 0 or content_rect.height() <= 0:
-            return
-
-        if self._nested_pixmap and not self._nested_pixmap.isNull():
-            pix_w = self._nested_pixmap.width()
-            pix_h = self._nested_pixmap.height()
-            ratio = min(content_rect.width() / pix_w, content_rect.height() / pix_h)
-            new_w = pix_w * ratio
-            new_h = pix_h * ratio
-            x = content_rect.left() + (content_rect.width() - new_w) / 2
-            y = content_rect.top() + (content_rect.height() - new_h) / 2
-            target = QRectF(x, y, new_w, new_h)
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            painter.drawPixmap(target.toRect(), self._nested_pixmap)
-        else:
-            # Fallback: draw a badge indicating nested layout
-            painter.setPen(QPen(QColor("#888888")))
-            painter.drawText(content_rect, Qt.AlignmentFlag.AlignCenter, "Nested Layout\n(not found)")
-
-        # Draw a small badge in the top-right corner
-        import os
-        badge_text = os.path.basename(self.nested_layout_path) if self.nested_layout_path else ""
-        if badge_text:
-            transform = painter.transform()
-            m11 = transform.m11()
-            badge_font = QFont("Arial")
-            badge_font.setPixelSize(max(1, int(2.5 * m11)))
-            dev_rect = transform.mapRect(rect)
-
-            painter.save()
-            painter.resetTransform()
-            painter.setFont(badge_font)
-
-            fm = painter.fontMetrics()
-            text_w = fm.horizontalAdvance(badge_text) + 6
-            text_h = fm.height() + 2
-            badge_rect = QRectF(
-                dev_rect.right() - text_w - 2,
-                dev_rect.top() + 2,
-                text_w, text_h
-            )
-            painter.fillRect(badge_rect, QColor(0, 0, 0, 140))
-            painter.setPen(QPen(QColor("#FFFFFF")))
-            painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, badge_text)
-            painter.restore()
-
     def _draw_missing_file_icon(self, painter: QPainter, rect: QRectF):
         # Draw red cross or "Missing" text
         painter.setPen(QPen(QColor("#FF4444"), 2))
@@ -1970,10 +1868,6 @@ class CellItem(QGraphicsRectItem):
         import os
         if self.is_label_cell:
             self.setToolTip(f"Label: {self.label_text}" if self.label_text else "Label Cell")
-            return
-        if self.nested_layout_path:
-            name = os.path.basename(self.nested_layout_path) if self.nested_layout_path else ""
-            self.setToolTip(f"Nested Layout: {name}")
             return
         if not self.image_path or self.is_placeholder:
             self.setToolTip("")

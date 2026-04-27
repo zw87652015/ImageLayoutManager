@@ -16,6 +16,7 @@ _T: dict[str, dict[str, str]] = {
     "action_open":          {"en": "Open",              "zh": "打开"},
     "action_save":          {"en": "Save",              "zh": "保存"},
     "action_save_as":       {"en": "Save As…",          "zh": "另存为…"},
+    "action_convert_to_bundle": {"en": "Convert to .figpack…", "zh": "转换为 .figpack…"},
     "action_import":        {"en": "Import Images…",    "zh": "导入图片…"},
     "action_open_grid":     {"en": "Open Images as Grid…", "zh": "以网格打开图片…"},
     "action_reload":        {"en": "Reload Images",     "zh": "重新加载图片"},
@@ -29,7 +30,7 @@ _T: dict[str, dict[str, str]] = {
     "lbl_label_placement":  {"en": "Placement",         "zh": "标注位置"},
     "lbl_label_col_width":  {"en": "Column Width",      "zh": "标注列宽"},
     "menu_label_placement": {"en": "All Labels Placement", "zh": "全部标注位置"},
-    "placement_in_cell":    {"en": "In-Cell",           "zh": "单元格内"},
+    "placement_in_cell":    {"en": "In-Cell",           "zh": "嵌入图片"},
     "placement_row_above":  {"en": "Row Above",         "zh": "上方行"},
     "placement_row_below":  {"en": "Row Below",         "zh": "下方行"},
     "placement_col_left":   {"en": "Column Left",       "zh": "左侧列"},
@@ -55,7 +56,7 @@ _T: dict[str, dict[str, str]] = {
         "en": "Drag on the page to select the export region. Press Esc to cancel.",
         "zh": "在页面上拖拽以选择导出区域。按 Esc 取消。"
     },
-    "action_bake":          {"en": "Convert Grid → Freeform", "zh": "切换至自由布局模式"},
+    "action_bake":          {"en": "Convert Grid → Freeform", "zh": "转换为自由布局"},
     "action_grid_mode":     {"en": "Switch to Grid Mode",     "zh": "切换至网格模式"},
     "action_bring_front":   {"en": "Bring to Front",    "zh": "置于顶层"},
     "action_send_back":     {"en": "Send to Back",      "zh": "置于底层"},
@@ -89,9 +90,11 @@ _T: dict[str, dict[str, str]] = {
     # ── Inspector section dividers ────────────────────────────────
     "sec_grid":             {"en": "<b>Grid Settings</b>",    "zh": "<b>网格设置</b>"},
     "sec_corner_labels":    {"en": "<b>Corner Labels</b>",    "zh": "<b>角标</b>"},
+    "sec_label_placement":  {"en": "<b>Label Placement</b>",  "zh": "<b>标注位置</b>"},
     "sec_layout":           {"en": "<b>Layout</b>",           "zh": "<b>布局</b>"},
     "sec_freeform":         {"en": "— Freeform Geometry —",   "zh": "— 自由布局尺寸 —"},
     "sec_grid_override":    {"en": "— Grid Size Override (0=Auto) —", "zh": "— 网格尺寸覆盖 (0=自动) —"},
+    "sec_size_group":       {"en": "— Size Group —",          "zh": "— 尺寸组 —"},
     "sec_padding":          {"en": "— Padding —",             "zh": "— 内边距 —"},
     "sec_scale_bar":        {"en": "— Scale Bar —",           "zh": "— 比例尺 —"},
 
@@ -116,6 +119,23 @@ _T: dict[str, dict[str, str]] = {
     "opt_row_left":         {"en": "left",                  "zh": "左"},
     "opt_row_center":       {"en": "center",                "zh": "居中"},
     "opt_row_right":        {"en": "right",                 "zh": "右"},
+    "opt_border_solid":     {"en": "solid",                 "zh": "实线"},
+    "opt_border_dashed":    {"en": "dashed",                "zh": "虚线"},
+
+    # ── Page Size Presets ──────────────────────────────────────────
+    "opt_page_custom":      {"en": "Custom",                "zh": "自定义"},
+    "opt_page_a4":          {"en": "A4 (210×297mm)",        "zh": "A4 (210×297mm)"},
+    "opt_page_letter":      {"en": "Letter (216×279mm)",    "zh": "信纸 (216×279mm)"},
+    "opt_page_single":      {"en": "Single Column (85×120mm)", "zh": "单栏 (85×120mm)"},
+    "opt_page_1_5":         {"en": "1.5 Column (114×160mm)", "zh": "1.5 栏 (114×160mm)"},
+    "opt_page_double":      {"en": "Double Column (178×240mm)", "zh": "双栏 (178×240mm)"},
+
+    # ── Placeholders & Special ─────────────────────────────────────
+    "placeholder_scale_bar_text": {"en": "Auto (e.g. 10 µm)", "zh": "自动 (例如 10 µm)"},
+    "placeholder_label_text":     {"en": "Label text",        "zh": "标注文字"},
+    "placeholder_col_ratios":     {"en": "e.g. 1,2,1 (equal if empty)", "zh": "例如 1,2,1 (为空则等分)"},
+    "special_auto":               {"en": "Auto",              "zh": "自动"},
+    "special_auto_ratio":         {"en": "Auto (use ratio)",  "zh": "自动 (使用比例)"},
 
     # ── Inspector misc labels ──────────────────────────────────────
     "no_selection":              {"en": "No Selection",             "zh": "未选中任何内容"},
@@ -148,29 +168,29 @@ _T: dict[str, dict[str, str]] = {
     "lbl_size":             {"en": "Size:",             "zh": "大小:"},
     "lbl_color":            {"en": "Color:",            "zh": "颜色:"},
     "lbl_cell_gap":         {"en": "Cell Gap:",         "zh": "单元格间距:"},
-    "lbl_fit_mode":         {"en": "Fit Mode:",         "zh": "填充模式:"},
+    "lbl_fit_mode":         {"en": "Fit Mode:",         "zh": "缩放模式:"},
     "lbl_rotation":         {"en": "Rotation:",         "zh": "旋转:"},
     "lbl_align_h":          {"en": "Align H:",          "zh": "水平对齐:"},
     "lbl_align_v":          {"en": "Align V:",          "zh": "垂直对齐:"},
     "lbl_alignment":        {"en": "Alignment:",        "zh": "对齐方式:"},
     "tip_align_tl":         {"en": "Top Left",          "zh": "左上"},
-    "tip_align_tc":         {"en": "Top Center",        "zh": "居中顶部"},
+    "tip_align_tc":         {"en": "Top Center",        "zh": "顶部居中"},
     "tip_align_tr":         {"en": "Top Right",         "zh": "右上"},
     "tip_align_ml":         {"en": "Middle Left",       "zh": "居中左侧"},
     "tip_align_mc":         {"en": "Center",            "zh": "居中"},
     "tip_align_mr":         {"en": "Middle Right",      "zh": "居中右侧"},
     "grp_scale_bar":        {"en": "Scale Bar Settings", "zh": "比例尺设置"},
     "tip_align_bl":         {"en": "Bottom Left",       "zh": "左下"},
-    "tip_align_bc":         {"en": "Bottom Center",     "zh": "居中底部"},
+    "tip_align_bc":         {"en": "Bottom Center",     "zh": "底部居中"},
     "tip_align_br":         {"en": "Bottom Right",      "zh": "右下"},
     "lbl_pos_x":            {"en": "Pos X (mm):",       "zh": "X坐标 (mm):"},
     "lbl_pos_y":            {"en": "Pos Y (mm):",       "zh": "Y坐标 (mm):"},
     "lbl_width_mm":         {"en": "Width (mm):",       "zh": "宽度 (mm):"},
     "lbl_height_mm":        {"en": "Height (mm):",      "zh": "高度 (mm):"},
     "lbl_pad_top":          {"en": "Pad Top (mm):",     "zh": "上内边距 (mm):"},
-    "lbl_pad_bottom":       {"en": "Pad Bottom:",       "zh": "下内边距:"},
-    "lbl_pad_left":         {"en": "Pad Left:",         "zh": "左内边距:"},
-    "lbl_pad_right":        {"en": "Pad Right:",        "zh": "右内边距:"},
+    "lbl_pad_bottom":       {"en": "Pad Bottom (mm):",  "zh": "下内边距 (mm):"},
+    "lbl_pad_left":         {"en": "Pad Left (mm):",    "zh": "左内边距 (mm):"},
+    "lbl_pad_right":        {"en": "Pad Right (mm):",   "zh": "右内边距 (mm):"},
     "lbl_corner_tl":        {"en": "Label TL:",         "zh": "角标 左上:"},
     "lbl_corner_tr":        {"en": "Label TR:",         "zh": "角标 右上:"},
     "lbl_corner_bl":        {"en": "Label BL:",         "zh": "角标 左下:"},
@@ -208,6 +228,7 @@ _T: dict[str, dict[str, str]] = {
     "help_tab_cells":       {"en": "Cells & Splitting", "zh": "单元格与分割"},
     "help_tab_labels":      {"en": "Labels & Text",     "zh": "标注与文字"},
     "help_tab_export":      {"en": "Export",            "zh": "导出"},
+    "help_tab_advanced":    {"en": "Advanced",          "zh": "进阶功能"},
     "help_tab_shortcuts":   {"en": "Shortcuts",         "zh": "快捷键"},
 
     # ── About dialog ─────────────────────────────────────────────
@@ -219,7 +240,7 @@ _T: dict[str, dict[str, str]] = {
     "about_website":        {"en": "Website",           "zh": "官方网站"},
     "about_download":       {"en": "Download",          "zh": "下载"},
     "status_update_available": {"en": "New version {tag} available — click to open About",
-                                 "zh": "新版本 {tag} 可用 — 点击打开「关于」以下载"},
+                                 "zh": "新版本 {tag} 可用 — 点击查看「关于」"},
     "status_update_tooltip":   {"en": "Open About dialog to download the latest version",
                                  "zh": "打开「关于」对话框下载最新版本"},
     "about_repository":     {"en": "Repository",        "zh": "代码仓库"},
@@ -227,6 +248,18 @@ _T: dict[str, dict[str, str]] = {
     "about_check_btn":      {"en": "Check for Updates", "zh": "检查更新"},
     "about_open_github":    {"en": "Open GitHub",       "zh": "打开 GitHub"},
     "about_close":          {"en": "Close",             "zh": "关闭"},
+
+    # ── Common Dialogs ───────────────────────────────────────────
+    "title_error":          {"en": "Error",             "zh": "错误"},
+    "title_info":           {"en": "Info",              "zh": "提示"},
+    "title_question":       {"en": "Question",          "zh": "询问"},
+    "btn_ok":               {"en": "OK",                "zh": "确定"},
+    "btn_cancel":           {"en": "Cancel",            "zh": "取消"},
+    "btn_close":            {"en": "Close",             "zh": "关闭"},
+    "btn_overwrite":        {"en": "Overwrite",         "zh": "覆盖"},
+    "btn_save_as":          {"en": "Save As…",          "zh": "另存为…"},
+    "title_success":        {"en": "Success",           "zh": "成功"},
+    "title_import":         {"en": "Import",            "zh": "导入"},
     "about_checking":       {"en": "Checking…",         "zh": "正在检查…"},
     "about_latest":         {"en": "✔ You are running the latest version.", "zh": "✔ 当前已是最新版本。"},
     "about_pre":            {"en": "✔ You are running a pre-release version.", "zh": "✔ 当前运行的是预发布版本。"},
@@ -242,10 +275,51 @@ _T: dict[str, dict[str, str]] = {
     # ── Export preview ────────────────────────────────────────────
     "action_preview_mode":     {"en": "Export Preview",     "zh": "导出预览"},
 
-    # ── History settings ──────────────────────────────────────────
+    # ── History settings (kept for back-compat; now lives in Preferences) ──
     "action_history_settings": {"en": "History Settings…",  "zh": "历史设置…"},
     "history_settings_title":  {"en": "History Settings",   "zh": "历史设置"},
     "history_settings_label":  {"en": "Max History Items:",  "zh": "最大历史步数:"},
+
+    # ── Preferences dialog ────────────────────────────────────────
+    "action_preferences":           {"en": "Preferences…",          "zh": "偏好设置…"},
+    "prefs_title":                  {"en": "Preferences",            "zh": "偏好设置"},
+    "prefs_tab_general":            {"en": "General",                "zh": "通用"},
+    "prefs_tab_files":              {"en": "Files & Editing",        "zh": "文件与编辑"},
+    "prefs_tab_bundles":            {"en": "Bundles (.figpack)",     "zh": "项目包 (.figpack)"},
+
+    # General tab
+    "prefs_language":               {"en": "Language:",              "zh": "语言:"},
+    "prefs_theme":                  {"en": "Theme:",                 "zh": "主题:"},
+    "prefs_theme_light":            {"en": "Light",                  "zh": "浅色"},
+    "prefs_theme_dark":             {"en": "Dark",                   "zh": "深色"},
+    "prefs_undo_limit":             {"en": "Max undo steps:",        "zh": "最大撤销步数:"},
+
+    # Files & Editing tab
+    "prefs_default_save_format":    {"en": "Default save format:",   "zh": "默认保存格式:"},
+    "prefs_fmt_figlayout":          {"en": ".figlayout (JSON, lightweight)", "zh": ".figlayout（JSON，轻量）"},
+    "prefs_fmt_figpack":            {"en": ".figpack (bundle, portable)",    "zh": ".figpack（项目包，包含素材）"},
+    "prefs_export_dir_policy":      {"en": "Export destination:",    "zh": "导出目录:"},
+    "prefs_export_dir_project":     {"en": "Same folder as project", "zh": "与项目文件同目录"},
+    "prefs_export_dir_last":        {"en": "Remember last used folder", "zh": "记住上次使用的目录"},
+    "prefs_export_dir_custom":      {"en": "Always use this folder:", "zh": "始终使用此目录:"},
+    "prefs_export_dir_browse":      {"en": "Browse…",                "zh": "浏览…"},
+    "prefs_hot_reload":             {"en": "Auto-reload changed images", "zh": "自动重新加载已更改的图片"},
+    "prefs_hot_reload_tip":         {"en": "When a source image is modified on disk, reload it on the canvas automatically.", "zh": "当源图片在磁盘上被修改时，自动在画布中重新加载。"},
+
+    # Bundles tab
+    "prefs_cache_location":         {"en": "Cache location:",        "zh": "缓存位置:"},
+    "prefs_cache_default":          {"en": "(system default)",       "zh": "（系统默认）"},
+    "prefs_cache_browse":           {"en": "Browse…",                "zh": "浏览…"},
+    "prefs_cache_reset":            {"en": "Reset to default",       "zh": "恢复默认"},
+    "prefs_cache_quota":            {"en": "Cache quota (GB):",      "zh": "缓存配额（GB）:"},
+    "prefs_watch_original":         {"en": "Watch original sources for bundles", "zh": "监视包项目的原始图片文件"},
+    "prefs_watch_original_tip":     {"en": "When an original source image is edited while a .figpack is open, reload it automatically.", "zh": "当 .figpack 打开时，若原始图片被编辑，自动重新加载。"},
+    "prefs_compress_assets":        {"en": "Compress assets (LZMA, slower save)", "zh": "压缩资产（LZMA，保存较慢）"},
+    "prefs_compress_assets_tip":    {"en": "Reduce bundle file size at the cost of slower save and open times.", "zh": "以较慢的保存/打开速度换取更小的包文件体积。"},
+    "prefs_open_cache_folder":      {"en": "Open Cache Folder",      "zh": "打开缓存文件夹"},
+    "prefs_clear_cache":            {"en": "Clear Cache Now",        "zh": "立即清除缓存"},
+    "prefs_clear_cache_confirm":    {"en": "Delete all unused figpack working directories?", "zh": "删除所有未使用的 figpack 工作目录？"},
+    "prefs_cache_cleared":          {"en": "Cleared {n} orphaned cache director{y}.", "zh": "已清除 {n} 个孤立缓存目录。"},
 
     # ── Status bar / misc ─────────────────────────────────────────
     "zoom_label":           {"en": "Zoom:",             "zh": "缩放:"},
@@ -254,8 +328,6 @@ _T: dict[str, dict[str, str]] = {
     # ── Cell context menu ─────────────────────────────────────────
     "ctx_delete_label":              {"en": "Delete Label",                    "zh": "删除标注"},
     "ctx_import_image":              {"en": "Import Image…",                   "zh": "导入图片…"},
-    "ctx_import_layout":             {"en": "Import Layout…",                  "zh": "导入布局…"},
-    "ctx_delete_layout":             {"en": "Delete Layout",                   "zh": "删除布局"},
     "ctx_labels":                    {"en": "Labels",                          "zh": "标注"},
     "ctx_delete_label_cell":         {"en": "Delete Label Cell",               "zh": "删除标注单元格"},
     "ctx_add_label_cell":            {"en": "Add Label Cell",                  "zh": "添加标注单元格"},
@@ -269,9 +341,9 @@ _T: dict[str, dict[str, str]] = {
     "ctx_corner_bottom_right":       {"en": "Bottom Right",                    "zh": "右下"},
     "ctx_delete_corner_label":       {"en": "Delete {name} Label",             "zh": "删除{name}角标"},
     "ctx_add_corner_label":          {"en": "Add {name} Label",                "zh": "添加{name}角标"},
-    "ctx_fit_mode":                  {"en": "Fit Mode",                        "zh": "填充模式"},
-    "ctx_fit_contain":               {"en": "Contain",                          "zh": "适应"},
-    "ctx_fit_cover":                 {"en": "Cover (Fill)",                     "zh": "覆盖（填充）"},
+    "ctx_fit_mode":                  {"en": "Fit Mode",                        "zh": "缩放模式"},
+    "ctx_fit_contain":               {"en": "Contain",                          "zh": "等比缩放 (包含)"},
+    "ctx_fit_cover":                 {"en": "Cover (Fill)",                     "zh": "等比缩放 (覆盖)"},
     "ctx_rotation":                  {"en": "Rotation",                        "zh": "旋转"},
     "ctx_enable_scale_bar":          {"en": "Enable Scale Bar",                "zh": "启用比例尺"},
     "ctx_disable_scale_bar":         {"en": "Disable Scale Bar",               "zh": "禁用比例尺"},
@@ -367,6 +439,46 @@ _T: dict[str, dict[str, str]] = {
     "svgtxt_remove_members_btn":     {"en": "Remove selected members",         "zh": "移除所选成员"},
     "svgtxt_confirm_delete_title":   {"en": "Delete Group",                    "zh": "删除组"},
     "svgtxt_confirm_delete_msg":     {"en": "Delete group \"{name}\"?",        "zh": "删除组 \"{name}\"？"},
+
+    # ── Sidecar assets dialog ──────────────────────────────────────
+    "msg_sidecar_title":            {"en": "Save sidecar assets?",          "zh": "保存附件资源？"},
+    "msg_sidecar_text":             {"en": "This project is currently backed by a .figpack cache.\n\n"
+                                           "Copy its assets into\n  {assets_dir}\n"
+                                           "so the saved .figlayout keeps working after the cache is "
+                                           "purged?\n\nChoosing 'Skip' will save image references that "
+                                           "break on next launch.",
+                                     "zh": "保存为 .figlayout 将仅保存排版和图片路径，源图不会被打包到项目文件中。\n\n"
+                                           "是否将图片复制到以下附件文件夹以防链接失效？\n"
+                                           "  {assets_dir}\n\n"
+                                           "选择“跳过”将仅保存路径引用，若缓存被清理，下次打开时图片将无法显示。"},
+    "btn_copy_assets":              {"en": "Copy assets",                   "zh": "复制并保存"},
+    "btn_skip_links":               {"en": "Skip (links only)",             "zh": "仅保存路径"},
+    "err_create_assets":            {"en": "Could not create assets folder:\n{e}", "zh": "无法创建资源文件夹：\n{e}"},
+
+    # ── External change dialog ────────────────────────────────────
+    "msg_bundle_changed_title":     {"en": "Bundle changed externally",     "zh": "项目包已在外部被修改"},
+    "msg_bundle_changed_text":      {"en": "This .figpack has been modified on disk since it "
+                                           "was opened.\n\nOverwriting will discard those "
+                                           "external changes.",
+                                     "zh": "该 .figpack 自打开以来已在磁盘上被修改。\n\n"
+                                           "覆盖将丢失这些外部更改。"},
+
+    # ── Cloud detection dialog ────────────────────────────────────
+    "msg_cloud_detected_title":     {"en": "Cloud-only files detected",     "zh": "检测到仅云端存储的文件"},
+    "msg_cloud_detected_text":      {"en": "{n} source file(s) live online (OneDrive / "
+                                           "iCloud / similar) and may take a long time to download:"
+                                           "\n\n{preview}{tail}\n\nHydrate now and bundle them, "
+                                           "skip them (mark as missing), or cancel the save?",
+                                     "zh": "{n} 个源文件仅存储在云端（OneDrive / iCloud 等），"
+                                           "下载可能需要较长时间：\n\n{preview}{tail}\n\n"
+                                           "现在下载并打包它们，还是跳过（标记为缺失），或取消保存？"},
+    "btn_hydrate_include":          {"en": "Hydrate & include",             "zh": "下载并包含"},
+    "btn_skip_missing":             {"en": "Skip (mark missing)",           "zh": "跳过 (标记为缺失)"},
+
+    # ── Grid / Placeholders ───────────────────────────────────────
+    "msg_no_placeholders_text":     {"en": "No more placeholder cells available. {n} images not imported.",
+                                     "zh": "没有更多占位单元格可用。有 {n} 张图片未被导入。"},
+    "dlg_open_images_grid_title":   {"en": "Open Images as Grid",           "zh": "以网格形式打开图片"},
 }
 
 

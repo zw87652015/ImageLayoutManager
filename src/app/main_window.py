@@ -7,9 +7,9 @@ from PyQt6.QtWidgets import (
     QToolBar, QPushButton, QToolButton, QSplitter, QSplitterHandle, QFileDialog,
     QMessageBox, QSpinBox, QLabel, QComboBox, QFrame, QGraphicsOpacityEffect,
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
-    QSizePolicy
+    QSizePolicy, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher
+from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack
 from PyQt6.QtWidgets import QUndoView
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
@@ -50,6 +50,29 @@ from src.app.commands import (
 )
 from src.model.data_model import PiPItem
 from src.utils.image_proxy import get_image_proxy
+from src.utils.figpack import (
+    BundleError, WorkingDir, cleanup_orphans, open_bundle, pack_project,
+    register_pre_delete_hook,
+)
+from src.utils.presence_lock import PresenceLock, PresenceLockError
+
+def _files_equal(a: str, b: str) -> bool:
+    """Cheap byte-equality check used when disambiguating sidecar
+    filename collisions: same size + same SHA-256 prefix on the first
+    1 MiB. Good enough to avoid renaming files that are actually the
+    same source picked up under two different cache paths."""
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        import hashlib
+        h1, h2 = hashlib.sha256(), hashlib.sha256()
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            h1.update(fa.read(1024 * 1024))
+            h2.update(fb.read(1024 * 1024))
+        return h1.digest() == h2.digest()
+    except OSError:
+        return False
+
 
 class _CollapseHandle(QSplitterHandle):
     """Splitter handle with a bookmark-style button to collapse/expand the side panel."""
@@ -143,12 +166,157 @@ class CollapsibleSplitter(QSplitter):
 
 class ProjectTabState:
     """Holds all per-tab state: project, undo stack, canvas scene/view, and file path."""
-    def __init__(self, project, path: Optional[str] = None):
+    def __init__(self, project, path: Optional[str] = None,
+                 bundle_workdir: Optional[WorkingDir] = None):
         self.project = project
         self.path = path
         self.undo_stack = QUndoStack()
         self.scene = CanvasScene()
         self.view = CanvasView(self.scene)
+        # Held lock + cache dir for an opened .figpack; None for plain
+        # .figlayout tabs. Released on tab close / app exit.
+        self.bundle_workdir: Optional[WorkingDir] = bundle_workdir
+        # (mtime, size) of the .figpack on disk at open time, used to
+        # detect external modification before a clobber-save (plan §3.5).
+        self.bundle_stat: Optional[Tuple[float, int]] = None
+        # Set to True when the bundle's cached asset bytes diverge from
+        # what's archived (e.g. user edited the original source file
+        # while the bundle is open and hot-reload copied new bytes into
+        # the cache). Disables the update_json_only fast path on the
+        # next save (plan §3.5).
+        self.assets_dirty: bool = False
+        # Presence lock held on the companion ~$filename file next to a
+        # .figlayout/.json; None for figpack tabs (those use bundle_workdir).
+        # Released in _remove_tab and when the path changes via Save As.
+        self.file_lock: Optional[PresenceLock] = None
+        # Tracks whether _connect_tab_signals has installed handlers on
+        # this tab's scene/view/undo_stack. Guards against the
+        # double-connect bug where a redundant _activate_tab call would
+        # pile a second copy of every per-tab signal on top of the
+        # existing one (visible symptom: insert-row, swap-cells etc.
+        # firing twice on a single click).
+        self.signals_connected: bool = False
+
+
+class _BundleOpenWorker(QThread):
+    """Runs figpack.open_bundle() off the UI thread.
+
+    Emits ``finished_ok(workdir, unpack_result)`` on success or
+    ``failed(message)`` on any exception. ``cancel()`` sets a flag
+    polled by open_bundle's per-chunk cancel callback.
+    """
+    finished_ok = pyqtSignal(object, object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, pack_path: str, parent=None):
+        super().__init__(parent)
+        self._pack_path = pack_path
+        self._cancel_flag = False
+
+    def cancel(self):
+        self._cancel_flag = True
+
+    def run(self):
+        try:
+            wd, ur = open_bundle(
+                self._pack_path,
+                cancel=lambda: self._cancel_flag,
+            )
+            self.finished_ok.emit(wd, ur)
+        except BaseException as e:  # noqa: BLE001 — funnel to UI
+            self.failed.emit(str(e))
+
+
+class _BundlePackWorker(QThread):
+    """Runs figpack.pack_project() off the UI thread.
+
+    Emits ``finished_ok()`` on success or ``failed(message)`` on any
+    exception. The preview renderer is *not* called here — Qt
+    rasterisation must stay on the UI thread, so the caller pre-renders
+    the JPEG bytes and passes them in via ``preview_bytes``.
+
+    ``cancel()`` toggles a flag polled by pack_project's per-chunk
+    callback.
+    """
+    finished_ok = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    # Emitted when the packer detects cloud-placeholder sources. The UI
+    # thread answers via :meth:`set_cloud_decision`. Worker thread blocks
+    # on a private QSemaphore until the decision arrives.
+    cloud_placeholders_detected = pyqtSignal(list)
+
+    def __init__(self, project, output_path: str, *,
+                 app_version: str,
+                 update_json_only: bool,
+                 preview_bytes: Optional[bytes],
+                 parent=None):
+        super().__init__(parent)
+        self._project = project
+        self._output_path = output_path
+        self._app_version = app_version
+        self._update_json_only = update_json_only
+        self._preview_bytes = preview_bytes
+        self._cancel_flag = False
+        self._dirty_assets_seen = False
+        from PyQt6.QtCore import QSemaphore
+        self._cloud_decision: str = "hydrate"
+        self._cloud_sem = QSemaphore(0)
+
+    def set_cloud_decision(self, decision: str) -> None:
+        """Called by the UI thread to answer ``cloud_placeholders_detected``.
+
+        *decision* must be ``"hydrate"`` / ``"skip"`` / ``"cancel"``.
+        """
+        self._cloud_decision = decision
+        self._cloud_sem.release()
+
+    def _resolve_cloud(self, paths: List[str]) -> str:
+        self.cloud_placeholders_detected.emit(list(paths))
+        self._cloud_sem.acquire()  # blocks worker thread
+        return self._cloud_decision
+
+    def cancel(self):
+        self._cancel_flag = True
+
+    @property
+    def dirty_assets_seen(self) -> bool:
+        """True if the worker fell back from fast→full path mid-run."""
+        return self._dirty_assets_seen
+
+    def run(self):
+        try:
+            renderer = (
+                (lambda _p: self._preview_bytes)
+                if self._preview_bytes is not None else None
+            )
+            try:
+                pack_project(
+                    self._project, self._output_path,
+                    app_version=self._app_version,
+                    update_json_only=self._update_json_only,
+                    preview_renderer=renderer,
+                    cloud_resolver=self._resolve_cloud,
+                    cancel=lambda: self._cancel_flag,
+                )
+            except BundleError as e:
+                if (
+                    self._update_json_only
+                    and e.code == "fastpath_dirty_assets"
+                ):
+                    self._dirty_assets_seen = True
+                    pack_project(
+                        self._project, self._output_path,
+                        app_version=self._app_version,
+                        preview_renderer=renderer,
+                        cloud_resolver=self._resolve_cloud,
+                        cancel=lambda: self._cancel_flag,
+                    )
+                else:
+                    raise
+            self.finished_ok.emit()
+        except BaseException as e:  # noqa: BLE001 — funnel to UI
+            self.failed.emit(str(e))
 
 
 class MainWindow(QMainWindow):
@@ -179,6 +347,11 @@ class MainWindow(QMainWindow):
         self._hot_reload_timer.setInterval(200)  # debounce bursts of save events
         self._hot_reload_timer.timeout.connect(self._apply_hot_reload)
         self._pending_reload_paths: set[str] = set()
+        # Maps {abs_original_source_path -> [abs_cache_path, …]} for the
+        # current project. Rebuilt by _sync_image_watcher; consulted by
+        # _apply_hot_reload to copy fresh bytes into the cache when an
+        # original source file changes (plan §3.5).
+        self._original_to_cache: Dict[str, List[str]] = {}
         self.view = None
         self._current_project_path = None
         self._current_theme = LIGHT
@@ -186,6 +359,23 @@ class MainWindow(QMainWindow):
         # Registry for toolbar actions whose icon is recoloured on theme
         # change. Populated by _setup_ui via _register_themed_action().
         self._themed_actions: dict[QAction, str] = {}
+
+        # Accept drag-and-drop of project files onto the window
+        # (plan §3.5: route .figpack / .figlayout to the open path).
+        self.setAcceptDrops(True)
+
+        # Plan §3.2.3 — sweep orphaned figpack working directories left
+        # behind by previous (possibly crashed) sessions. Runs once at
+        # app start; subsequent sweeps happen on every bundle open.
+        try:
+            cleanup_orphans()
+        except Exception:
+            pass
+
+        # Plan §3.2.5 — register a flush hook so the cache manager can
+        # close PIL / QImageReader handles inside a workdir before
+        # rmtree-ing it (Windows refuses to delete files held open).
+        register_pre_delete_hook(self._figpack_flush_proxy_for)
 
         # UI Components (tab_widget, layers panel, inspector created here)
         self._setup_ui()
@@ -355,10 +545,17 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self._on_save_project_as)
         self._act_save_as = save_as_action
 
+        # Phase 4 migration: Convert a plain .figlayout into a self-
+        # contained .figpack in one click (plan §4.2).
+        convert_to_bundle_action = QAction(tr("action_convert_to_bundle"), self)
+        convert_to_bundle_action.triggered.connect(self._on_convert_to_bundle)
+        self._act_convert_to_bundle = convert_to_bundle_action
+
         file_menu.addAction(new_action)
         file_menu.addAction(open_action)
         file_menu.addAction(save_action)
         file_menu.addAction(save_as_action)
+        file_menu.addAction(convert_to_bundle_action)
         file_menu.addSeparator()
 
         # File menu — image operations
@@ -400,6 +597,11 @@ class MainWindow(QMainWindow):
         export_png_action.triggered.connect(self._on_export_png)
         file_menu.addAction(export_png_action)
         self._act_export_png = export_png_action
+
+        export_svg_action = QAction(tr("action_export_svg"), self)
+        export_svg_action.triggered.connect(self._on_export_svg)
+        file_menu.addAction(export_svg_action)
+        self._act_export_svg = export_svg_action
 
         # Toolbar — file group (New, Open, Save only)
         self.toolbar.addAction(new_action)
@@ -449,6 +651,13 @@ class MainWindow(QMainWindow):
         auto_layout_action.triggered.connect(self._on_auto_layout)
         edit_menu.addAction(auto_layout_action)
         self._act_auto_layout = auto_layout_action
+
+        edit_menu.addSeparator()
+        pref_action = QAction(tr("action_preferences"), self)
+        pref_action.setShortcut(QKeySequence("Ctrl+,"))
+        pref_action.triggered.connect(self._on_preferences)
+        edit_menu.addAction(pref_action)
+        self._act_preferences = pref_action
 
         # ── Layout menu ── (inserted before View in menubar)
         self._layout_menu_ref = QMenu(tr("menu_layout"), self)
@@ -551,6 +760,7 @@ class MainWindow(QMainWindow):
         export_menu.addAction(export_tiff_action)
         export_menu.addAction(export_jpg_action)
         export_menu.addAction(export_png_action)
+        export_menu.addAction(export_svg_action)
         export_menu.addSeparator()
         export_menu.addAction(set_export_region_action)
         export_menu.addAction(clear_export_region_action)
@@ -565,11 +775,6 @@ class MainWindow(QMainWindow):
         self._act_preview_mode.triggered.connect(self._on_toggle_preview_mode)
         self._view_menu.addSeparator()
         self._view_menu.addAction(self._act_preview_mode)
-
-        # ── History settings ──
-        self._act_history_settings = QAction(tr("action_history_settings"), self)
-        self._act_history_settings.triggered.connect(self._on_history_settings)
-        self._view_menu.addAction(self._act_history_settings)
 
         # ── Tab actions ──
         self._act_new_tab = QAction(tr("action_new_tab"), self)
@@ -673,7 +878,18 @@ class MainWindow(QMainWindow):
         self.layers_panel.context_menu_requested.connect(self._on_layers_context_menu)
 
     def _connect_tab_signals(self, tab: ProjectTabState):
-        """Connect per-tab scene/view/undostack signals."""
+        """Connect per-tab scene/view/undostack signals.
+
+        Idempotent: if this tab's signals are already wired (per
+        ``tab.signals_connected``), return immediately. Without this
+        guard, any call site that reaches us twice (e.g. tab activation
+        racing with a manual ``_activate_tab``) silently doubles every
+        connection, causing actions like Insert Row / Swap Cells to
+        fire twice on a single click.
+        """
+        if tab.signals_connected:
+            return
+        tab.signals_connected = True
         tab.scene.cell_dropped.connect(self._on_cell_image_dropped)
         tab.scene.pip_image_dropped.connect(self._on_pip_image_dropped)
         tab.scene.cell_swapped.connect(self._on_cell_swapped)
@@ -687,7 +903,6 @@ class MainWindow(QMainWindow):
         tab.scene.cell_crop_committed.connect(self._on_cell_crop_committed)
         tab.scene.crop_mode_active.connect(self._on_crop_mode_active)
         tab.scene.empty_context_menu.connect(self._on_empty_context_menu)
-        tab.scene.nested_layout_open_requested.connect(self._on_open_nested_layout)
         tab.scene.insert_row_requested.connect(self._on_insert_row)
         tab.scene.insert_cell_requested.connect(self._on_insert_cell)
         tab.scene.cell_freeform_geometry_changed.connect(self._on_cell_freeform_geometry_changed)
@@ -710,7 +925,21 @@ class MainWindow(QMainWindow):
         tab.undo_stack.redoTextChanged.connect(self._on_redo_text_changed)
 
     def _disconnect_tab_signals(self, tab: ProjectTabState):
-        """Disconnect per-tab signals before switching away."""
+        """Disconnect per-tab signals before switching away.
+
+        Idempotent and resilient: bails out if signals were never
+        installed (``tab.signals_connected`` is False), and catches
+        the per-call ``TypeError`` PyQt6 raises when an individual
+        slot turns out not to be connected. The previous version
+        wrapped the entire block in a single ``except RuntimeError``
+        — PyQt6 raises ``TypeError`` instead, so any single failure
+        propagated and skipped the remaining disconnects, leaving
+        ghost connections that compounded into the double-trigger
+        bug on the next ``_connect_tab_signals``.
+        """
+        if not tab.signals_connected:
+            return
+        tab.signals_connected = False
         try:
             tab.scene.cell_dropped.disconnect(self._on_cell_image_dropped)
             tab.scene.pip_image_dropped.disconnect(self._on_pip_image_dropped)
@@ -725,7 +954,6 @@ class MainWindow(QMainWindow):
             tab.scene.cell_crop_committed.disconnect(self._on_cell_crop_committed)
             tab.scene.crop_mode_active.disconnect(self._on_crop_mode_active)
             tab.scene.empty_context_menu.disconnect(self._on_empty_context_menu)
-            tab.scene.nested_layout_open_requested.disconnect(self._on_open_nested_layout)
             tab.scene.insert_row_requested.disconnect(self._on_insert_row)
             tab.scene.insert_cell_requested.disconnect(self._on_insert_cell)
             tab.scene.cell_freeform_geometry_changed.disconnect(self._on_cell_freeform_geometry_changed)
@@ -746,8 +974,11 @@ class MainWindow(QMainWindow):
             tab.undo_stack.canRedoChanged.disconnect(self._redo_action.setEnabled)
             tab.undo_stack.undoTextChanged.disconnect(self._on_undo_text_changed)
             tab.undo_stack.redoTextChanged.disconnect(self._on_redo_text_changed)
-        except RuntimeError:
-            pass  # already disconnected
+        except (TypeError, RuntimeError):
+            # Best-effort: any partial-disconnect is fine since the
+            # ``signals_connected`` flag is already cleared and the
+            # next connect call will re-install everything cleanly.
+            pass
 
     # ------------------------------------------------------------------
     # Tab management
@@ -758,9 +989,10 @@ class MainWindow(QMainWindow):
             return os.path.basename(tab.path)
         return "Untitled"
 
-    def _create_tab(self, project: Project, path: Optional[str] = None) -> ProjectTabState:
+    def _create_tab(self, project: Project, path: Optional[str] = None,
+                     bundle_workdir: Optional[WorkingDir] = None) -> ProjectTabState:
         """Create a new tab, add it to the tab widget, and activate it."""
-        tab = ProjectTabState(project, path)
+        tab = ProjectTabState(project, path, bundle_workdir=bundle_workdir)
 
         # Apply GPU acceleration if available
         if HAS_OPENGL:
@@ -897,6 +1129,16 @@ class MainWindow(QMainWindow):
         # Only disconnect if this is the currently-connected (active) tab
         if idx == self._active_tab_idx:
             self._disconnect_tab_signals(tab)
+        # Release figpack working-dir lock so the cache cleanup pass can
+        # reap the extracted assets on the next launch (or right now if
+        # the user opens another .figpack).
+        if tab.bundle_workdir is not None:
+            try:
+                tab.bundle_workdir.release()
+            except Exception:
+                pass
+            tab.bundle_workdir = None
+        self._release_file_lock(tab)
         self._tabs.pop(idx)
 
         # Block QTabWidget.currentChanged during removeTab(): Qt picks a new
@@ -1042,25 +1284,12 @@ class MainWindow(QMainWindow):
             self.scene.set_preview_mode(checked)
 
     def _on_history_settings(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle(tr("history_settings_title"))
-        dlg.setFixedWidth(320)
-        layout = QFormLayout(dlg)
-        spin = QSpinBox()
-        spin.setRange(100, 1000)
-        spin.setSingleStep(50)
-        current_limit = int(self._settings.value("max_history", 200))
-        spin.setValue(current_limit if current_limit > 0 else 200)
-        layout.addRow(tr("history_settings_label"), spin)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept)
-        btns.rejected.connect(dlg.reject)
-        layout.addRow(btns)
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            limit = spin.value()
-            self._settings.setValue("max_history", limit)
-            for tab in self._tabs:
-                tab.undo_stack.setUndoLimit(limit)
+        self._on_preferences()
+
+    def _on_preferences(self):
+        from src.app.preferences_dialog import PreferencesDialog
+        dlg = PreferencesDialog(self, parent=self)
+        dlg.exec()
 
     def _on_undo_text_changed(self, text: str):
         self._undo_action.setText(tr("action_undo"))
@@ -1083,6 +1312,7 @@ class MainWindow(QMainWindow):
         self._act_open.setText(tr("action_open"))
         self._act_save.setText(tr("action_save"))
         self._act_save_as.setText(tr("action_save_as"))
+        self._act_convert_to_bundle.setText(tr("action_convert_to_bundle"))
         self._act_import.setText(tr("action_import"))
         self._act_open_grid.setText(tr("action_open_grid"))
         self._act_reload.setText(tr("action_reload"))
@@ -1091,6 +1321,8 @@ class MainWindow(QMainWindow):
         self._act_export_jpg.setText(tr("action_export_jpg"))
         if hasattr(self, '_act_export_png'):
             self._act_export_png.setText(tr("action_export_png"))
+        if hasattr(self, '_act_export_svg'):
+            self._act_export_svg.setText(tr("action_export_svg"))
         self._act_add_text.setText(tr("action_add_text"))
         self._act_delete_sel.setText(tr("action_delete_sel"))
         self._act_delete_img.setText(tr("action_delete_img"))
@@ -1116,7 +1348,7 @@ class MainWindow(QMainWindow):
 
         self._act_toggle_layers.setText(tr("action_toggle_layers"))
         self._act_preview_mode.setText(tr("action_preview_mode"))
-        self._act_history_settings.setText(tr("action_history_settings"))
+        self._act_preferences.setText(tr("action_preferences"))
         self._act_new_tab.setText(tr("action_new_tab"))
         self._act_close_tab.setText(tr("action_close_tab"))
         # Update left-panel tab labels
@@ -1300,17 +1532,39 @@ class MainWindow(QMainWindow):
         self._sync_placement_menu()
 
     def _collect_image_paths(self) -> list[str]:
-        """Return every on-disk image path referenced by the current project."""
+        """Return every on-disk image path referenced by the current project.
+
+        Also rebuilds ``self._original_to_cache``: for bundle-backed
+        cells we additionally watch ``original_source_path`` when it
+        exists on a mounted volume, so the user's intuition ("I edited
+        the original, the figure should refresh") still holds inside
+        opened bundles. See plan §3.5.
+        """
         import os
         paths: set[str] = set()
+        original_to_cache: Dict[str, List[str]] = {}
         if not self.project:
+            self._original_to_cache = {}
             return []
         for c in self.project.get_all_leaf_cells():
-            if c.image_path and os.path.isfile(c.image_path):
-                paths.add(c.image_path)
+            ip = c.image_path
+            if ip and os.path.isfile(ip):
+                paths.add(ip)
+                osp = getattr(c, 'original_source_path', None)
+                if (
+                    osp
+                    and os.path.normcase(os.path.abspath(osp))
+                       != os.path.normcase(os.path.abspath(ip))
+                    and os.path.isfile(osp)
+                ):
+                    paths.add(osp)
+                    original_to_cache.setdefault(
+                        os.path.abspath(osp), []
+                    ).append(os.path.abspath(ip))
             for pip in getattr(c, 'pip_items', []):
                 if getattr(pip, 'image_path', None) and os.path.isfile(pip.image_path):
                     paths.add(pip.image_path)
+        self._original_to_cache = original_to_cache
         return sorted(paths)
 
     def _sync_image_watcher(self):
@@ -1335,15 +1589,38 @@ class MainWindow(QMainWindow):
 
     def _apply_hot_reload(self):
         import os
+        import shutil
         from src.utils.image_proxy import get_image_proxy
         proxy = get_image_proxy()
         paths = list(self._pending_reload_paths)
         self._pending_reload_paths.clear()
+        marked_dirty = False
         for p in paths:
-            proxy.invalidate(p)
+            # If this path is an *original-source* path (bundle case),
+            # copy fresh bytes into every cache target before invalidating
+            # the proxy. The cache is what cells actually point at, so
+            # without this copy the canvas would re-load identical bytes.
+            cache_targets = self._original_to_cache.get(os.path.abspath(p), [])
+            if cache_targets:
+                marked_dirty = True
+                for t in cache_targets:
+                    try:
+                        shutil.copy2(p, t)
+                    except OSError:
+                        # Source vanished mid-copy or target locked by AV;
+                        # fall through — proxy.invalidate(t) will at least
+                        # force a fresh disk read on next paint.
+                        pass
+                    proxy.invalidate(t)
+            else:
+                proxy.invalidate(p)
             # Re-subscribe if atomic-save removed us from the watch list
             if os.path.isfile(p) and p not in self._image_watcher.files():
                 self._image_watcher.addPath(p)
+        if marked_dirty and 0 <= self._active_tab_idx < len(self._tabs):
+            # Disable the update_json_only fast path on the next save —
+            # cache bytes no longer match the archived bytes.
+            self._tabs[self._active_tab_idx].assets_dirty = True
         # Trigger a canvas refresh so proxy.get_pixmap re-loads from disk
         if self.scene is not None:
             self.scene.refresh_layout()
@@ -1365,6 +1642,48 @@ class MainWindow(QMainWindow):
         else:
             name = "Untitled"
         self.setWindowTitle(f"Academic Figure Layout v{self._app_version} - {name}[*]")
+        self._update_convert_action()
+
+    def _acquire_file_lock(self, tab, file_path: str) -> bool:
+        """Try to acquire a presence lock for file_path on tab.
+        Returns False and shows an error if already locked by another live instance.
+        """
+        # Release any previous lock (e.g. after Save As to a different path)
+        self._release_file_lock(tab)
+
+        lock = PresenceLock(file_path)
+        try:
+            lock.acquire()
+            tab.file_lock = lock
+            return True
+        except PresenceLockError as e:
+            QMessageBox.warning(
+                self, "File Already Open",
+                f"\"{os.path.basename(file_path)}\" is already open by {e.owner}.\n\n"
+                "Close it in the other instance before opening it here.",
+            )
+            return False
+        except Exception as e:
+            # Presence file could not be written (read-only location, network
+            # drive with no write permission, etc.). Log and proceed without a
+            # lock rather than silently swallowing the error.
+            import traceback
+            traceback.print_exc()
+            print(f"[presence_lock] warning: could not acquire lock for {file_path}: {e}")
+            tab.file_lock = None
+            return True  # let the file open; locking is best-effort
+
+    def _release_file_lock(self, tab) -> None:
+        if tab.file_lock is not None:
+            try:
+                tab.file_lock.release()
+            except Exception:
+                pass
+            tab.file_lock = None
+
+    def _update_convert_action(self):
+        path = self._current_project_path or ""
+        self._act_convert_to_bundle.setVisible(not path.lower().endswith(".figpack"))
 
     def _mark_dirty(self):
         if self.undo_stack.isClean():
@@ -1400,11 +1719,19 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    def _set_project(self, project: Project, path: Optional[str] = None):
+    def _set_project(self, project: Project, path: Optional[str] = None,
+                     bundle_workdir: Optional[WorkingDir] = None):
         """Replace the active tab's project (e.g. on open/new)."""
         tab = self._tabs[self._active_tab_idx]
+        # Release any previously held bundle lock before swapping.
+        if tab.bundle_workdir is not None and tab.bundle_workdir is not bundle_workdir:
+            try:
+                tab.bundle_workdir.release()
+            except Exception:
+                pass
         tab.project = project
         tab.path = path
+        tab.bundle_workdir = bundle_workdir
         self.project = project
         self._current_project_path = path
 
@@ -1421,16 +1748,12 @@ class MainWindow(QMainWindow):
         self.tab_widget.setTabText(self._active_tab_idx, self._tab_title(tab))
 
     def open_file_from_cli(self, path: str):
-        """Open a .figlayout file supplied as a command-line argument at startup.
+        """Open a file supplied as a command-line argument at startup.
 
         Called by main.py before the window is shown, so the initial blank tab
-        is still clean and untitled — we simply replace it.
+        is still clean and untitled — _open_path_dispatch reuses it.
         """
-        try:
-            project = Project.load_from_file(path)
-            self._set_project(project, path)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to open '{os.path.basename(path)}':\n{e}")
+        self._open_path_dispatch(path)
 
     def _build_project_from_images(self, paths):
         project = Project()
@@ -2605,24 +2928,12 @@ class MainWindow(QMainWindow):
         has_image = cell.image_path and not cell.is_placeholder
 
         # --- Import / Delete Image ---
-        has_nested = bool(cell.nested_layout_path)
-
         import_action = menu.addAction(tr("ctx_import_image"))
         import_action.triggered.connect(lambda: self._ctx_import_image(cell_id))
 
         if has_image:
             delete_img_action = menu.addAction(tr("action_delete_img"))
             delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
-
-        menu.addSeparator()
-
-        # --- Nested Layout ---
-        import_layout_action = menu.addAction(tr("ctx_import_layout"))
-        import_layout_action.triggered.connect(lambda: self._ctx_import_layout(cell_id))
-
-        if has_nested:
-            delete_layout_action = menu.addAction(tr("ctx_delete_layout"))
-            delete_layout_action.triggered.connect(lambda: self._ctx_delete_layout(cell_id))
 
         menu.addSeparator()
 
@@ -2853,7 +3164,7 @@ class MainWindow(QMainWindow):
     def _ctx_import_image(self, cell_id: str):
         """Context menu: import image into cell."""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Import Image", "",
+            self, tr("ctx_import_image"), "",
             "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf *.eps);;All Files (*)"
         )
         if path:
@@ -2869,45 +3180,6 @@ class MainWindow(QMainWindow):
             cmd = PropertyChangeCommand(
                 cell, {"image_path": None, "is_placeholder": True},
                 self._refresh_and_update, "Delete Image"
-            )
-            self.undo_stack.push(cmd)
-
-    def _ctx_import_layout(self, cell_id: str):
-        """Context menu: import a .figlayout file into a cell as a nested layout."""
-        from src.model.nested_layout_utils import detect_circular_reference
-
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import Layout", "",
-            "Figure Layout (*.figlayout);;All Files (*)"
-        )
-        if not path:
-            return
-
-        # Circular reference check
-        parent_path = self._current_project_path
-        if parent_path and detect_circular_reference(parent_path, path):
-            QMessageBox.warning(
-                self, "Circular Reference",
-                "Cannot import this layout: it would create a circular reference "
-                "(the selected file already references this project directly or indirectly)."
-            )
-            return
-
-        cell = self.project.find_cell_by_id(cell_id)
-        if cell:
-            cmd = PropertyChangeCommand(
-                cell, {"nested_layout_path": path},
-                self._refresh_and_update, "Import Layout"
-            )
-            self.undo_stack.push(cmd)
-
-    def _ctx_delete_layout(self, cell_id: str):
-        """Context menu: remove the nested layout from a cell."""
-        cell = self.project.find_cell_by_id(cell_id)
-        if cell and cell.nested_layout_path:
-            cmd = PropertyChangeCommand(
-                cell, {"nested_layout_path": None},
-                self._refresh_and_update, "Delete Layout"
             )
             self.undo_stack.push(cmd)
 
@@ -3262,10 +3534,25 @@ class MainWindow(QMainWindow):
         ]
 
     def _get_export_default_dir(self) -> str:
-        """Return directory of current project file, or empty string if none."""
+        """Return the default directory for export dialogs per user preference."""
+        policy = self._settings.value("export_dir_policy", "project")
+        if policy == "custom":
+            custom = self._settings.value("export_dir_custom", "").strip()
+            if custom and os.path.isdir(custom):
+                return custom
+        if policy == "last":
+            last = self._settings.value("export_dir_last", "").strip()
+            if last and os.path.isdir(last):
+                return last
+        # "project" or fallback
         if self._current_project_path:
             return os.path.dirname(self._current_project_path)
         return ""
+
+    def _remember_export_dir(self, path: str) -> None:
+        """After a successful export, persist the directory for 'last used' policy."""
+        if self._settings.value("export_dir_policy", "project") == "last":
+            self._settings.setValue("export_dir_last", os.path.dirname(path))
 
     def _on_export_pdf(self):
         default_dir = self._get_export_default_dir()
@@ -3345,6 +3632,16 @@ class MainWindow(QMainWindow):
             ImageExporter.export(self.project, path, "JPG")
             QMessageBox.information(self, "Export", f"Exported to {path}")
 
+    def _on_export_svg(self):
+        from src.export.svg_exporter import SvgExporter
+        default_dir = self._get_export_default_dir()
+        path, _ = QFileDialog.getSaveFileName(self, "Export SVG", default_dir, "SVG Files (*.svg)")
+        if path:
+            if not path.lower().endswith('.svg'):
+                path += '.svg'
+            SvgExporter.export(self.project, path)
+            QMessageBox.information(self, "Export", f"Exported to {path}")
+
     def _on_show_svg_text_groups(self):
         """Open (or raise) the SVG Text Groups management panel."""
         if self._svg_text_groups_panel is None or not self._svg_text_groups_panel.isVisible():
@@ -3397,33 +3694,6 @@ class MainWindow(QMainWindow):
         dlg = HelpDialog(self)
         dlg.exec()
 
-    def _on_open_nested_layout(self, cell_id: str, figlayout_path: str):
-        """Open a nested layout in a separate editor window."""
-        import os
-        if not os.path.exists(figlayout_path):
-            QMessageBox.warning(self, "Error", f"Layout file not found:\n{figlayout_path}")
-            return
-        try:
-            project = Project.load_from_file(figlayout_path)
-            child_window = MainWindow()
-            child_window._set_project(project, figlayout_path)
-            child_window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-            # When child saves, refresh the parent cell's thumbnail
-            child_window._parent_cell_id = cell_id
-            child_window._parent_window = self
-            original_save = child_window._save_project_to_path
-
-            def _save_and_refresh(path):
-                result = original_save(path)
-                if result:
-                    self._refresh_and_update()
-                return result
-
-            child_window._save_project_to_path = _save_and_refresh
-            child_window.show()
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to open nested layout: {e}")
-
     def closeEvent(self, event):
         # Check every tab for unsaved changes
         for i, tab in enumerate(self._tabs):
@@ -3442,6 +3712,16 @@ class MainWindow(QMainWindow):
             get_image_proxy().shutdown()
         except Exception:
             pass
+        # Release every figpack working dir so the cache cleanup pass
+        # can reap them on the next launch.
+        for tab in self._tabs:
+            if tab.bundle_workdir is not None:
+                try:
+                    tab.bundle_workdir.release()
+                except Exception:
+                    pass
+                tab.bundle_workdir = None
+            self._release_file_lock(tab)
         super().closeEvent(event)
 
     def _on_new_project(self):
@@ -3456,46 +3736,332 @@ class MainWindow(QMainWindow):
         self._set_project(project, None)
 
     def _on_open_project(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Open Project", "", "Figure Layout (*.figlayout);;JSON (*.json)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Project", "",
+            "All Supported (*.figpack *.figlayout *.json);;"
+            "Figure Bundle (*.figpack);;"
+            "Figure Layout (*.figlayout);;"
+            "JSON (*.json)",
+        )
         if not path:
             return
-        # If active tab is clean and untitled, reuse it; otherwise open a new tab
+        self._open_path_dispatch(path)
+
+    def _open_figpack(self, path: str):
+        """Extract a .figpack into the per-archive cache dir on a worker
+        thread, then hydrate a Project from the resulting JSON."""
+        dlg = QProgressDialog(
+            f"Opening {os.path.basename(path)}…", "Cancel", 0, 0, self,
+        )
+        dlg.setWindowTitle("Opening figpack")
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+
+        worker = _BundleOpenWorker(path, parent=self)
+        result: dict = {}
+
+        def on_ok(wd, ur):
+            result["wd"] = wd
+            result["ur"] = ur
+            dlg.close()
+
+        def on_fail(msg):
+            result["err"] = msg
+            dlg.close()
+
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_fail)
+        dlg.canceled.connect(worker.cancel)
+        worker.start()
+        dlg.exec()
+        worker.wait()
+
+        if "err" in result:
+            err_msg = result["err"]
+            if "lock already held" in err_msg:
+                QMessageBox.warning(
+                    self, "File Already Open",
+                    f"\"{os.path.basename(path)}\" is already open in another "
+                    "instance of ImageLayoutManager.\n\n"
+                    "Close it in the other instance before opening it here.",
+                )
+            else:
+                QMessageBox.warning(self, "Open failed",
+                                    f"Failed to open .figpack:\n{err_msg}")
+            return
+        if "wd" not in result:
+            return  # cancelled
+
+        wd: WorkingDir = result["wd"]
+        ur = result["ur"]
+        try:
+            project = Project.from_dict(ur.project_data)
+        except Exception as e:
+            wd.release()
+            QMessageBox.warning(
+                self, "Open failed", f"Bundle JSON could not be parsed:\n{e}",
+            )
+            return
+
         active_tab = self._tabs[self._active_tab_idx]
-        if active_tab.undo_stack.isClean() and active_tab.path is None:
-            try:
-                project = Project.load_from_file(path)
-                self._set_project(project, path)
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to open project: {e}")
+        if active_tab.undo_stack.isClean() and active_tab.path is None and active_tab.bundle_workdir is None:
+            self._set_project(project, path, bundle_workdir=wd)
+            target_tab = self._tabs[self._active_tab_idx]
         else:
+            target_tab = self._create_tab(project, path, bundle_workdir=wd)
+            self._check_image_resolution()
+        target_tab.bundle_stat = self._stat_bundle(path)
+
+    @staticmethod
+    def _figpack_flush_proxy_for(workdir: str) -> None:
+        """Pre-delete hook invoked by figpack's cache manager.
+
+        Drops every cached entry inside *workdir* from the image-proxy
+        so Windows can actually delete the files. See plan §3.2.5.
+        """
+        try:
+            proxy = get_image_proxy()
+        except Exception:
+            return
+        prefix = os.path.normcase(os.path.abspath(workdir))
+        # Snapshot the keys; invalidating mutates the cache dict.
+        try:
+            keys = list(getattr(proxy, "_cache", {}).keys())
+        except Exception:
+            keys = []
+        for key in keys:
             try:
-                project = Project.load_from_file(path)
-                self._create_tab(project, path)
-                self._check_image_resolution()
-            except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to open project: {e}")
+                if os.path.normcase(os.path.abspath(key)).startswith(prefix):
+                    proxy.invalidate(key)
+            except Exception:
+                pass
+
+    @staticmethod
+    def _figpack_preview_renderer(project) -> Optional[bytes]:
+        """Rasterise the project to a JPEG bytestring at ~1080p long-edge.
+
+        Used as the ``preview_renderer`` callback passed to
+        :func:`pack_project`. Best-effort — any failure returns ``None``
+        and the packer just omits ``preview.jpg``.
+        """
+        try:
+            from PyQt6.QtCore import QBuffer, QIODevice
+            from PyQt6.QtGui import QImage
+            qimg: QImage = ImageExporter.render_to_qimage(project)
+            if qimg is None or qimg.isNull():
+                return None
+            # Cap long edge at 1920 px so the preview never bloats
+            # the bundle. Aspect-preserving scale, smooth transform.
+            long_edge = max(qimg.width(), qimg.height())
+            target = 1920
+            if long_edge > target:
+                if qimg.width() >= qimg.height():
+                    qimg = qimg.scaledToWidth(
+                        target, Qt.TransformationMode.SmoothTransformation,
+                    )
+                else:
+                    qimg = qimg.scaledToHeight(
+                        target, Qt.TransformationMode.SmoothTransformation,
+                    )
+            buf = QBuffer()
+            buf.open(QIODevice.OpenModeFlag.WriteOnly)
+            ok = qimg.save(buf, "JPG", 88)
+            data = bytes(buf.data()) if ok else None
+            buf.close()
+            return data
+        except Exception:
+            return None
+
+    @staticmethod
+    def _stat_bundle(path: str) -> Optional[Tuple[float, int]]:
+        try:
+            st = os.stat(path)
+            return (st.st_mtime, st.st_size)
+        except OSError:
+            return None
+
+    # ------------------------------------------------------------------
+    # Drag-and-drop dispatch (plan §3.5)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_supported_drop_path(path: str) -> bool:
+        lp = path.lower()
+        return lp.endswith((".figpack", ".figlayout", ".json"))
+
+    def dragEnterEvent(self, event):
+        md = event.mimeData()
+        if md.hasUrls() and any(
+            self._is_supported_drop_path(u.toLocalFile())
+            for u in md.urls() if u.isLocalFile()
+        ):
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        # Same gate as enter — Qt requires this for some platforms.
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        md = event.mimeData()
+        if not md.hasUrls():
+            super().dropEvent(event)
+            return
+        paths = [
+            u.toLocalFile() for u in md.urls()
+            if u.isLocalFile() and self._is_supported_drop_path(u.toLocalFile())
+        ]
+        if not paths:
+            super().dropEvent(event)
+            return
+        event.acceptProposedAction()
+        # Open each dropped file in turn. Re-using the active blank
+        # tab is handled by the per-format opener.
+        for p in paths:
+            self._open_path_dispatch(p)
+
+    def _open_path_dispatch(self, path: str):
+        """Route *path* to the right opener based on extension."""
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "Open failed", f"File not found:\n{path}")
+            return
+
+        # Same-instance deduplication: switch to existing tab instead of opening twice.
+        norm = os.path.normcase(os.path.abspath(path))
+        for i, tab in enumerate(self._tabs):
+            if tab.path and os.path.normcase(os.path.abspath(tab.path)) == norm:
+                self._activate_tab(i)
+                return
+
+        if path.lower().endswith(".figpack"):
+            self._open_figpack(path)
+            return
+        try:
+            project = Project.load_from_file(path)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to open project: {e}")
+            return
+        active = self._tabs[self._active_tab_idx]
+        if active.undo_stack.isClean() and active.path is None and active.bundle_workdir is None:
+            if not self._acquire_file_lock(active, path):
+                return
+            self._set_project(project, path)
+        else:
+            self._create_tab(project, path)
+            new_tab = self._tabs[self._active_tab_idx]
+            if not self._acquire_file_lock(new_tab, path):
+                self._remove_tab(self._active_tab_idx)
+                return
+            self._check_image_resolution()
 
     def _on_save_project(self):
         if self._current_project_path:
             return self._save_project_to_path(self._current_project_path)
         return self._on_save_project_as()
 
-    def _on_save_project_as(self) -> bool:
-        path, _ = QFileDialog.getSaveFileName(self, "Save Project As", "", "Figure Layout (*.figlayout);;JSON (*.json)")
+    def _on_convert_to_bundle(self) -> bool:
+        """File → Convert to .figpack… (plan §4.2).
+
+        Asks for a target ``.figpack`` path, then runs the standard
+        save-as path with the format-change confirmation. Pre-existing
+        unsaved changes are committed first.
+        """
+        # Suggest <current_name>.figpack next to the current layout.
+        suggested = ""
+        if self._current_project_path:
+            base = os.path.splitext(self._current_project_path)[0]
+            suggested = base + ".figpack"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Convert to .figpack", suggested,
+            "Figure Bundle (*.figpack)",
+        )
         if not path:
             return False
-        return self._save_project_to_path(path)
+        if not path.lower().endswith(".figpack"):
+            path += ".figpack"
+
+        # Reuse the same format-change confirmation as Save As.
+        cur_ext = os.path.splitext(self._current_project_path or "")[1].lower()
+        if cur_ext != ".figpack" and not self.undo_stack.isClean():
+            ret = QMessageBox.question(
+                self, "Format change clears undo history",
+                "Converting to .figpack will discard the current undo / "
+                "redo history. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return False
+
+        ok = self._save_project_to_path(path)
+        if ok and cur_ext != ".figpack":
+            self.undo_stack.clear()
+        return ok
+
+    def _on_save_project_as(self) -> bool:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Project As", "",
+            "Figure Layout (*.figlayout);;"
+            "JSON (*.json);;"
+            "Figure Bundle (*.figpack)",
+        )
+        if not path:
+            return False
+
+        # Plan §3.5 — switching format invalidates undo entries that
+        # reference the old image paths (cache vs. sidecar vs. absolute).
+        # Warn once, then clear the stack on the user's confirmation.
+        cur = self._current_project_path or ""
+        cur_ext = os.path.splitext(cur)[1].lower()
+        new_ext = os.path.splitext(path)[1].lower()
+        format_change = (
+            cur_ext != new_ext
+            and cur_ext in (".figpack", ".figlayout", ".json")
+        )
+        if format_change and not self.undo_stack.isClean():
+            ret = QMessageBox.question(
+                self, "Format change clears undo history",
+                f"Saving as {new_ext} (was {cur_ext}) will rewrite all "
+                "image paths and discard the current undo / redo "
+                "history. Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return False
+
+        ok = self._save_project_to_path(path)
+        if ok and format_change:
+            self.undo_stack.clear()
+        return ok
 
     def _save_project_to_path(self, path: str) -> bool:
         try:
             self.project.name = os.path.splitext(os.path.basename(path))[0]
-            self.project.save_to_file(path)
+            if path.lower().endswith(".figpack"):
+                if not self._save_figpack(path):
+                    return False
+            else:
+                # Saving a sidecar .figlayout from an opened bundle would
+                # write cache paths into project.json — those break the
+                # next time the figpack cache is purged. Plan §3.5.
+                if not self._handle_bundle_to_figlayout(path):
+                    return False
+                self.project.save_to_file(path)
             self._current_project_path = path
             # Keep active tab's path in sync
             if 0 <= self._active_tab_idx < len(self._tabs):
-                self._tabs[self._active_tab_idx].path = path
+                tab = self._tabs[self._active_tab_idx]
+                tab.path = path
                 self.tab_widget.setTabText(self._active_tab_idx,
-                                           self._tab_title(self._tabs[self._active_tab_idx]))
+                                           self._tab_title(tab))
+                # Reacquire file lock for the new path (.figlayout only;
+                # figpack tabs use bundle_workdir for their lock).
+                if not path.lower().endswith(".figpack"):
+                    self._acquire_file_lock(tab, path)
             self.undo_stack.setClean()
             self.setWindowModified(False)
             self._update_window_title()
@@ -3503,6 +4069,220 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to save project: {e}")
             return False
+
+    def _handle_bundle_to_figlayout(self, layout_path: str) -> bool:
+        """When the active tab is bundle-backed and the user saves a
+        plain ``.figlayout``, prompt to copy assets into a sidecar
+        ``<name>_assets/`` folder. Returns False if the user cancels.
+        """
+        if not (0 <= self._active_tab_idx < len(self._tabs)):
+            return True
+        tab = self._tabs[self._active_tab_idx]
+        if tab.bundle_workdir is None:
+            return True  # plain .figlayout → .figlayout, nothing to do
+
+        base = os.path.splitext(os.path.basename(layout_path))[0]
+        assets_dir = os.path.join(
+            os.path.dirname(layout_path), f"{base}_assets",
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(tr("msg_sidecar_title"))
+        box.setText(
+            tr("msg_sidecar_text").format(assets_dir=assets_dir)
+        )
+        copy_btn = box.addButton(tr("btn_copy_assets"), QMessageBox.ButtonRole.AcceptRole)
+        skip_btn = box.addButton(tr("btn_skip_links"), QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is cancel_btn:
+            return False
+        if clicked is skip_btn:
+            return True
+
+        # Copy each unique cache file into assets_dir, then rewrite
+        # cell.image_path to point at the new sidecar location.
+        import shutil as _sh
+        try:
+            os.makedirs(assets_dir, exist_ok=True)
+        except OSError as e:
+            QMessageBox.warning(
+                self, tr("title_error"), tr("err_create_assets").format(e=e),
+            )
+            return False
+        copied: dict = {}
+        for cell in self.project.get_all_leaf_cells():
+            ip = getattr(cell, "image_path", None)
+            if not ip or not os.path.isfile(ip):
+                continue
+            src = os.path.abspath(ip)
+            if src in copied:
+                cell.image_path = copied[src]
+                continue
+            dst_name = os.path.basename(src)
+            dst = os.path.join(assets_dir, dst_name)
+            # Disambiguate name collisions from different cache subdirs.
+            stem, ext = os.path.splitext(dst_name)
+            i = 1
+            while os.path.exists(dst) and not _files_equal(src, dst):
+                dst = os.path.join(assets_dir, f"{stem}_{i}{ext}")
+                i += 1
+            try:
+                _sh.copy2(src, dst)
+            except OSError as e:
+                QMessageBox.warning(
+                    self, "Error", f"Failed to copy {dst_name}:\n{e}",
+                )
+                return False
+            copied[src] = dst
+            cell.image_path = dst
+        return True
+
+    def _save_figpack(self, path: str) -> bool:
+        """Save the current project as a .figpack.
+
+        If the active tab was opened from a bundle whose path matches
+        *path*, attempt the ``update_json_only`` fast path first. On
+        ``fastpath_dirty_assets`` we transparently fall back to a full
+        repack so the user never sees the precondition error.
+
+        Before clobbering an opened bundle we re-stat the file and
+        compare against ``tab.bundle_stat`` captured at open time
+        (plan §3.5). If the file was touched out-of-process (another
+        ILM instance, a sync client, a backup tool), we prompt the
+        user rather than silently overwriting.
+        """
+        tab = self._tabs[self._active_tab_idx] if 0 <= self._active_tab_idx < len(self._tabs) else None
+        existing = (
+            tab is not None
+            and tab.bundle_workdir is not None
+            and os.path.exists(path)
+        )
+
+        if existing and tab.bundle_stat is not None and os.path.normcase(
+            os.path.abspath(path)
+        ) == os.path.normcase(os.path.abspath(tab.path or "")):
+            current = self._stat_bundle(path)
+            if current is not None and current != tab.bundle_stat:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle(tr("msg_bundle_changed_title"))
+                box.setText(tr("msg_bundle_changed_text"))
+                overwrite = box.addButton(tr("btn_overwrite"), QMessageBox.ButtonRole.DestructiveRole)
+                save_as = box.addButton(tr("btn_save_as"), QMessageBox.ButtonRole.ActionRole)
+                cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+                box.exec()
+                clicked = box.clickedButton()
+                if clicked is cancel:
+                    return False
+                if clicked is save_as:
+                    return self._on_save_project_as()
+                # else: fall through to overwrite
+
+        # Skip fast path entirely when hot-reload has copied new bytes
+        # into the cache; the archive's bytes would otherwise diverge
+        # silently from what the canvas shows.
+        try_fastpath = existing and not (tab is not None and tab.assets_dirty)
+
+        # Pre-render preview on the UI thread (Qt rasterisation can't
+        # cross threads); pass bytes into the worker so the actual zip
+        # write happens off-thread (plan §6.7).
+        preview_bytes = self._figpack_preview_renderer(self.project)
+
+        ok = self._run_pack_worker(
+            output_path=path,
+            update_json_only=try_fastpath,
+            preview_bytes=preview_bytes,
+        )
+
+        # Either result path: refresh the captured stat so the next
+        # external-modification check measures from this save, and
+        # clear the dirty flag on success.
+        if tab is not None:
+            tab.bundle_stat = self._stat_bundle(path)
+            if ok:
+                tab.assets_dirty = False
+        return ok
+
+    def _run_pack_worker(
+        self,
+        *,
+        output_path: str,
+        update_json_only: bool,
+        preview_bytes: Optional[bytes],
+    ) -> bool:
+        """Run a :class:`_BundlePackWorker` behind a modal progress
+        dialog with Cancel. Returns True on success, False on cancel
+        or error (after surfacing a message to the user)."""
+        dlg = QProgressDialog(
+            f"Saving {os.path.basename(output_path)}…", "Cancel", 0, 0, self,
+        )
+        dlg.setWindowTitle("Saving figpack")
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+
+        worker = _BundlePackWorker(
+            self.project, output_path,
+            app_version=self._app_version,
+            update_json_only=update_json_only,
+            preview_bytes=preview_bytes,
+            parent=self,
+        )
+        result: dict = {}
+
+        def on_ok():
+            result["ok"] = True
+            dlg.close()
+
+        def on_fail(msg: str):
+            result["err"] = msg
+            dlg.close()
+
+        def on_cloud(paths: list):
+            # Plan §3.1.6 — surface cloud placeholders so the user
+            # consciously chooses to hydrate, skip, or abort.
+            preview = "\n".join(f"• {os.path.basename(p)}" for p in paths[:8])
+            tail = "" if len(paths) <= 8 else f"\n…and {len(paths) - 8} more"
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle(tr("msg_cloud_detected_title"))
+            box.setText(
+                tr("msg_cloud_detected_text").format(
+                    n=len(paths), preview=preview, tail=tail
+                )
+            )
+            hydrate = box.addButton(tr("btn_hydrate_include"), QMessageBox.ButtonRole.AcceptRole)
+            skip = box.addButton(tr("btn_skip_missing"), QMessageBox.ButtonRole.DestructiveRole)
+            cancelb = box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is hydrate:
+                worker.set_cloud_decision("hydrate")
+            elif clicked is skip:
+                worker.set_cloud_decision("skip")
+            else:
+                worker.set_cloud_decision("cancel")
+
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_fail)
+        worker.cloud_placeholders_detected.connect(on_cloud)
+        dlg.canceled.connect(worker.cancel)
+        worker.start()
+        dlg.exec()
+        worker.wait()
+
+        if "err" in result:
+            QMessageBox.warning(
+                self, "Save failed",
+                f"Failed to save .figpack:\n{result['err']}",
+            )
+            return False
+        if not result.get("ok"):
+            return False
+        return True
 
     def _on_import_images(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -3525,8 +4305,8 @@ class MainWindow(QMainWindow):
                     # No more placeholders
                     QMessageBox.information(
                         self,
-                        "Import",
-                        f"No more placeholder cells available. {len(paths) - paths.index(file_path)} images not imported."
+                        tr("title_import"),
+                        tr("msg_no_placeholders_text").format(n=len(paths) - paths.index(file_path))
                     )
                     break
 
@@ -3536,7 +4316,7 @@ class MainWindow(QMainWindow):
 
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "Open Images as Grid",
+            tr("dlg_open_images_grid_title"),
             "",
             "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf *.eps);;All Files (*)",
         )
@@ -3555,11 +4335,5 @@ class MainWindow(QMainWindow):
         self._refresh_and_update()
 
     def _on_project_file_dropped(self, file_path: str):
-        """Handle drag and drop of .figlayout — opens in a new tab."""
-        try:
-            project = Project.load_from_file(file_path)
-            self._create_tab(project, file_path)
-            self._check_image_resolution()
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Error", f"Failed to open project: {e}")
+        """Handle drag and drop of project files — routes to the correct opener."""
+        self._open_path_dispatch(file_path)
