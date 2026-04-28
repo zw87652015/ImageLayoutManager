@@ -743,17 +743,23 @@ class DropImageCommand(QUndoCommand):
         self.new_path = new_path
         self.old_path = cell.image_path
         self.old_is_placeholder = cell.is_placeholder
+        # Preserve the old sticky path so undo can restore it exactly.
+        # On redo we clear it so pack_project treats the new file as a
+        # genuinely new asset rather than re-using the old archive entry.
+        self.old_original_source_path = getattr(cell, "original_source_path", None)
         self.update_callback = update_callback
 
     def redo(self):
         self.cell.image_path = self.new_path
         self.cell.is_placeholder = False
+        self.cell.original_source_path = None
         if self.update_callback:
             self.update_callback()
 
     def undo(self):
         self.cell.image_path = self.old_path
         self.cell.is_placeholder = self.old_is_placeholder
+        self.cell.original_source_path = self.old_original_source_path
         if self.update_callback:
             self.update_callback()
 

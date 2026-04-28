@@ -3172,6 +3172,11 @@ class MainWindow(QMainWindow):
             if cell:
                 cmd = DropImageCommand(cell, path, self._refresh_and_update)
                 self.undo_stack.push(cmd)
+                # Force a full repack on the next save so the new asset
+                # bytes replace the old ones instead of the fast path
+                # streaming stale bytes from the existing archive.
+                if 0 <= self._active_tab_idx < len(self._tabs):
+                    self._tabs[self._active_tab_idx].assets_dirty = True
 
     def _ctx_delete_image(self, cell_id: str):
         """Context menu: delete image from cell."""
@@ -4301,6 +4306,8 @@ class MainWindow(QMainWindow):
                 if target_cell:
                     cmd = DropImageCommand(target_cell, file_path, self._refresh_and_update)
                     self.undo_stack.push(cmd)
+                    if 0 <= self._active_tab_idx < len(self._tabs):
+                        self._tabs[self._active_tab_idx].assets_dirty = True
                 else:
                     # No more placeholders
                     QMessageBox.information(
