@@ -154,7 +154,11 @@ def main() -> int:
         "PyQt6.QtSql",
         "PyQt6.QtTest",
         "PyQt6.QtXml",
-        "numpy",
+        # NOTE: 'numpy' is intentionally NOT excluded — matplotlib (used
+        # by src/utils/math_text.py for $...$ LaTeX rendering) hard-
+        # requires it. Excluding numpy was the root cause of mathtext
+        # silently failing in the frozen exe (every "$...$" rendered as
+        # literal text on the canvas).
         # Not used by this app — pulled in from conda env, ships a ~60 MB ffmpeg binary
         "imageio",
         "imageio_ffmpeg",
@@ -186,6 +190,16 @@ def main() -> int:
     args.append("--collect-data=PyQt6")
     args.append("--hidden-import=PyQt6.sip")
     args.append("--hidden-import=shiboken6")
+
+    # matplotlib is required for $...$ LaTeX rendering in TextItems.
+    # collect-data pulls in mpl-data/ (font metrics, STIX fonts,
+    # mathtext config); collect-submodules pulls in lazy-imported
+    # backends/parsers PyInstaller's static analysis misses.
+    args.append("--collect-data=matplotlib")
+    args.append("--collect-submodules=matplotlib")
+    args.append("--hidden-import=matplotlib.backends.backend_agg")
+    args.append("--hidden-import=matplotlib.backends.backend_pdf")
+    args.append("--hidden-import=matplotlib.backends.backend_svg")
 
     for mod in unused_qt_modules:
         args.append(f"--exclude-module={mod}")
@@ -239,6 +253,89 @@ def main() -> int:
             removed += 1
     print(f"Removed {removed} rogue/stale DLL(s) from _internal.")
 
+    # ------------------------------------------------------------------ #
+    # Step 1c – Build the CLI (imagelayout-cli.exe) and merge into        #
+    #           the GUI's --onedir so a single installer ships both.      #
+    # ------------------------------------------------------------------ #
+    # The CLI shares ~100% of its dependency tree with the GUI (same Qt,
+    # numpy, matplotlib, src/), so we build it into a sibling --onedir
+    # and then union its files into dist/ImageLayoutManager/. Same-named
+    # files are byte-identical because both builds use the same env, so
+    # the merge is safe and produces no duplication beyond the CLI's
+    # own bootloader stub (~ 1 MB).
+    cli_entry = project_root / "cli_main.py"
+    if not cli_entry.exists():
+        print(f"CLI entry not found, skipping CLI build: {cli_entry}")
+    else:
+        cli_args = [
+            "--noconfirm",
+            "--clean",
+            "--onedir",
+            "--console",            # CLI needs stdout/stderr
+            "--name=imagelayout-cli",
+            f"--paths={src_path}",
+            "--noupx",
+        ]
+        if assets_dir.exists():
+            cli_args.append(f"--add-data={assets_dir};assets")
+        for mod in used_qt_modules:
+            cli_args.append(f"--collect-submodules={mod}")
+        cli_args.append("--collect-binaries=PyQt6")
+        cli_args.append("--collect-data=PyQt6")
+        cli_args.append("--hidden-import=PyQt6.sip")
+        cli_args.append("--hidden-import=shiboken6")
+        cli_args.append("--collect-data=matplotlib")
+        cli_args.append("--collect-submodules=matplotlib")
+        cli_args.append("--hidden-import=matplotlib.backends.backend_agg")
+        cli_args.append("--hidden-import=matplotlib.backends.backend_pdf")
+        cli_args.append("--hidden-import=matplotlib.backends.backend_svg")
+        for mod in unused_qt_modules:
+            cli_args.append(f"--exclude-module={mod}")
+        cli_args.append(str(cli_entry))
+
+        print("\nBuilding CLI (imagelayout-cli.exe)...")
+        for a in cli_args:
+            print(f"  {a}")
+        pyinstaller_run(cli_args)
+
+        cli_dist = project_root / "dist" / "imagelayout-cli"
+        if not cli_dist.exists():
+            print(f"CLI build failed: {cli_dist} not found")
+            return 2
+
+        # Apply the same rogue-DLL cleanup to the CLI's _internal so the
+        # merge step below doesn't re-introduce them into the GUI dist.
+        cli_internal = cli_dist / "_internal"
+        if cli_internal.exists():
+            cli_removed = 0
+            for p in cli_internal.iterdir():
+                n = p.name.lower()
+                if (n.startswith("api-ms-win-") or n == "ucrtbase.dll"
+                        or n.startswith("icu")):
+                    p.unlink()
+                    cli_removed += 1
+            print(f"Removed {cli_removed} rogue DLL(s) from CLI _internal.")
+
+        # Merge CLI output into GUI dist. Top-level: copy
+        # imagelayout-cli.exe next to ImageLayoutManager.exe.
+        # _internal/: union with overwrite (byte-identical files).
+        cli_exe_src = cli_dist / "imagelayout-cli.exe"
+        cli_exe_dst = dist_dir / "imagelayout-cli.exe"
+        if cli_exe_src.exists():
+            shutil.copy2(cli_exe_src, cli_exe_dst)
+            print(f"Copied CLI exe to: {cli_exe_dst}")
+        else:
+            print(f"CLI exe not produced: {cli_exe_src}")
+            return 2
+
+        if cli_internal.exists():
+            shutil.copytree(cli_internal, internal_dir, dirs_exist_ok=True)
+            print(f"Merged CLI _internal/ into: {internal_dir}")
+
+        # The standalone CLI dist is now redundant; drop it so users don't
+        # see two copies of the toolchain in dist/.
+        shutil.rmtree(cli_dist, ignore_errors=True)
+        print(f"Removed standalone CLI dist: {cli_dist}")
 
     # ------------------------------------------------------------------ #
     # Step 2 – Generate Inno Setup script and compile                     #
@@ -315,6 +412,12 @@ def main() -> int:
 
         [Icons]
         Name: "{{group}}\\ImageLayoutManager"; Filename: "{{app}}\\ImageLayoutManager.exe"
+        ; CLI shell — opens cmd.exe in the install directory so users can run
+        ; ``imagelayout-cli render foo.figpack -f pdf`` without needing the
+        ; install path on PATH. The exe itself lives at
+        ; {{app}}\\imagelayout-cli.exe and is reachable from any shell by
+        ; absolute path.
+        Name: "{{group}}\\ImageLayoutManager CLI (shell)"; Filename: "{{cmd}}"; Parameters: "/K imagelayout-cli --help"; WorkingDir: "{{app}}"; Comment: "Opens a command prompt for imagelayout-cli"
         Name: "{{group}}\\Uninstall ImageLayoutManager"; Filename: "{{uninstallexe}}"
         Name: "{{userdesktop}}\\ImageLayoutManager"; Filename: "{{app}}\\ImageLayoutManager.exe"; Tasks: desktopicon
 
