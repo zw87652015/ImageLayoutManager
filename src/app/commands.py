@@ -8,6 +8,36 @@ from src.model.data_model import RowTemplate, Cell, PiPItem
 MERGE_TIMEOUT = 5.0
 
 
+def _copy_cell_fields(dst: Cell, src: Cell) -> None:
+    """Copy every mutable field from *src* into *dst*, preserving dst's identity."""
+    for f in src.__dataclass_fields__:
+        setattr(dst, f, copy.deepcopy(getattr(src, f)))
+
+
+def _restore_cells_inplace(project, snapshot: list) -> None:
+    """Restore project.cells to match *snapshot* without replacing object identities.
+
+    For each cell in the snapshot:
+    - If a cell with the same id already exists in project.cells, copy all
+      fields into it (preserving the live object so any other command that
+      holds a reference to it still sees the right object).
+    - If no matching live cell exists, insert a deepcopy of the snapshot cell.
+
+    Cells in project.cells whose id is not in the snapshot are removed.
+    The final order matches the snapshot order.
+    """
+    live_by_id = {c.id: c for c in project.cells}
+    result = []
+    for snap_cell in snapshot:
+        live = live_by_id.get(snap_cell.id)
+        if live is not None:
+            _copy_cell_fields(live, snap_cell)
+            result.append(live)
+        else:
+            result.append(copy.deepcopy(snap_cell))
+    project.cells[:] = result
+
+
 class FreeformGeometryCommand(QUndoCommand):
     """Record a freeform drag/resize of a single cell for undo/redo."""
     def __init__(self, cell: Cell, new_x, new_y, new_w, new_h, update_callback=None):
@@ -725,9 +755,8 @@ class DeleteCellCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        import copy
         self.project.rows[:] = copy.deepcopy(self.old_rows)
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        _restore_cells_inplace(self.project, self.old_cells)
         # Restore orphaned text items
         for t in self.deleted_text_items:
             if t not in self.project.text_items:
@@ -876,40 +905,53 @@ class SplitCellCommand(QUndoCommand):
         self.direction = direction  # "horizontal" or "vertical"
         self.count = count
         self.update_callback = update_callback
+        # Save only the fields we mutate on the parent cell so that undo
+        # restores state in-place. A full deepcopy of project.cells would
+        # replace the list with new objects, breaking identity-based removal
+        # in InsertRowCommand/InsertCellCommand if those are also on the
+        # undo stack (their self.new_cells refs would no longer compare equal).
+        cell = project.find_cell_by_id(cell_id)
         import copy
-        self.old_cells = copy.deepcopy(project.cells)
+        self._old_image_path = cell.image_path if cell else None
+        self._old_is_placeholder = cell.is_placeholder if cell else False
+        self._old_scale_bar_enabled = cell.scale_bar_enabled if cell else False
+        self._old_children: list = []   # filled on first redo
+        self._old_split_direction = cell.split_direction if cell else "none"
+        self._old_split_ratios: list = copy.copy(cell.split_ratios) if cell else []
 
     def redo(self):
         from src.model.data_model import Cell
         cell = self.project.find_cell_by_id(self.cell_id)
         if not cell or not cell.is_leaf:
             return
-        # Move current content to the first child; create empty placeholders for the rest
-        first_child = Cell(
-            image_path=cell.image_path,
-            fit_mode=cell.fit_mode,
-            rotation=cell.rotation,
-            align_h=cell.align_h,
-            align_v=cell.align_v,
-            padding_top=cell.padding_top,
-            padding_bottom=cell.padding_bottom,
-            padding_left=cell.padding_left,
-            padding_right=cell.padding_right,
-            is_placeholder=cell.is_placeholder,
-            scale_bar_enabled=cell.scale_bar_enabled,
-            scale_bar_mode=cell.scale_bar_mode,
-            scale_bar_length_um=cell.scale_bar_length_um,
-            scale_bar_color=cell.scale_bar_color,
-            scale_bar_show_text=cell.scale_bar_show_text,
-            scale_bar_thickness_mm=cell.scale_bar_thickness_mm,
-            scale_bar_position=cell.scale_bar_position,
-            scale_bar_offset_x=cell.scale_bar_offset_x,
-            scale_bar_offset_y=cell.scale_bar_offset_y,
-        )
-        children = [first_child]
-        for _ in range(1, self.count):
-            children.append(Cell(is_placeholder=True))
-        cell.children = children
+        if not self._old_children:
+            # First execution: build children and persist for later redo/undo.
+            first_child = Cell(
+                image_path=cell.image_path,
+                fit_mode=cell.fit_mode,
+                rotation=cell.rotation,
+                align_h=cell.align_h,
+                align_v=cell.align_v,
+                padding_top=cell.padding_top,
+                padding_bottom=cell.padding_bottom,
+                padding_left=cell.padding_left,
+                padding_right=cell.padding_right,
+                is_placeholder=cell.is_placeholder,
+                scale_bar_enabled=cell.scale_bar_enabled,
+                scale_bar_mode=cell.scale_bar_mode,
+                scale_bar_length_um=cell.scale_bar_length_um,
+                scale_bar_color=cell.scale_bar_color,
+                scale_bar_show_text=cell.scale_bar_show_text,
+                scale_bar_thickness_mm=cell.scale_bar_thickness_mm,
+                scale_bar_position=cell.scale_bar_position,
+                scale_bar_offset_x=cell.scale_bar_offset_x,
+                scale_bar_offset_y=cell.scale_bar_offset_y,
+            )
+            children = [first_child]
+            for _ in range(1, self.count):
+                children.append(Cell(is_placeholder=True))
+            self._old_children = children
+        cell.children = self._old_children
         cell.split_direction = self.direction
         cell.split_ratios = [1.0] * self.count
         # Clear the parent's content (it's now a container)
@@ -920,8 +962,14 @@ class SplitCellCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        cell = self.project.find_cell_by_id(self.cell_id)
+        if cell is not None:
+            cell.children = []
+            cell.split_direction = self._old_split_direction
+            cell.split_ratios = self._old_split_ratios
+            cell.image_path = self._old_image_path
+            cell.is_placeholder = self._old_is_placeholder
+            cell.scale_bar_enabled = self._old_scale_bar_enabled
         if self.update_callback:
             self.update_callback()
 
@@ -957,8 +1005,7 @@ class InsertSubCellCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        _restore_cells_inplace(self.project, self.old_cells)
         if self.update_callback:
             self.update_callback()
 
@@ -1001,8 +1048,7 @@ class DeleteSubCellCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        _restore_cells_inplace(self.project, self.old_cells)
         if self.update_callback:
             self.update_callback()
 
@@ -1074,7 +1120,7 @@ class WrapAndInsertCommand(QUndoCommand):
 
     def undo(self):
         import copy
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        _restore_cells_inplace(self.project, self.old_cells)
         self.project.text_items[:] = copy.deepcopy(self.old_text_items)
         if self.update_callback:
             self.update_callback()
@@ -1105,8 +1151,7 @@ class ChangeSubCellRatioCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        import copy
-        self.project.cells[:] = copy.deepcopy(self.old_cells)
+        _restore_cells_inplace(self.project, self.old_cells)
         if self.update_callback:
             self.update_callback()
 
