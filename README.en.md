@@ -79,6 +79,51 @@ Typical workflow:
 5. **Save the layout** (so it can be reproduced)
 6. **Export** to the target format
 
+## Command-line interface (CLI)
+
+A headless CLI tool (`imagelayout-cli.exe`) is included with the Windows installer for automated workflows. It provides pixel-perfect output parity with the GUI export functions.
+
+### Verbs
+
+| Verb      | Purpose                                                         |
+| --------- | --------------------------------------------------------------- |
+| `render`  | `.figpack` / `.figlayout` → `pdf` / `tiff` / `jpg` / `png`      |
+| `pack`    | `.figlayout` → `.figpack` (bundle layout + referenced assets)   |
+| `unpack`  | `.figpack` → folder containing assets + sidecar `.figlayout`    |
+| `inspect` | Print page size, DPI, cell counts, etc. (text or `--json`)      |
+
+### Examples
+
+```powershell
+# Pixel-perfect PDF render at the project's saved DPI
+imagelayout-cli.exe render figure_4.figpack -f pdf -o figure_4.pdf
+
+# Override DPI for a fast preview PNG
+imagelayout-cli.exe render figure_4.figlayout -f png --dpi 150
+
+# Print-ready CMYK TIFF using a specific ICC profile
+imagelayout-cli.exe render figure_4.figpack -f tiff --cmyk `
+    --icc-profile "C:\ICC\USWebCoatedSWOP.icc" --icc-intent 1 -o fig.tiff
+
+# Bundle a .figlayout + every referenced image into a .figpack
+imagelayout-cli.exe pack figure_4.figlayout -o figure_4.figpack
+
+# Unpack a .figpack so you can edit the JSON / images by hand
+imagelayout-cli.exe unpack figure_4.figpack -o ./extracted/
+
+# Quick summary
+imagelayout-cli.exe inspect figure_4.figpack
+imagelayout-cli.exe inspect figure_4.figpack --json
+```
+
+### Access
+
+After installing the Windows version, the CLI is available via:
+- **Start Menu**: "ImageLayoutManager CLI (shell)" — opens a PowerShell pre-configured with the CLI in PATH
+- **Installation directory**: `C:\Program Files\ImageLayoutManager\imagelayout-cli.exe`
+
+Run `imagelayout-cli.exe --help` for full usage information.
+
 ## File types
 
 ### Project files

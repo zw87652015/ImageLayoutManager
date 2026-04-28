@@ -74,6 +74,51 @@ python main.py
 5. **保存布局文件**（便于后续复现）
 6. **导出**为目标格式
 
+## 命令行界面（CLI）
+
+Windows 安装包中包含无头 CLI 工具（`imagelayout-cli.exe`），用于自动化工作流。其输出与 GUI 导出功能保持像素级完全一致。
+
+### 命令
+
+| 命令      | 用途                                                         |
+| --------- | --------------------------------------------------------------- |
+| `render`  | `.figpack` / `.figlayout` → `pdf` / `tiff` / `jpg` / `png`      |
+| `pack`    | `.figlayout` → `.figpack`（打包布局 + 引用的资源）   |
+| `unpack`  | `.figpack` → 包含资源 + 侧边 `.figlayout` 的文件夹    |
+| `inspect` | 打印页面尺寸、DPI、单元格数量等（文本或 `--json`）      |
+
+### 示例
+
+```powershell
+# 按项目保存的 DPI 进行像素级精确的 PDF 渲染
+imagelayout-cli.exe render figure_4.figpack -f pdf -o figure_4.pdf
+
+# 覆盖 DPI 以生成快速预览 PNG
+imagelayout-cli.exe render figure_4.figlayout -f png --dpi 150
+
+# 使用指定 ICC 配置文件的印刷级 CMYK TIFF
+imagelayout-cli.exe render figure_4.figpack -f tiff --cmyk `
+    --icc-profile "C:\ICC\USWebCoatedSWOP.icc" --icc-intent 1 -o fig.tiff
+
+# 将 .figlayout 及其所有引用图片打包为 .figpack
+imagelayout-cli.exe pack figure_4.figlayout -o figure_4.figpack
+
+# 解包 .figpack 以便手动编辑 JSON / 图片
+imagelayout-cli.exe unpack figure_4.figpack -o ./extracted/
+
+# 快速摘要
+imagelayout-cli.exe inspect figure_4.figpack
+imagelayout-cli.exe inspect figure_4.figpack --json
+```
+
+### 访问方式
+
+安装 Windows 版本后，可通过以下方式使用 CLI：
+- **开始菜单**："ImageLayoutManager CLI (shell)" — 打开已预配置 CLI 路径的 PowerShell
+- **安装目录**：`C:\Program Files\ImageLayoutManager\imagelayout-cli.exe`
+
+运行 `imagelayout-cli.exe --help` 查看完整用法信息。
+
 ## 文件格式
 
 ### 项目文件
