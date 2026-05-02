@@ -2940,13 +2940,9 @@ class MainWindow(QMainWindow):
         # --- Label submenu ---
         label_menu = menu.addMenu(tr("ctx_labels"))
 
-        # Find the top-level ancestor for this cell
-        _top_cell = cell
-        _par = self.project.find_parent_of(cell_id)
-        while _par:
-            _top_cell = _par
-            _par = self.project.find_parent_of(_par.id)
-        _is_subcell = (_top_cell.id != cell_id)
+        # Find the direct parent and the top-level ancestor for this cell
+        _direct_parent = self.project.find_parent_of(cell_id)
+        _is_subcell = (_direct_parent is not None)
 
         # Numbering label — targets this sub-cell directly (label row inside the box)
         has_numbering = any(
@@ -2960,21 +2956,28 @@ class MainWindow(QMainWindow):
             add_num_action = label_menu.addAction(tr("ctx_add_label_cell"))
             add_num_action.triggered.connect(lambda: self._ctx_add_numbering_label(cell_id))
 
-        # For sub-cells: also offer a label above the whole container box
+        # For sub-cells: offer a label above each ancestor container box,
+        # from the direct parent up to the root, with cell address in the item text.
         if _is_subcell:
-            _top_cell_id = _top_cell.id
-            has_box_label = any(
-                t for t in self.project.text_items
-                if t.scope == "cell" and t.subtype != "corner" and t.parent_id == _top_cell_id
-            )
-            if has_box_label:
-                del_box_action = label_menu.addAction(tr("ctx_delete_label_above_box"))
-                del_box_action.triggered.connect(
-                    lambda: self._ctx_delete_numbering_label(_top_cell_id))
-            else:
-                add_box_action = label_menu.addAction(tr("ctx_add_label_above_box"))
-                add_box_action.triggered.connect(
-                    lambda: self._ctx_add_numbering_label(_top_cell_id))
+            _anc = _direct_parent
+            while _anc is not None:
+                _anc_id = _anc.id
+                _anc_addr = self._cell_path_label(_anc)
+                has_box_label = any(
+                    t for t in self.project.text_items
+                    if t.scope == "cell" and t.subtype != "corner" and t.parent_id == _anc_id
+                )
+                if has_box_label:
+                    _label_text = f"{tr('ctx_delete_label_above_box')} ({_anc_addr})"
+                    del_box_action = label_menu.addAction(_label_text)
+                    del_box_action.triggered.connect(
+                        lambda checked=False, _id=_anc_id: self._ctx_delete_numbering_label(_id))
+                else:
+                    _label_text = f"{tr('ctx_add_label_above_box')} ({_anc_addr})"
+                    add_box_action = label_menu.addAction(_label_text)
+                    add_box_action.triggered.connect(
+                        lambda checked=False, _id=_anc_id: self._ctx_add_numbering_label(_id))
+                _anc = self.project.find_parent_of(_anc_id)
 
         label_menu.addSeparator()
 

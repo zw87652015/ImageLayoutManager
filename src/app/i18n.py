@@ -130,6 +130,16 @@ _T: dict[str, dict[str, str]] = {
     "opt_page_1_5":         {"en": "1.5 Column (114×160mm)", "zh": "1.5 栏 (114×160mm)"},
     "opt_page_double":      {"en": "Double Column (178×240mm)", "zh": "双栏 (178×240mm)"},
 
+    # ── Journal Presets ────────────────────────────────────────────
+    "opt_page_nature_single":  {"en": "Nature Single (89×247mm)",   "zh": "Nature 单栏 (89×247mm)"},
+    "opt_page_nature_double":  {"en": "Nature Double (183×247mm)",  "zh": "Nature 双栏 (183×247mm)"},
+    "opt_page_cell_single":    {"en": "Cell Single (85×228mm)",     "zh": "Cell 单栏 (85×228mm)"},
+    "opt_page_cell_double":    {"en": "Cell Double (174×228mm)",    "zh": "Cell 双栏 (174×228mm)"},
+    "opt_page_science_single": {"en": "Science Single (90×245mm)",  "zh": "Science 单栏 (90×245mm)"},
+    "opt_page_science_double": {"en": "Science Double (180×245mm)", "zh": "Science 双栏 (180×245mm)"},
+    "opt_page_pnas_single":    {"en": "PNAS Single (87×246mm)",     "zh": "PNAS 单栏 (87×246mm)"},
+    "opt_page_pnas_double":    {"en": "PNAS Double (178×246mm)",    "zh": "PNAS 双栏 (178×246mm)"},
+
     # ── Placeholders & Special ─────────────────────────────────────
     "placeholder_scale_bar_text": {"en": "Auto (e.g. 10 µm)", "zh": "自动 (例如 10 µm)"},
     "placeholder_label_text":     {"en": "Label text",        "zh": "标注文字"},

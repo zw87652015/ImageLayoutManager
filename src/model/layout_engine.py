@@ -413,7 +413,7 @@ class LayoutEngine:
             fixed_h_total = 0.0
             ratio_sum = 0.0
             for i, child in enumerate(children):
-                if label_row_above and child.is_leaf and child.id in labeled_cell_ids:
+                if label_row_above and child.id in labeled_cell_ids:
                     label_space += label_row_h + gap_mm
                 oh = getattr(child, 'override_height_mm', 0.0)
                 if oh > 0:
@@ -429,7 +429,7 @@ class LayoutEngine:
             current_y = py
             for i, child in enumerate(children):
                 # Label rect for this child (above it)
-                if label_row_above and child.is_leaf and child.id in labeled_cell_ids:
+                if label_row_above and child.id in labeled_cell_ids:
                     label_rects[child.id] = (px, current_y, pw, label_row_h)
                     current_y += label_row_h + gap_mm
 
@@ -465,7 +465,7 @@ class LayoutEngine:
             # top of the shared height band.  All children must start at the same
             # y, so the overhead applies to every child once any one needs it.
             any_labeled_leaf = label_row_above and any(
-                child.is_leaf and child.id in labeled_cell_ids for child in children
+                child.id in labeled_cell_ids for child in children
             )
             label_overhead = (label_row_h + gap_mm) if any_labeled_leaf else 0.0
             img_py = py + label_overhead
@@ -477,7 +477,7 @@ class LayoutEngine:
                 child_w = ow if ow > 0 else (ratios[i] / ratio_sum) * available
 
                 # Label rect: spans the child's width, sits in the reserved strip
-                if label_row_above and child.is_leaf and child.id in labeled_cell_ids:
+                if label_row_above and child.id in labeled_cell_ids:
                     label_rects[child.id] = (current_x, py, child_w, label_row_h)
 
                 child_rect = (current_x, img_py, child_w, img_ph)

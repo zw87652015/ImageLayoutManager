@@ -267,7 +267,15 @@ class Inspector(QWidget):
             "opt_page_letter",
             "opt_page_single",
             "opt_page_1_5",
-            "opt_page_double"
+            "opt_page_double",
+            "opt_page_nature_single",
+            "opt_page_nature_double",
+            "opt_page_cell_single",
+            "opt_page_cell_double",
+            "opt_page_science_single",
+            "opt_page_science_double",
+            "opt_page_pnas_single",
+            "opt_page_pnas_double",
         ]
         self.page_preset.addItems([tr(k) for k in self._page_preset_options])
         self.page_preset.currentTextChanged.connect(self._on_page_preset_changed)
@@ -1347,20 +1355,33 @@ class Inspector(QWidget):
             pass  # Invalid input, ignore
 
     def _on_page_preset_changed(self, preset_text: str):
-        presets = {
-            "A4 (210×297mm)": (210, 297),
-            "Letter (216×279mm)": (216, 279),
-            "Single Column (85×120mm)": (85, 120),
-            "1.5 Column (114×160mm)": (114, 160),
-            "Double Column (178×240mm)": (178, 240),
+        _preset_sizes = {
+            "opt_page_a4":             (210, 297),
+            "opt_page_letter":         (216, 279),
+            "opt_page_single":         (85,  120),
+            "opt_page_1_5":            (114, 160),
+            "opt_page_double":         (178, 240),
+            "opt_page_nature_single":  (89,  247),
+            "opt_page_nature_double":  (183, 247),
+            "opt_page_cell_single":    (85,  228),
+            "opt_page_cell_double":    (174, 228),
+            "opt_page_science_single": (90,  245),
+            "opt_page_science_double": (180, 245),
+            "opt_page_pnas_single":    (87,  246),
+            "opt_page_pnas_double":    (178, 246),
         }
-        if preset_text in presets:
-            w, h = presets[preset_text]
-            self.blockSignals(True)
-            self.page_w.setValue(w)
-            self.page_h.setValue(h)
-            self.blockSignals(False)
-            self.project_property_changed.emit({"page_width_mm": w, "page_height_mm": h})
+        idx = self.page_preset.currentIndex()
+        if idx < 0 or idx >= len(self._page_preset_options):
+            return
+        key = self._page_preset_options[idx]
+        if key not in _preset_sizes:
+            return
+        w, h = _preset_sizes[key]
+        self.blockSignals(True)
+        self.page_w.setValue(w)
+        self.page_h.setValue(h)
+        self.blockSignals(False)
+        self.project_property_changed.emit({"page_width_mm": w, "page_height_mm": h})
 
     def _on_label_color_changed(self, color_hex: str = None):
         self.project_property_changed.emit({"label_color": color_hex or self.label_color.get_color()})

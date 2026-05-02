@@ -48,7 +48,8 @@ class CanvasScene(QGraphicsScene):
         self.label_cell_items = {} # "label_{cell_id}" -> CellItem (label-only cells)
         self.text_items = {} # id -> TextGraphicsItem
         self._add_buttons = [] # list of AddButtonItem
-        
+        self._cell_data_cache = {}  # cell_id -> fingerprint tuple for change detection
+
         # Drag manager (animated cell swap)
         self.drag_manager = DragManager(self)
         self.drag_manager.swap_requested.connect(self.cell_swapped.emit)
@@ -171,35 +172,76 @@ class CanvasScene(QGraphicsScene):
         for cid in to_remove:
             self.removeItem(self.cell_items[cid])
             del self.cell_items[cid]
+            self._cell_data_cache.pop(cid, None)
             
         # 2. Add/Update cells
+        is_freeform = getattr(self.project, 'layout_mode', 'grid') == 'freeform'
         for cell in all_leaf_cells:
-            if cell.id not in self.cell_items:
+            is_new = cell.id not in self.cell_items
+            if is_new:
                 item = CellItem(cell.id)
                 self.addItem(item)
                 self.cell_items[cell.id] = item
-            
+
             item = self.cell_items[cell.id]
-            
-            # Freeform mode toggle
-            is_freeform = getattr(self.project, 'layout_mode', 'grid') == 'freeform'
+
+            if is_new:
+                item.set_freeform_mode(is_freeform)
+
+            # Build a fingerprint of everything that affects this cell's appearance
+            rect_key = layout_result.cell_rects.get(cell.id)
+            pip_items = getattr(cell, 'pip_items', [])
+            fingerprint = (
+                rect_key,
+                cell.image_path,
+                cell.fit_mode,
+                cell.padding_top, cell.padding_right, cell.padding_bottom, cell.padding_left,
+                cell.is_placeholder,
+                getattr(cell, 'rotation', 0),
+                getattr(cell, 'align_h', 'center'),
+                getattr(cell, 'align_v', 'center'),
+                getattr(cell, 'scale_bar_enabled', False),
+                getattr(cell, 'scale_bar_mode', 'rgb'),
+                getattr(cell, 'scale_bar_um_per_px', 0.1301),
+                getattr(cell, 'scale_bar_length_um', 10.0),
+                getattr(cell, 'scale_bar_color', '#FFFFFF'),
+                getattr(cell, 'scale_bar_show_text', True),
+                getattr(cell, 'scale_bar_thickness_mm', 0.5),
+                getattr(cell, 'scale_bar_position', 'bottom_right'),
+                getattr(cell, 'scale_bar_offset_x', 2.0),
+                getattr(cell, 'scale_bar_offset_y', 2.0),
+                getattr(cell, 'scale_bar_custom_text', None),
+                getattr(cell, 'scale_bar_text_size_mm', 2.0),
+                getattr(cell, 'scale_bar_unit', 'µm'),
+                getattr(cell, 'crop_left', 0.0),
+                getattr(cell, 'crop_top', 0.0),
+                getattr(cell, 'crop_right', 1.0),
+                getattr(cell, 'crop_bottom', 1.0),
+                getattr(cell, 'z_index', 0),
+                is_freeform,
+                len(pip_items),
+            )
+
+            if not is_new and self._cell_data_cache.get(cell.id) == fingerprint:
+                continue  # nothing changed — skip expensive update
+
+            self._cell_data_cache[cell.id] = fingerprint
+
             item.set_freeform_mode(is_freeform)
 
-            # Geometry
-            if cell.id in layout_result.cell_rects:
-                x, y, w, h = layout_result.cell_rects[cell.id]
+            if rect_key is not None:
+                x, y, w, h = rect_key
                 item.setRect(0, 0, w, h)
                 item.setPos(x, y)
                 item.setZValue(getattr(cell, 'z_index', 0))
-                
-            # Content
+
                 item.update_data(
-                    cell.image_path, 
-                    cell.fit_mode, 
+                    cell.image_path,
+                    cell.fit_mode,
                     {
-                        'top': cell.padding_top, 
-                        'right': cell.padding_right, 
-                        'bottom': cell.padding_bottom, 
+                        'top': cell.padding_top,
+                        'right': cell.padding_right,
+                        'bottom': cell.padding_bottom,
                         'left': cell.padding_left
                     },
                     cell.is_placeholder,
@@ -224,8 +266,7 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'crop_right', 1.0),
                     getattr(cell, 'crop_bottom', 1.0),
                 )
-                # PiP insets
-                item.update_pip_items(getattr(cell, 'pip_items', []))
+                item.update_pip_items(pip_items)
 
         # Sync Label Cell Items (out-of-cell label placements)
         label_rects = getattr(layout_result, 'label_rects', {})

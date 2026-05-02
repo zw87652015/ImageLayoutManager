@@ -918,6 +918,7 @@ class SplitCellCommand(QUndoCommand):
         self._old_children: list = []   # filled on first redo
         self._old_split_direction = cell.split_direction if cell else "none"
         self._old_split_ratios: list = copy.copy(cell.split_ratios) if cell else []
+        self._first_child_id: str = ""  # filled on first redo
 
     def redo(self):
         from src.model.data_model import Cell
@@ -951,6 +952,7 @@ class SplitCellCommand(QUndoCommand):
             for _ in range(1, self.count):
                 children.append(Cell(is_placeholder=True))
             self._old_children = children
+            self._first_child_id = first_child.id
         cell.children = self._old_children
         cell.split_direction = self.direction
         cell.split_ratios = [1.0] * self.count
@@ -958,6 +960,11 @@ class SplitCellCommand(QUndoCommand):
         cell.image_path = None
         cell.is_placeholder = False
         cell.scale_bar_enabled = False
+        # Reparent text_items that pointed at this cell to the first child,
+        # since the cell's content (image/placeholder) moves there.
+        for t in self.project.text_items:
+            if t.parent_id == self.cell_id and t.scope == "cell":
+                t.parent_id = self._first_child_id
         if self.update_callback:
             self.update_callback()
 
@@ -970,6 +977,11 @@ class SplitCellCommand(QUndoCommand):
             cell.image_path = self._old_image_path
             cell.is_placeholder = self._old_is_placeholder
             cell.scale_bar_enabled = self._old_scale_bar_enabled
+        # Restore text_items back to the original cell
+        if self._first_child_id:
+            for t in self.project.text_items:
+                if t.parent_id == self._first_child_id and t.scope == "cell":
+                    t.parent_id = self.cell_id
         if self.update_callback:
             self.update_callback()
 

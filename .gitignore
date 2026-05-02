@@ -1,4 +1,4 @@
-*.figlayout
+
 *.pdf
 
 *.png
@@ -26,4 +26,5 @@ nuitka-crash-report.xml
 Code_*.md
 Review_Prompt.md
 /tests
+
 plan.md

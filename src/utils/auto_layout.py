@@ -135,55 +135,148 @@ class AutoLayout:
                     for mid in member_ids:
                         aspect_ratios[mid] = shared_aspect
 
-        # 1b. Recursively optimise split_ratios for every container cell
-        #     and compute composite aspect ratios bottom-up.
-        def _optimise_and_composite(cell):
-            """Optimise split_ratios for *cell* based on children's images,
-            then return the effective w/h aspect ratio of the whole sub-tree.
+        # 1b. Recursively optimise split_ratios for every container cell and
+        #     compute the cell's natural (width, height) bottom-up, accounting
+        #     for gaps at each split level so the composite aspect fed upward is
+        #     accurate and leaf images fill their cells without letterbox space.
+        #
+        # We propagate (w, h) natural sizes using the content width as a reference.
+        # This matters because gaps are absolute (mm), so their fractional effect
+        # differs at each nesting level and cannot be captured by a pure ratio.
+        ref_w = (project.page_width_mm
+                 - project.margin_left_mm
+                 - project.margin_right_mm)
+        gap = project.gap_mm
 
-            Horizontal split (children side by side, shared height):
-                optimal split_ratio_i = a_i  (wider images get more width)
-                composite_a = sum(a_i)
-            Vertical split (children stacked, shared width):
-                optimal split_ratio_i = 1/a_i  (taller images get more height)
-                composite_a = 1 / sum(1/a_i)
+        # Determine which cells have a label strip reserved above them
+        _label_row_above = getattr(project, "label_placement", "in_cell") == "label_row_above"
+        _label_row_h = 0.0
+        _labeled_cell_ids: set = set()
+        if _label_row_above:
+            from src.model.layout_engine import LayoutEngine
+            _custom_h = getattr(project, 'label_row_height', 0.0)
+            _label_row_h = _custom_h if _custom_h > 0 else LayoutEngine._label_row_height_mm(project)
+            for t in project.text_items:
+                if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
+                    _labeled_cell_ids.add(t.parent_id)
+
+        def _optimise_and_composite(cell, parent_w: float):
+            """Return (w, total_h, img_h) for *cell* at width *parent_w*.
+
+            total_h includes any label-strip overhead reserved above this cell
+            (so the parent can allocate enough space).  img_h is the pure image
+            content height, used for split_ratios — the layout engine handles the
+            label strips separately and must not double-count them.
+
+            Horizontal split: children share height H, placed side by side.
+                split_ratio_i = img_aspect_i  (= img_w_i / img_h)
+                H = available_w / sum(img_aspects)
+                img_h = H   (label strip is uniform across all siblings, handled by engine)
+
+            Vertical split: children stacked, sharing width parent_w.
+                split_ratio_i = img_h_i  (proportional to image-only height)
+                total_natural_h = sum(total_h_i) + (n-1)*gap + fixed_heights
+                img_h = total_natural_h - own_label_overhead
             """
             if cell.is_leaf:
-                return aspect_ratios.get(cell.id, None)
+                a = aspect_ratios.get(cell.id)
+                if a and a > 0:
+                    img_h = parent_w / a
+                    label_overhead = (_label_row_h + gap) if (_label_row_above and cell.id in _labeled_cell_ids) else 0.0
+                    return (parent_w, img_h + label_overhead, img_h)
+                return None
 
-            # Recurse into children first (bottom-up)
-            child_aspects = [_optimise_and_composite(c) for c in cell.children]
+            children = cell.children
+            n = len(children)
+            if n == 0:
+                return None
+
+            # Recurse first (bottom-up), passing estimated child widths
+            if cell.split_direction == "horizontal":
+                child_w_est = max(1.0, (parent_w - (n - 1) * gap) / n)
+                child_sizes = [_optimise_and_composite(c, child_w_est) for c in children]
+            else:
+                child_sizes = [_optimise_and_composite(c, parent_w) for c in children]
 
             if cell.split_direction == "horizontal":
-                # Optimal: give each child width proportional to its aspect ratio
-                new_ratios = []
-                for a in child_aspects:
-                    new_ratios.append(a if (a is not None and a > 0) else 1.0)
+                new_ratios = list(cell.split_ratios) if cell.split_ratios else [1.0] * n
+                fixed_w_total = 0.0
+                valid_img_aspects = []
+                for i, (child, sz) in enumerate(zip(children, child_sizes)):
+                    ow = getattr(child, 'override_width_mm', 0.0)
+                    if ow > 0:
+                        fixed_w_total += ow
+                        continue
+                    # Use img_h (sz[2]) for aspect ratio so label overhead doesn't distort ratios
+                    if sz is not None and len(sz) > 2 and sz[2] > 0:
+                        img_h = sz[2]
+                    elif sz is not None and sz[1] > 0:
+                        img_h = sz[1]
+                    else:
+                        img_h = None
+                    a = (sz[0] / img_h) if (img_h and img_h > 0) else None
+                    new_ratios[i] = a if (a is not None and a > 0) else 1.0
+                    if a is not None and a > 0:
+                        valid_img_aspects.append(a)
                 cell.split_ratios = new_ratios
-                # Composite: sum of child aspects (all share same height)
-                valid = [a for a in child_aspects if a is not None and a > 0]
-                composite = sum(valid) if valid else None
+
+                if valid_img_aspects:
+                    available = max(1.0, parent_w - (n - 1) * gap - fixed_w_total)
+                    H = available / sum(valid_img_aspects)
+                    # Label overhead for a horizontal split is uniform across all siblings
+                    # and is handled by the engine; img_h = H for this container
+                    label_overhead = (_label_row_h + gap) if (_label_row_above and cell.id in _labeled_cell_ids) else 0.0
+                    composite_size = (parent_w, H + label_overhead, H)
+                else:
+                    composite_size = None
 
             elif cell.split_direction == "vertical":
-                # Optimal: give each child height proportional to 1/aspect
-                new_ratios = []
-                for a in child_aspects:
-                    new_ratios.append(1.0 / a if (a is not None and a > 0) else 1.0)
-                cell.split_ratios = new_ratios
-                # Composite: harmonic combination (all share same width)
-                valid = [a for a in child_aspects if a is not None and a > 0]
-                composite = 1.0 / sum(1.0 / a for a in valid) if valid else None
-            else:
-                composite = None
+                new_ratios = list(cell.split_ratios) if cell.split_ratios else [1.0] * n
+                fixed_h_total = 0.0
+                total_h_sum = 0.0  # sum of each child's total_h (includes their label overheads)
+                has_valid = False
+                for i, (child, sz) in enumerate(zip(children, child_sizes)):
+                    oh = getattr(child, 'override_height_mm', 0.0)
+                    if oh > 0:
+                        fixed_h_total += oh
+                        continue
+                    # sz[1] = total_h (with label overhead), sz[2] = img_h (without)
+                    if sz is not None and len(sz) > 2 and sz[2] > 0:
+                        child_img_h = sz[2]
+                    elif sz is not None and sz[1] > 0:
+                        child_img_h = sz[1]
+                    else:
+                        child_img_h = None
+                    child_total_h = sz[1] if (sz is not None and sz[1] > 0) else None
+                    if child_img_h and child_img_h > 0:
+                        # split_ratios reflect image-only height so engine doesn't double-count labels
+                        new_ratios[i] = child_img_h
+                        total_h_sum += child_total_h
 
-            if composite is not None:
-                aspect_ratios[cell.id] = composite
-            return composite
+                        has_valid = True
+                    else:
+                        new_ratios[i] = 1.0
+                cell.split_ratios = new_ratios
+
+                if has_valid:
+                    natural_h = total_h_sum + (n - 1) * gap + fixed_h_total
+                    label_overhead = (_label_row_h + gap) if (_label_row_above and cell.id in _labeled_cell_ids) else 0.0
+                    composite_size = (parent_w, natural_h + label_overhead, natural_h)
+                else:
+                    composite_size = None
+            else:
+                composite_size = None
+
+            if composite_size is not None:
+                # Store aspect based on img_h so composite fed to parent is correct
+                img_h_for_aspect = composite_size[2] if composite_size[2] > 0 else composite_size[1]
+                aspect_ratios[cell.id] = composite_size[0] / img_h_for_aspect
+            return composite_size
 
         # Walk all cells (at every depth) to optimise ratios and build composites
         for cell in project.cells:
             if not cell.is_leaf:
-                _optimise_and_composite(cell)
+                _optimise_and_composite(cell, ref_w)
 
         new_row_settings = []
         sorted_rows = sorted(project.rows, key=lambda r: r.index)

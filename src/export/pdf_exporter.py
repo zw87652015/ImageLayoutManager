@@ -401,11 +401,14 @@ class PdfExporter:
                   crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None):
         """Draw SVG vector image - renders as vector in PDF for best quality."""
         try:
+            from PyQt6.QtCore import QByteArray
+            from src.utils.svg_utils import sanitize_svg_bytes
             if svg_override_bytes:
-                from PyQt6.QtCore import QByteArray
-                renderer = QSvgRenderer(QByteArray(svg_override_bytes))
+                svg_bytes = sanitize_svg_bytes(svg_override_bytes)
             else:
-                renderer = QSvgRenderer(path)
+                with open(path, "rb") as _f:
+                    svg_bytes = sanitize_svg_bytes(_f.read())
+            renderer = QSvgRenderer(QByteArray(svg_bytes))
             if not renderer.isValid():
                 print(f"Invalid SVG file: {path}")
                 return

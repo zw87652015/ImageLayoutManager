@@ -1,3 +1,5 @@
+import os
+
 from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsTextItem
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QCursor
 from PyQt6.QtCore import Qt, QRectF, QRect, QPointF, pyqtSignal, QVariantAnimation, QEasingCurve, QTimer
@@ -450,9 +452,9 @@ class CellItem(QGraphicsRectItem):
         self.setAcceptDrops(True)
         
         self.proxy = get_image_proxy()
-        self.proxy.thumbnail_ready.connect(self.on_thumbnail_ready)
-        
+
         self._pixmap = None
+        self._image_file_missing = False  # cached result of os.path.exists() check
 
         # Crop (normalized fractions 0.0–1.0 of original image, before rotation)
         self.crop_left = 0.0
@@ -983,22 +985,20 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_unit = scale_bar_unit
         
         if self.image_path:
-            import os
-            if os.path.exists(self.image_path):
-                self._pixmap = self.proxy.get_pixmap(self.image_path)
+            self._image_file_missing = not os.path.exists(self.image_path)
+            if not self._image_file_missing:
+                self._pixmap = self.proxy.get_pixmap(self.image_path, self.on_thumbnail_ready)
             else:
                 self._pixmap = None
         else:
+            self._image_file_missing = False
             self._pixmap = None
-            
+
         self.update()
 
     def on_thumbnail_ready(self, path):
-        if path == self.image_path:
-            import os
-            if os.path.exists(path):
-                self._pixmap = self.proxy.get_pixmap(path)
-                self.update()
+        self._pixmap = self.proxy.get_pixmap(path)
+        self.update()
 
     # ── PiP inset support ────────────────────────────────────────────────────
 
@@ -1056,7 +1056,6 @@ class CellItem(QGraphicsRectItem):
 
     def _get_pip_intrinsic_aspect_ratio(self, pip) -> float:
         """Return the physical aspect ratio (W/H) of the PiP image content."""
-        import os
         if pip.pip_type == "external":
             if pip.image_path and os.path.exists(pip.image_path):
                 # Try cache
@@ -1171,7 +1170,6 @@ class CellItem(QGraphicsRectItem):
         return None, None
 
     def _draw_pip_items(self, painter: QPainter, rect: QRectF):
-        import os
         cr = self._pip_content_rect()
         scale = painter.transform().m11()
         for pip in self._pip_items:
@@ -1409,9 +1407,8 @@ class CellItem(QGraphicsRectItem):
             painter.fillRect(rect, self.hover_brush)
             
         # Draw image
-        import os
-        if self.image_path and not os.path.exists(self.image_path) and not self.is_placeholder:
-             self._draw_missing_file_icon(painter, rect)
+        if self.image_path and self._image_file_missing and not self.is_placeholder:
+            self._draw_missing_file_icon(painter, rect)
         elif self._pixmap and not self._pixmap.isNull():
             self._draw_image(painter, rect)
         elif self.is_placeholder:
@@ -1755,7 +1752,6 @@ class CellItem(QGraphicsRectItem):
         
         # Get ORIGINAL image dimensions
         from PIL import Image
-        import os
         try:
             if img_path and os.path.exists(img_path):
                 with Image.open(img_path) as img:
@@ -1865,7 +1861,6 @@ class CellItem(QGraphicsRectItem):
 
     def _update_tooltip(self):
         """Build tooltip from image metadata."""
-        import os
         if self.is_label_cell:
             self.setToolTip(f"Label: {self.label_text}" if self.label_text else "Label Cell")
             return
