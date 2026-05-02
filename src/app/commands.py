@@ -476,11 +476,75 @@ class SizeGroupPropertyChangeCommand(QUndoCommand):
             self.update_callback()
 
 
+# Attributes that travel with the image content when cells are swapped.
+# Layout-slot attributes (size_group_id, override_width/height_mm,
+# aspect_ratio_locked, freeform position, row/col index, numbering labels)
+# are intentionally excluded — they describe the slot, not the content.
+_CONTENT_ATTRS = (
+    'image_path',
+    'original_source_path',
+    'is_placeholder',
+    'fit_mode',
+    'rotation',
+    'align_h',
+    'align_v',
+    'padding_top',
+    'padding_bottom',
+    'padding_left',
+    'padding_right',
+    'crop_left',
+    'crop_top',
+    'crop_right',
+    'crop_bottom',
+    'scale_bar_enabled',
+    'scale_bar_mode',
+    'scale_bar_um_per_px',
+    'scale_bar_length_um',
+    'scale_bar_color',
+    'scale_bar_show_text',
+    'scale_bar_thickness_mm',
+    'scale_bar_position',
+    'scale_bar_offset_x',
+    'scale_bar_offset_y',
+    'scale_bar_custom_text',
+    'scale_bar_text_size_mm',
+    'scale_bar_unit',
+)
+
+
+def _swap_cell_content(c1, c2, project):
+    """Swap all image-content attributes between two cells, including
+    pip_items and corner-label text_items from the project."""
+    # Scalar attributes
+    for attr in _CONTENT_ATTRS:
+        v1, v2 = getattr(c1, attr), getattr(c2, attr)
+        setattr(c1, attr, v2)
+        setattr(c2, attr, v1)
+
+    # PiP insets travel with the image
+    c1.pip_items, c2.pip_items = c2.pip_items, c1.pip_items
+
+    # Corner labels: re-parent text_items whose anchor is a corner position
+    if project is not None:
+        corner_subtypes = {"corner"}
+        c1_corners = [t for t in project.text_items
+                      if t.scope == "cell" and t.subtype in corner_subtypes
+                      and t.parent_id == c1.id]
+        c2_corners = [t for t in project.text_items
+                      if t.scope == "cell" and t.subtype in corner_subtypes
+                      and t.parent_id == c2.id]
+        for t in c1_corners:
+            t.parent_id = c2.id
+        for t in c2_corners:
+            t.parent_id = c1.id
+
+
 class SwapCellsCommand(QUndoCommand):
-    def __init__(self, c1, c2, update_callback=None):
+    def __init__(self, c1, c2, project=None, update_callback=None):
         super().__init__("Swap Cells")
         self.c1 = c1
         self.c2 = c2
+        self.project = project
         self.update_callback = update_callback
 
     def redo(self):
@@ -490,32 +554,19 @@ class SwapCellsCommand(QUndoCommand):
         self._swap()
 
     def _swap(self):
-        # Swap content attributes
-        self.c1.image_path, self.c2.image_path = self.c2.image_path, self.c1.image_path
-        self.c1.is_placeholder, self.c2.is_placeholder = self.c2.is_placeholder, self.c1.is_placeholder
-        self.c1.fit_mode, self.c2.fit_mode = self.c2.fit_mode, self.c1.fit_mode
-        self.c1.rotation, self.c2.rotation = self.c2.rotation, self.c1.rotation
-        
-        # Swap padding too
-        self.c1.padding_top, self.c2.padding_top = self.c2.padding_top, self.c1.padding_top
-        self.c1.padding_bottom, self.c2.padding_bottom = self.c2.padding_bottom, self.c1.padding_bottom
-        self.c1.padding_left, self.c2.padding_left = self.c2.padding_left, self.c1.padding_left
-        self.c1.padding_right, self.c2.padding_right = self.c2.padding_right, self.c1.padding_right
-        
+        _swap_cell_content(self.c1, self.c2, self.project)
         if self.update_callback:
             self.update_callback()
 
+
 class MultiSwapCellsCommand(QUndoCommand):
     """Swap content of N source cells with N target cells pairwise."""
-    SWAP_ATTRS = (
-        'image_path', 'is_placeholder', 'fit_mode', 'rotation',
-        'padding_top', 'padding_bottom', 'padding_left', 'padding_right',
-    )
 
-    def __init__(self, sources, targets, update_callback=None):
+    def __init__(self, sources, targets, project=None, update_callback=None):
         super().__init__(f"Move {len(sources)} Cells")
         self.sources = sources
         self.targets = targets
+        self.project = project
         self.update_callback = update_callback
 
     def redo(self):
@@ -526,11 +577,7 @@ class MultiSwapCellsCommand(QUndoCommand):
 
     def _swap(self):
         for src, tgt in zip(self.sources, self.targets):
-            for attr in self.SWAP_ATTRS:
-                v1 = getattr(src, attr)
-                v2 = getattr(tgt, attr)
-                setattr(src, attr, v2)
-                setattr(tgt, attr, v1)
+            _swap_cell_content(src, tgt, self.project)
         if self.update_callback:
             self.update_callback()
 

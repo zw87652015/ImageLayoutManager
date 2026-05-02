@@ -270,6 +270,7 @@ class Cell:
     # Grid override size (0 means auto). Per-cell absolute pin (when NOT in a size group).
     override_width_mm: float = 0.0
     override_height_mm: float = 0.0
+    aspect_ratio_locked: bool = False
 
     # Size group membership (forces shared W/H with other members). None = ungrouped.
     size_group_id: Optional[str] = None
@@ -330,6 +331,7 @@ class Cell:
             "freeform_h_mm": self.freeform_h_mm,
             "override_width_mm": self.override_width_mm,
             "override_height_mm": self.override_height_mm,
+            "aspect_ratio_locked": self.aspect_ratio_locked,
             "size_group_id": self.size_group_id,
             "z_index": self.z_index,
             "crop_left": self.crop_left,
@@ -369,6 +371,7 @@ class Cell:
         payload.setdefault("freeform_h_mm", 50.0)
         payload.setdefault("override_width_mm", 0.0)
         payload.setdefault("override_height_mm", 0.0)
+        payload.setdefault("aspect_ratio_locked", False)
         payload.setdefault("size_group_id", None)
         payload.setdefault("z_index", 0)
         payload.setdefault("split_direction", "none")

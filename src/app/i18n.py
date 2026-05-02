@@ -141,6 +141,9 @@ _T: dict[str, dict[str, str]] = {
     "opt_page_pnas_double":    {"en": "PNAS Double (178×246mm)",    "zh": "PNAS 双栏 (178×246mm)"},
 
     # ── Placeholders & Special ─────────────────────────────────────
+    "lbl_aspect_lock":        {"en": "Lock Ratio",       "zh": "锁定比例"},
+    "tooltip_aspect_lock":    {"en": "Lock width/height to image aspect ratio", "zh": "锁定宽高比为图像原始比例"},
+
     "placeholder_scale_bar_text": {"en": "Auto (e.g. 10 µm)", "zh": "自动 (例如 10 µm)"},
     "placeholder_label_text":     {"en": "Label text",        "zh": "标注文字"},
     "placeholder_col_ratios":     {"en": "e.g. 1,2,1 (equal if empty)", "zh": "例如 1,2,1 (为空则等分)"},

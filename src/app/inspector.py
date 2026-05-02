@@ -4,12 +4,74 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QToolButton, QButtonGroup, QCheckBox,
     QScrollArea, QColorDialog, QFrame
 )
-from PyQt6.QtCore import pyqtSignal, Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
+from PyQt6.QtGui import QColor, QPainter, QPen
 from typing import Optional
+import math
 from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
+
+
+class LockButton(QToolButton):
+    """QToolButton that plays a brief radial-burst animation when locked."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._burst = 0.0
+        self._burst_color = QColor("#888888")
+        self._anim = QPropertyAnimation(self, b"burst", self)
+        self._anim.setDuration(320)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+    def play_lock_burst(self, color: QColor):
+        self._burst_color = color
+        self._anim.stop()
+        self._anim.start()
+
+    @pyqtProperty(float)
+    def burst(self) -> float:
+        return self._burst
+
+    @burst.setter
+    def burst(self, value: float):
+        self._burst = value
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._burst <= 0.0:
+            return
+        # Burst lines radiate from just above the icon centre (shackle area)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        cx = self.width() / 2
+        cy = self.height() / 2 - self.height() * 0.12  # slightly above centre
+        # opacity: full for first 40%, then fade out
+        t = self._burst
+        opacity = (1.0 - (t - 0.4) / 0.6) if t > 0.4 else 1.0
+        opacity = max(0.0, min(1.0, opacity))
+        # line length grows then shrinks
+        max_r = self.width() * 0.55
+        inner = max_r * 0.18 + max_r * 0.22 * t
+        outer = inner + max_r * 0.35 * min(t * 2, 1.0)
+        color = QColor(self._burst_color)
+        color.setAlphaF(opacity * 0.85)
+        pen = QPen(color, 1.4)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        n_lines = 6
+        angle_offset = -15  # degrees, so lines don't land on icon edges
+        for i in range(n_lines):
+            angle = math.radians(angle_offset + i * 360 / n_lines)
+            x1 = cx + inner * math.cos(angle)
+            y1 = cy + inner * math.sin(angle)
+            x2 = cx + outer * math.cos(angle)
+            y2 = cy + outer * math.sin(angle)
+            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+        painter.end()
 
 
 class ColorPickerWidget(QWidget):
@@ -466,9 +528,15 @@ class Inspector(QWidget):
 
         self._sec_grid_override = QLabel("— Grid Size Override (0=Auto) —")
         self.cell_layout.addRow(self._sec_grid_override)
-        self.override_w = self._create_spinbox(0, 1000, self._emit_override_size)
-        self.override_h = self._create_spinbox(0, 1000, self._emit_override_size)
+        self.override_w = self._create_spinbox(0, 1000, self._on_override_w_changed)
+        self.override_h = self._create_spinbox(0, 1000, self._on_override_h_changed)
         self.cell_layout.addRow(self._fl("lbl_width_mm"),  self.override_w)
+        self.aspect_lock_btn = LockButton()
+        self.aspect_lock_btn.setCheckable(True)
+        self.aspect_lock_btn.setChecked(False)
+        self.aspect_lock_btn.setToolTip(tr("tooltip_aspect_lock"))
+        self.aspect_lock_btn.toggled.connect(self._on_aspect_lock_toggled)
+        self.cell_layout.addRow(self._fl("lbl_aspect_lock"), self.aspect_lock_btn)
         self.cell_layout.addRow(self._fl("lbl_height_mm"), self.override_h)
 
         # --- Size Group section -------------------------------------------
@@ -1062,6 +1130,17 @@ class Inspector(QWidget):
         self.label_color.retranslate_ui()
         self.text_color.retranslate_ui()
 
+    def apply_theme(self, tokens: dict) -> None:
+        """Update theme-sensitive icons (called by main window on theme change)."""
+        from src.app.icons import make_icon
+        color = tokens.get("text", "#333333")
+        self._icon_theme_color = color
+        self._icon_lock_closed = make_icon("lock_closed", color, 16)
+        self._icon_lock_open   = make_icon("lock_open",   color, 16)
+        locked = self.aspect_lock_btn.isChecked()
+        self.aspect_lock_btn.setIcon(self._icon_lock_closed if locked else self._icon_lock_open)
+        self.aspect_lock_btn.setIconSize(__import__('PyQt6.QtCore', fromlist=['QSize']).QSize(16, 16))
+
         # Refresh dynamic apply-button text if a text item is currently selected
         if self.text_group.isVisible():
             if self._current_text_subtype == "corner":
@@ -1140,8 +1219,52 @@ class Inspector(QWidget):
     def _emit_override_size(self):
         self.cell_property_changed.emit({
             "override_width_mm": self.override_w.value(),
-            "override_height_mm": self.override_h.value()
+            "override_height_mm": self.override_h.value(),
+            "aspect_ratio_locked": self.aspect_lock_btn.isChecked(),
         })
+
+    def _on_override_w_changed(self):
+        if self.aspect_lock_btn.isChecked():
+            ar = self._current_aspect_ratio()
+            if ar and ar > 0 and self.override_w.value() > 0:
+                self.override_h.blockSignals(True)
+                self.override_h.setValue(round(self.override_w.value() / ar, 2))
+                self.override_h.blockSignals(False)
+        self._emit_override_size()
+
+    def _on_override_h_changed(self):
+        if self.aspect_lock_btn.isChecked():
+            ar = self._current_aspect_ratio()
+            if ar and ar > 0 and self.override_h.value() > 0:
+                self.override_w.blockSignals(True)
+                self.override_w.setValue(round(self.override_h.value() * ar, 2))
+                self.override_w.blockSignals(False)
+        self._emit_override_size()
+
+    def _on_aspect_lock_toggled(self, locked: bool):
+        icon = getattr(self, '_icon_lock_closed', None) if locked else getattr(self, '_icon_lock_open', None)
+        if icon:
+            self.aspect_lock_btn.setIcon(icon)
+        if locked:
+            burst_color = QColor(getattr(self, '_icon_theme_color', "#888888"))
+            self.aspect_lock_btn.play_lock_burst(burst_color)
+        if locked:
+            # Snap height to match current width using image aspect ratio
+            ar = self._current_aspect_ratio()
+            if ar and ar > 0 and self.override_w.value() > 0:
+                self.override_h.blockSignals(True)
+                self.override_h.setValue(round(self.override_w.value() / ar, 2))
+                self.override_h.blockSignals(False)
+            elif ar and ar > 0 and self.override_h.value() > 0:
+                self.override_w.blockSignals(True)
+                self.override_w.setValue(round(self.override_h.value() * ar, 2))
+                self.override_w.blockSignals(False)
+        self._emit_override_size()
+
+    def _current_aspect_ratio(self) -> Optional[float]:
+        """Return w/h aspect ratio of the currently selected cell's image, or None."""
+        ar = getattr(self, "_current_cell_aspect_ratio", None)
+        return ar
 
     # --- Size Group handlers ---
     _SG_DATA_ROLE = Qt.ItemDataRole.UserRole
@@ -1554,6 +1677,12 @@ class Inspector(QWidget):
             self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
             self.override_w.setValue(data.get("override_width_mm", 0.0))
             self.override_h.setValue(data.get("override_height_mm", 0.0))
+            locked = data.get("aspect_ratio_locked", False)
+            self.aspect_lock_btn.setChecked(locked)
+            icon = getattr(self, '_icon_lock_closed', None) if locked else getattr(self, '_icon_lock_open', None)
+            if icon:
+                self.aspect_lock_btn.setIcon(icon)
+            self._current_cell_aspect_ratio = data.get("_image_aspect_ratio")
             # Size group section
             self._populate_size_group_section(
                 data.get("size_group_id"),

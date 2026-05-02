@@ -816,6 +816,7 @@ class MainWindow(QMainWindow):
 
         # Inspector Area
         self.inspector = Inspector()
+        self.inspector.apply_theme(get_tokens(self._current_theme))
         splitter.addWidget(self.inspector)
 
         # Set initial sizes and stretch factors (3-columns)
@@ -1188,7 +1189,10 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         app.setPalette(build_palette(theme))
         app.setStyleSheet(get_stylesheet(theme))
-        self.layers_panel.apply_theme(get_tokens(theme))
+        tokens = get_tokens(theme)
+        self.layers_panel.apply_theme(tokens)
+        if hasattr(self, 'inspector'):
+            self.inspector.apply_theme(tokens)
 
         # Recolour toolbar icons + segmented glyphs to match the new theme.
         self._refresh_toolbar_icons()
@@ -1201,7 +1205,6 @@ class MainWindow(QMainWindow):
         self._update_theme_labels()
 
         # Apply canvas visuals (background grid, cell colours) to all scenes.
-        tokens = get_tokens(theme)
         for tab in self._tabs:
             if tab.scene:
                 tab.scene.apply_theme(tokens)
@@ -1488,7 +1491,7 @@ class MainWindow(QMainWindow):
             return
         neighbor = self._find_neighbor_cell(cell, direction)
         if neighbor and neighbor.id != cell.id:
-            cmd = SwapCellsCommand(cell, neighbor, self._refresh_and_update)
+            cmd = SwapCellsCommand(cell, neighbor, self.project, self._refresh_and_update)
             self.undo_stack.push(cmd)
             # Keep the moved cell selected
             self._select_cells_by_ids([cell.id])
@@ -2009,14 +2012,14 @@ class MainWindow(QMainWindow):
         c2 = self.project.find_cell_by_id(id2)
         
         if c1 and c2:
-            cmd = SwapCellsCommand(c1, c2, self._refresh_and_update)
+            cmd = SwapCellsCommand(c1, c2, self.project, self._refresh_and_update)
             self.undo_stack.push(cmd)
 
     def _on_multi_cells_swapped(self, source_ids, target_ids):
         sources = [self.project.find_cell_by_id(sid) for sid in source_ids]
         targets = [self.project.find_cell_by_id(tid) for tid in target_ids]
         if all(sources) and all(targets) and len(sources) == len(targets):
-            cmd = MultiSwapCellsCommand(sources, targets, self._refresh_and_update)
+            cmd = MultiSwapCellsCommand(sources, targets, self.project, self._refresh_and_update)
             self.undo_stack.push(cmd)
 
     def _on_insert_row(self, insert_index):
@@ -2173,6 +2176,7 @@ class MainWindow(QMainWindow):
                 cell_dict = cell.to_dict()
                 cell_dict["layout_mode"] = getattr(self.project, 'layout_mode', 'grid')
                 cell_dict["_size_groups"] = self._size_groups_payload()
+                cell_dict["_image_aspect_ratio"] = self._cell_image_aspect_ratio(cell)
                 corner_labels = {}
                 for t in self.project.text_items:
                     if t.scope == "cell" and t.parent_id == cell.id and t.anchor:
@@ -2261,6 +2265,41 @@ class MainWindow(QMainWindow):
                     DeleteSizeGroupCommand(self.project, gid, self._refresh_and_update)
                 )
         self.undo_stack.endMacro()
+
+    def _cell_image_aspect_ratio(self, cell) -> Optional[float]:
+        """Return w/h aspect ratio of the cell's image, or None if unavailable."""
+        path = getattr(cell, 'image_path', None)
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            ext = os.path.splitext(path)[1].lower()
+            if ext == '.svg':
+                from PyQt6.QtSvg import QSvgRenderer
+                from PyQt6.QtCore import QByteArray
+                from src.utils.svg_utils import sanitize_svg_bytes
+                with open(path, 'rb') as f:
+                    data = sanitize_svg_bytes(f.read())
+                r = QSvgRenderer(QByteArray(data))
+                sz = r.defaultSize()
+                if sz.width() > 0 and sz.height() > 0:
+                    return sz.width() / sz.height()
+            elif ext in ('.pdf', '.eps'):
+                import fitz
+                doc = fitz.open(path)
+                if doc.page_count > 0:
+                    rect = doc[0].rect
+                    doc.close()
+                    if rect.height > 0:
+                        return rect.width / rect.height
+            else:
+                from PIL import Image
+                with Image.open(path) as img:
+                    w, h = img.size
+                    if h > 0:
+                        return w / h
+        except Exception:
+            pass
+        return None
 
     def _size_groups_payload(self) -> list:
         """Build the list-of-dicts passed to the inspector for combo population."""
