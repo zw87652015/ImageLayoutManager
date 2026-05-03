@@ -501,6 +501,10 @@ class Project:
     label_row_height: float = 0.0  # mm, 0 = auto (computed from font size)
     label_col_width: float = 10.0  # mm, width of label column for label_col_left/right placement
 
+    # FigSpace / publication metadata — read by FigSpace without unpacking the full project.
+    figure_number: str = ""   # e.g. "Figure 1", "Supplementary Figure 3"
+    figure_title: str = ""    # short descriptive title for the figure
+
     # TIFF export colour model: "rgb" (default) or "cmyk" (print-ready).
     tiff_color_mode: str = "rgb"
     # Absolute path to a CMYK ICC profile (*.icc/*.icm). None = auto-detect a
@@ -605,6 +609,8 @@ class Project:
             "label_offset_y": self.label_offset_y,
             "label_row_height": self.label_row_height,
             "label_col_width": self.label_col_width,
+            "figure_number": self.figure_number,
+            "figure_title": self.figure_title,
             "tiff_color_mode": self.tiff_color_mode,
             "cmyk_icc_profile_path": self.cmyk_icc_profile_path,
             "cmyk_rendering_intent": self.cmyk_rendering_intent,
@@ -656,6 +662,8 @@ class Project:
         p.label_offset_y = data.get("label_offset_y", 0.0)
         p.label_row_height = data.get("label_row_height", 0.0)
         p.label_col_width = data.get("label_col_width", 10.0)
+        p.figure_number = data.get("figure_number", "")
+        p.figure_title = data.get("figure_title", "")
         p.tiff_color_mode = data.get("tiff_color_mode", "rgb")
         p.cmyk_icc_profile_path = data.get("cmyk_icc_profile_path", None)
         p.cmyk_rendering_intent = int(data.get("cmyk_rendering_intent", 1))

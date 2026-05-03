@@ -3897,6 +3897,7 @@ class MainWindow(QMainWindow):
             from PyQt6.QtCore import QBuffer, QIODevice
             from PyQt6.QtGui import QImage
             qimg: QImage = ImageExporter.render_to_qimage(project)
+            print(f"[preview] render_to_qimage -> {'None' if qimg is None else f'{qimg.width()}x{qimg.height()} null={qimg.isNull()}'}")
             if qimg is None or qimg.isNull():
                 return None
             # Cap long edge at 1920 px so the preview never bloats
@@ -3917,8 +3918,10 @@ class MainWindow(QMainWindow):
             ok = qimg.save(buf, "JPG", 88)
             data = bytes(buf.data()) if ok else None
             buf.close()
+            print(f"[preview] JPEG encode ok={ok}, bytes={len(data) if data else 0}")
             return data
-        except Exception:
+        except Exception as _e:
+            import traceback; traceback.print_exc()
             return None
 
     @staticmethod

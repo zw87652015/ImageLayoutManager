@@ -68,6 +68,8 @@ from src.utils.figpack.zip_safety import (
 # ──────────────────────────────────────────────────────────────────────
 
 FIGPACK_FORMAT_VERSION = 1
+# figure_number and figure_title were added as optional fields in metadata.json
+# without a version bump — v1 readers silently ignore unknown keys, so no break.
 
 # Filenames that always live at the archive root.
 PROJECT_JSON = "project.json"
@@ -404,6 +406,7 @@ def _build_metadata(
     manifest: Dict[str, AssetRecord],
     *,
     app_version: str,
+    project=None,
 ) -> Dict[str, Any]:
     """Assemble ``metadata.json`` payload from the manifest."""
     return {
@@ -411,6 +414,8 @@ def _build_metadata(
         "app_version": app_version,
         "created_at": datetime.datetime.now(datetime.timezone.utc)
             .replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "figure_number": getattr(project, "figure_number", "") or "",
+        "figure_title": getattr(project, "figure_title", "") or "",
         "host": {
             "os": platform.system().lower(),
             "user": _safe_username(),
@@ -726,6 +731,8 @@ def _pack_project_json_only(
     new_meta.setdefault("host", {})
     new_meta["host"]["os"] = platform.system().lower()
     new_meta["host"]["user"] = _safe_username()
+    new_meta["figure_number"] = getattr(project, "figure_number", "") or ""
+    new_meta["figure_title"] = getattr(project, "figure_title", "") or ""
 
     project_json = json.dumps(
         transformed, ensure_ascii=False, indent=2,
@@ -743,7 +750,11 @@ def _pack_project_json_only(
             out = preview_renderer(project)
             if isinstance(out, (bytes, bytearray)) and len(out) > 0:
                 preview_bytes = bytes(out)
+                print(f"[pack fast] preview_bytes={len(preview_bytes)}")
+            else:
+                print(f"[pack fast] preview_renderer returned {type(out)} len={len(out) if out else 0}")
         except Exception:
+            import traceback; traceback.print_exc()
             preview_bytes = None
 
     project_name = (
@@ -920,7 +931,7 @@ def pack_project(
     )
     project_dict = project.to_dict()
     transformed = _transform_project_dict(project_dict, path_to_id)
-    metadata = _build_metadata(manifest, app_version=app_version)
+    metadata = _build_metadata(manifest, app_version=app_version, project=project)
 
     project_json = json.dumps(
         transformed, ensure_ascii=False, indent=2

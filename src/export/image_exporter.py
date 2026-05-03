@@ -747,12 +747,28 @@ class ImageExporter:
         th_mm = base_rect.height() * text_scale
 
         x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
+
+        # The canvas positions global text via setPos(x, y) + setScale(text_scale).
+        # Qt scales around the item origin, so the visual top-left is shifted inward
+        # by (1 - scale) * br/2. Correct for that here to match on-canvas placement.
+        is_global = not (text_item.scope == "cell" and text_item.parent_id
+                         and text_item.parent_id in layout_result.cell_rects)
+        if is_global:
+            x_mm += (base_rect.width() - tw_mm) / 2.0
+            y_mm += (base_rect.height() - th_mm) / 2.0
+
         x_px = x_mm * scale
         y_px = y_mm * scale
 
         render_scale = text_scale * scale
         painter.save()
         painter.translate(x_px, y_px)
+        # Rotation around the scaled rect centre, same as canvas.
+        rotation_deg = float(getattr(text_item, 'rotation', 0.0)) if is_global else 0.0
+        if rotation_deg:
+            painter.translate(tw_mm * scale / 2.0, th_mm * scale / 2.0)
+            painter.rotate(rotation_deg)
+            painter.translate(-tw_mm * scale / 2.0, -th_mm * scale / 2.0)
         if getattr(text_item, 'bg_enabled', False):
             from PyQt6.QtGui import QBrush as _QB
             pad = float(getattr(text_item, 'bg_padding_mm', 0.6)) * scale
