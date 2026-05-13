@@ -2010,8 +2010,13 @@ class MainWindow(QMainWindow):
     def _on_cell_swapped(self, id1, id2):
         c1 = self.project.find_cell_by_id(id1)
         c2 = self.project.find_cell_by_id(id2)
-        
+
         if c1 and c2:
+            # Invalidate layout cache for both cells so refresh_layout always
+            # repositions them, even when content is identical (e.g. two empty
+            # placeholders — animation moved their items but fingerprint unchanged).
+            self.scene._cell_data_cache.pop(id1, None)
+            self.scene._cell_data_cache.pop(id2, None)
             cmd = SwapCellsCommand(c1, c2, self.project, self._refresh_and_update)
             self.undo_stack.push(cmd)
 
@@ -2019,6 +2024,8 @@ class MainWindow(QMainWindow):
         sources = [self.project.find_cell_by_id(sid) for sid in source_ids]
         targets = [self.project.find_cell_by_id(tid) for tid in target_ids]
         if all(sources) and all(targets) and len(sources) == len(targets):
+            for cid in list(source_ids) + list(target_ids):
+                self.scene._cell_data_cache.pop(cid, None)
             cmd = MultiSwapCellsCommand(sources, targets, self.project, self._refresh_and_update)
             self.undo_stack.push(cmd)
 

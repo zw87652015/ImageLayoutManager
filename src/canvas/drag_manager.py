@@ -201,10 +201,17 @@ class DragManager(QObject):
         self._ghost_display_w = cell_w * self.GHOST_SCALE
         self._ghost_display_h = cell_h * self.GHOST_SCALE
 
-        # Centre on mouse: pos = mouse - origin_offset (in local pixmap units)
+        # Start ghost visually at the cell's actual top-left so it appears to
+        # lift from where it is.  Qt scales around (ox,oy) in local coords, so
+        # scene_top_left = pos + ox*(1-s).  Inverting: pos = cell_xy - ox*(1-s).
+        # The spring tick targets (mouse - origin_offset) every frame and smoothly
+        # attracts the ghost centre toward the cursor during the first moments of drag.
+        ox = self._ghost_origin_offset.x()
+        oy = self._ghost_origin_offset.y()
+        s = self._base_scale
         self._ghost_scene_pos = QPointF(
-            scene_pos.x() - self._ghost_origin_offset.x(),
-            scene_pos.y() - self._ghost_origin_offset.y(),
+            self._source_scene_rect.x() - ox * (1.0 - s),
+            self._source_scene_rect.y() - oy * (1.0 - s),
         )
         self._ghost.setPos(self._ghost_scene_pos)
 
@@ -615,6 +622,9 @@ class DragManager(QObject):
             slide.start()
             self._swap_slide_anims.append(slide)
 
+        if self._ghost:
+            self._ghost.setRotation(0.0)
+
         self._anim = QVariantAnimation(self)
         self._anim.setStartValue(0.0)
         self._anim.setEndValue(1.0)
@@ -657,15 +667,25 @@ class DragManager(QObject):
             self._ghost.setPos(x, y)
 
     def _on_drop_finished(self, source_ids, target_ids):
-        # Snap each target cell to its exact final slide position before the
-        # data-level swap fires, so refresh doesn't cause a visible blink.
-        for item, final_pos in self._swap_slide_pairs:
-            self._safe_set_pos(item, final_pos.x(), final_pos.y())
-        self._cleanup()
-        if len(source_ids) == 1 and len(target_ids) == 1:
-            self.swap_requested.emit(source_ids[0], target_ids[0])
-        else:
-            self.multi_swap_requested.emit(source_ids, target_ids)
+        view = self._view
+        viewport = view.viewport() if view else None
+        if viewport:
+            viewport.setUpdatesEnabled(False)
+        try:
+            # Snap each target cell to its final slide position while painting is
+            # suppressed, so no intermediate frame is shown before refresh_layout.
+            for item, final_pos in self._swap_slide_pairs:
+                self._safe_set_pos(item, final_pos.x(), final_pos.y())
+
+            self._cleanup()
+            if len(source_ids) == 1 and len(target_ids) == 1:
+                self.swap_requested.emit(source_ids[0], target_ids[0])
+            else:
+                self.multi_swap_requested.emit(source_ids, target_ids)
+        finally:
+            if viewport:
+                viewport.setUpdatesEnabled(True)
+                viewport.update()
 
     # ------------------------------------------------------------------
     # Cleanup

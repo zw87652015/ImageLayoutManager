@@ -765,16 +765,15 @@ class DeleteCellCommand(QUndoCommand):
         self.row_index = row_index
         self.col_index = col_index
         self.update_callback = update_callback
-        import copy
-        self.old_rows = copy.deepcopy(project.rows)
-        self.old_cells = copy.deepcopy(project.cells)
-        # Collect orphaned text items for the deleted cell (and its sub-cell leaves)
-        deleted_cell = next(
+        # Store the actual cell object (not a deepcopy) so that other commands
+        # holding a direct reference (e.g. DropImageCommand) remain valid after undo.
+        self.deleted_cell = next(
             (c for c in project.cells if c.row_index == row_index and c.col_index == col_index), None
         )
+        # Collect orphaned text items for the deleted cell (and its sub-cell leaves)
         deleted_ids = set()
-        if deleted_cell:
-            for leaf in deleted_cell.get_all_leaves():
+        if self.deleted_cell:
+            for leaf in self.deleted_cell.get_all_leaves():
                 deleted_ids.add(leaf.id)
         self.deleted_text_items = [
             t for t in project.text_items if t.parent_id in deleted_ids
@@ -802,8 +801,17 @@ class DeleteCellCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        self.project.rows[:] = copy.deepcopy(self.old_rows)
-        _restore_cells_inplace(self.project, self.old_cells)
+        row = next((r for r in self.project.rows if r.index == self.row_index), None)
+        if not row or self.deleted_cell is None:
+            return
+        # Shift subsequent cells right to make room, then re-insert the original object.
+        for c in self.project.cells:
+            if c.row_index == self.row_index and c.col_index >= self.col_index:
+                c.col_index += 1
+        self.deleted_cell.row_index = self.row_index
+        self.deleted_cell.col_index = self.col_index
+        self.project.cells.append(self.deleted_cell)
+        row.column_count += 1
         # Restore orphaned text items
         for t in self.deleted_text_items:
             if t not in self.project.text_items:
@@ -1048,14 +1056,37 @@ class InsertSubCellCommand(QUndoCommand):
         from src.model.data_model import Cell
         parent = self.project.find_parent_of(self.cell_id)
         if not parent:
-            # Top-level cell: wrap it in a split
+            # Top-level cell has no parent split — delegate to wrap logic so the
+            # insert actually does something instead of silently returning.
+            cell = self.project.find_cell_by_id(self.cell_id)
+            if cell is None:
+                return
+            if not hasattr(self, '_new_cell'):
+                self._new_cell = Cell(is_placeholder=True)
+            if not hasattr(self, '_clone_id'):
+                self._clone_id = str(uuid.uuid4())
+            clone = copy.deepcopy(cell)
+            clone.id = self._clone_id
+            children = [self._new_cell, clone] if self.position == "before" else [clone, self._new_cell]
+            cell.children = children
+            cell.split_direction = "horizontal"
+            cell.split_ratios = [1.0, 1.0]
+            cell.image_path = None
+            cell.is_placeholder = False
+            cell.scale_bar_enabled = False
+            for t in self.project.text_items:
+                if t.parent_id == cell.id and t.scope == "cell":
+                    t.parent_id = clone.id
+            if self.update_callback:
+                self.update_callback()
             return
         idx = next((i for i, c in enumerate(parent.children) if c.id == self.cell_id), None)
         if idx is None:
             return
         insert_at = idx if self.position == "before" else idx + 1
-        new_cell = Cell(is_placeholder=True)
-        parent.children.insert(insert_at, new_cell)
+        if not hasattr(self, '_new_cell'):
+            self._new_cell = Cell(is_placeholder=True)
+        parent.children.insert(insert_at, self._new_cell)
         # Update split_ratios: insert 1.0 at the same position
         while len(parent.split_ratios) < len(parent.children) - 1:
             parent.split_ratios.append(1.0)
@@ -1131,6 +1162,7 @@ class WrapAndInsertCommand(QUndoCommand):
 
     def redo(self):
         from src.model.data_model import Cell
+        import copy
         cell = self.project.find_cell_by_id(self.cell_id)
         if not cell:
             return
@@ -1142,19 +1174,28 @@ class WrapAndInsertCommand(QUndoCommand):
             if idx is None:
                 return
             insert_at = idx if self.position == "before" else idx + 1
-            new_cell = Cell(is_placeholder=True)
-            parent.children.insert(insert_at, new_cell)
+            # Reuse the same Cell object (with stable ID) across redo calls so
+            # the canvas does not create a new blank CellItem on each redo.
+            if not hasattr(self, '_new_cell'):
+                self._new_cell = Cell(is_placeholder=True)
+            parent.children.insert(insert_at, self._new_cell)
             while len(parent.split_ratios) < len(parent.children) - 1:
                 parent.split_ratios.append(1.0)
             parent.split_ratios.insert(insert_at, 1.0)
         else:
-            # Need to wrap: replace this cell in-place with a split container
-            # Save current cell state into a clone
-            import copy, uuid
+            # Need to wrap: replace this cell in-place with a split container.
+            # Generate clone/new-cell IDs only once so every redo uses the same
+            # stable IDs — prevents the canvas from creating a fresh blank CellItem
+            # on each redo and keeps DropImageCommand references valid.
             old_id = cell.id
+            if not hasattr(self, '_clone_id'):
+                self._clone_id = str(uuid.uuid4())
+            if not hasattr(self, '_new_cell_id'):
+                self._new_cell_id = str(uuid.uuid4())
+
             clone = copy.deepcopy(cell)
-            clone.id = str(uuid.uuid4())  # New ID to avoid collision with container
-            new_cell = Cell(is_placeholder=True)
+            clone.id = self._clone_id
+            new_cell = Cell(id=self._new_cell_id, is_placeholder=True)
 
             if self.position == "before":
                 children = [new_cell, clone]
