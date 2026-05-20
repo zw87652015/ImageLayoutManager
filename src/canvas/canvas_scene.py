@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent
-from PyQt6.QtGui import QColor, QPen, QBrush, QPainter
+from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QPainterPath
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF
 
 from src.model.data_model import Project, Cell
@@ -82,6 +82,9 @@ class CanvasScene(QGraphicsScene):
 
         self.preview_mode = False  # hides cell borders for export preview
 
+        # Veil shown in preview mode when an export region is active
+        self._preview_region_veil = None
+
         # Crop isolation veil
         self._crop_veil_item = None
         self._active_crop_cell = None
@@ -111,15 +114,62 @@ class CanvasScene(QGraphicsScene):
 
     # ------------------------------------------------------------------
 
+    def _show_preview_region_veil(self) -> None:
+        """Overlay a dark veil over the area outside the export region.
+
+        Only has effect when an export region is defined. The veil uses a
+        QPainterPath with the export-region rect subtracted so content inside
+        the region stays fully lit while everything outside is dimmed,
+        matching what the actual exported image will contain.
+        """
+        self._hide_preview_region_veil()
+        if not self.project:
+            return
+        er = getattr(self.project, 'export_region', None)
+        if er is None:
+            return
+        from PyQt6.QtWidgets import QGraphicsPathItem
+        outer = QPainterPath()
+        outer.addRect(self.sceneRect().adjusted(-500, -500, 500, 500))
+        inner = QPainterPath()
+        inner.addRect(QRectF(er.x_mm, er.y_mm, er.w_mm, er.h_mm))
+        veil_path = outer.subtracted(inner)
+        item = QGraphicsPathItem(veil_path)
+        item.setPen(QPen(Qt.PenStyle.NoPen))
+        item.setBrush(QBrush(QColor(0, 0, 0, 160)))
+        item.setZValue(850)  # above cells/dividers, below modal overlays
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.addItem(item)
+        self._preview_region_veil = item
+
+    def _hide_preview_region_veil(self) -> None:
+        if self._preview_region_veil is not None:
+            if self._preview_region_veil.scene() is self:
+                self.removeItem(self._preview_region_veil)
+            self._preview_region_veil = None
+
     def set_preview_mode(self, enabled: bool):
         if self.preview_mode == enabled:
             return
         self.preview_mode = enabled
+        # --- Editing-only UI elements ---
         for btn in self._add_buttons:
             btn.setVisible(not enabled)
+        for div in self._divider_items:
+            div.setVisible(not enabled)
+        self.margin_item.setVisible(not enabled)
+        if self._export_region_item is not None:
+            self._export_region_item.setVisible(not enabled)
+        # Show/hide export-region crop veil in preview mode
+        if enabled:
+            self._show_preview_region_veil()
+        else:
+            self._hide_preview_region_veil()
         # scene.update() only marks the background dirty; items must be
         # explicitly invalidated so Qt calls their paint() again.
-        for item in list(self.cell_items.values()) + list(self.label_cell_items.values()):
+        for item in (list(self.cell_items.values())
+                     + list(self.label_cell_items.values())
+                     + list(self.text_items.values())):
             item.update()
 
     def set_project(self, project: Project):
@@ -691,6 +741,10 @@ class CanvasScene(QGraphicsScene):
             self.addItem(btn_r)
             self._add_buttons.append(btn_r)
 
+        if self.preview_mode:
+            for btn in self._add_buttons:
+                btn.setVisible(False)
+
     def _clear_dividers(self):
         for d in self._divider_items:
             if d.scene():
@@ -777,6 +831,10 @@ class CanvasScene(QGraphicsScene):
 
                 x_cursor += gap
 
+        if self.preview_mode:
+            for div in self._divider_items:
+                div.setVisible(False)
+
     def _divider_live_update(self, div: 'DividerItem'):
         """Apply ratio changes live (without undo) so the user sees instant feedback."""
         if not self.project:
@@ -817,12 +875,18 @@ class CanvasScene(QGraphicsScene):
             if self._export_region_item is not None and self._export_region_item.scene():
                 self.removeItem(self._export_region_item)
             self._export_region_item = None
+            self._hide_preview_region_veil()
             return
         if self._export_region_item is None:
             self._export_region_item = ExportRegionItem(er.x_mm, er.y_mm, er.w_mm, er.h_mm)
             self.addItem(self._export_region_item)
+            if self.preview_mode:
+                self._export_region_item.setVisible(False)
         else:
             self._export_region_item.setRect(QRectF(er.x_mm, er.y_mm, er.w_mm, er.h_mm))
+        # Keep veil in sync when region changes during preview mode
+        if self.preview_mode:
+            self._show_preview_region_veil()
 
     def begin_define_export_region(self):
         """Enter rubber-band mode — next left-press on empty page area starts the drag."""

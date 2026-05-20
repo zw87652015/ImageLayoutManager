@@ -48,9 +48,6 @@ class ImageExporter:
         width_px = int(page_w_mm * scale)
         height_px = int(page_h_mm * scale)
         
-        print(f"DEBUG: Exporting {format}: {page_w_mm}mm x {page_h_mm}mm at {project.dpi} DPI")
-        print(f"DEBUG: Image size: {width_px} x {height_px} pixels")
-
         # Create QImage with white background
         # Use ARGB32 for transparency support, RGB32 for JPG
         if format.upper() in ("JPG", "JPEG"):
@@ -206,11 +203,29 @@ class ImageExporter:
 
     @staticmethod
     def render_to_qimage(project: Project) -> QImage:
-        """Render project to a QImage (in-memory, no file save)."""
+        """Render project to a QImage (in-memory, no file save).
+
+        Respects ``project.export_region`` (clips canvas to region bounds,
+        same as ``export()``).  Delegates all painting to ``_paint_scene``
+        so z-index ordering and label-placement logic stay in sync.
+        """
         layout_result = LayoutEngine.calculate_layout(project)
+
+        export_region = getattr(project, 'export_region', None)
+        if export_region is not None:
+            page_w_mm = export_region.w_mm
+            page_h_mm = export_region.h_mm
+            region_dx_mm = export_region.x_mm
+            region_dy_mm = export_region.y_mm
+        else:
+            page_w_mm = project.page_width_mm
+            page_h_mm = project.page_height_mm
+            region_dx_mm = 0.0
+            region_dy_mm = 0.0
+
         scale = project.dpi / 25.4
-        width_px = int(project.page_width_mm * scale)
-        height_px = int(project.page_height_mm * scale)
+        width_px = int(page_w_mm * scale)
+        height_px = int(page_h_mm * scale)
 
         image = QImage(width_px, height_px, QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.white)
@@ -224,51 +239,11 @@ class ImageExporter:
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
+        if region_dx_mm != 0.0 or region_dy_mm != 0.0:
+            painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
+
         try:
-            label_row_above = getattr(project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
-            label_rects = getattr(layout_result, 'label_rects', {})
-
-            for cell in project.get_all_leaf_cells():
-                if cell.id not in layout_result.cell_rects:
-                    continue
-                x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
-                target_rect = QRectF(x_mm * scale, y_mm * scale, w_mm * scale, h_mm * scale)
-                p_top = cell.padding_top * scale
-                p_right = cell.padding_right * scale
-                p_bottom = cell.padding_bottom * scale
-                p_left = cell.padding_left * scale
-                content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
-                if content_rect.width() <= 0 or content_rect.height() <= 0:
-                    continue
-
-                if cell.image_path and os.path.exists(cell.image_path):
-                    rotation = getattr(cell, 'rotation', 0)
-                    crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
-                            getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                    svg_override = None
-                    if cell.image_path.lower().endswith('.svg'):
-                        from src.utils.svg_text_utils import build_svg_overrides_for_path, apply_svg_font_overrides
-                        ov = build_svg_overrides_for_path(project, cell.image_path)
-                        if ov:
-                            svg_override = apply_svg_font_overrides(cell.image_path, ov)
-                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
-                    if getattr(cell, 'scale_bar_enabled', False):
-                        ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
-
-                ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
-
-            if label_row_above:
-                ImageExporter._draw_label_cells(painter, project, layout_result, scale)
-
-            for text_item in project.text_items:
-                if (
-                    label_row_above
-                    and text_item.scope == 'cell'
-                    and getattr(text_item, 'subtype', None) != 'corner'
-                    and text_item.parent_id in label_rects
-                ):
-                    continue
-                ImageExporter._draw_text(painter, project, text_item, layout_result, scale)
+            ImageExporter._paint_scene(painter, project, layout_result, scale)
         finally:
             painter.end()
 

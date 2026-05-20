@@ -13,6 +13,12 @@ from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
 
 
+# Sentinel for "mixed values across a multi-selection". Inspector helpers
+# treat this specially: spin boxes show a dash placeholder instead of a
+# concrete value so the user can see the field differs across selected items.
+MIXED = object()
+
+
 class LockButton(QToolButton):
     """QToolButton that plays a brief radial-burst animation when locked."""
 
@@ -1164,6 +1170,29 @@ class Inspector(QWidget):
         sb.valueChanged.connect(callback)
         return sb
 
+    @staticmethod
+    def _set_spin(spin, value, default=0.0):
+        """Set *spin* to *value*, or show an em-dash placeholder if value is MIXED.
+
+        When a multi-selection contains differing values for this field, callers
+        pass MIXED so the user sees the field is non-uniform. The spin's
+        underlying numeric value is reset to *default*; any user edit overwrites
+        the placeholder and emits valueChanged normally.
+        """
+        try:
+            le = spin.lineEdit()
+        except Exception:
+            le = None
+        if value is MIXED:
+            spin.setValue(default)
+            if le is not None:
+                le.setPlaceholderText("—")
+                le.setText("")
+        else:
+            if le is not None:
+                le.setPlaceholderText("")
+            spin.setValue(value)
+
     def _on_grid_mode_changed(self, index: int):
         mode = "stretch" if index == 0 else "fixed"
         self.row_alignment.setEnabled(mode == "fixed")
@@ -1558,24 +1587,48 @@ class Inspector(QWidget):
             self.scale_bar_group.hide()
             if data:
                 self.blockSignals(True)
-                self.fit_mode_combo.setCurrentText(data.get("fit_mode", "contain"))
-                self.rotation_combo.setCurrentText(str(data.get("rotation", 0)))
-                self.pad_top.setValue(data.get("padding_top", 0))
-                self.pad_bottom.setValue(data.get("padding_bottom", 0))
-                self.pad_left.setValue(data.get("padding_left", 0))
-                self.pad_right.setValue(data.get("padding_right", 0))
-                self.freeform_x.setValue(data.get("freeform_x_mm", 0.0))
-                self.freeform_y.setValue(data.get("freeform_y_mm", 0.0))
-                self.freeform_w.setValue(data.get("freeform_w_mm", 50.0))
-                self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
-                self.override_w.setValue(data.get("override_width_mm", 0.0))
-                self.override_h.setValue(data.get("override_height_mm", 0.0))
+                # Combos can't blank cleanly; show first item's value when mixed.
+                fm = data.get("fit_mode", "contain")
+                self.fit_mode_combo.setCurrentText(fm if fm is not MIXED else "")
+                rot = data.get("rotation", 0)
+                self.rotation_combo.setCurrentText(str(rot) if rot is not MIXED else "")
+                self._set_spin(self.pad_top,    data.get("padding_top", 0))
+                self._set_spin(self.pad_bottom, data.get("padding_bottom", 0))
+                self._set_spin(self.pad_left,   data.get("padding_left", 0))
+                self._set_spin(self.pad_right,  data.get("padding_right", 0))
+                self._set_spin(self.freeform_x, data.get("freeform_x_mm", 0.0))
+                self._set_spin(self.freeform_y, data.get("freeform_y_mm", 0.0))
+                self._set_spin(self.freeform_w, data.get("freeform_w_mm", 50.0), default=50.0)
+                self._set_spin(self.freeform_h, data.get("freeform_h_mm", 50.0), default=50.0)
+                self._set_spin(self.override_w, data.get("override_width_mm", 0.0))
+                self._set_spin(self.override_h, data.get("override_height_mm", 0.0))
                 # Size group: show current only if all selected share one; still allow assignment
+                sg = data.get("size_group_id")
                 self._populate_size_group_section(
-                    data.get("size_group_id"),
+                    None if sg is MIXED else sg,
                     data.get("_size_groups", []),
                 )
                 self.blockSignals(False)
+            return
+
+        if item_type == 'mixed':
+            # Multiple items of different kinds selected. Hide every per-item
+            # group and show only a small hint plus the project group, mirroring
+            # PowerPoint's behaviour when you select objects of mixed types.
+            self.no_selection_label.hide()
+            self.cell_group.hide()
+            self.text_group.hide()
+            self.label_cell_group.hide()
+            self.row_group.hide()
+            self.subcell_group.hide()
+            self.pip_group.hide()
+            self.scale_bar_group.hide()
+            count = (data or {}).get("count", 0) if isinstance(data, dict) else 0
+            self.multi_label.setText(
+                tr("multi_mixed_selection").format(count=count)
+                if count else tr("multi_mixed_selection_no_count")
+            )
+            self.multi_label.show()
             return
 
         if item_type == 'label_cell':

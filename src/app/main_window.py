@@ -553,6 +553,14 @@ class MainWindow(QMainWindow):
 
         file_menu.addAction(new_action)
         file_menu.addAction(open_action)
+
+        # Open Recent submenu — populated lazily so it always reflects
+        # the latest QSettings value (including changes from save/save-as
+        # in the current session).
+        self._recent_menu = QMenu(tr("action_open_recent"), self)
+        self._recent_menu.aboutToShow.connect(self._rebuild_recent_menu)
+        file_menu.addMenu(self._recent_menu)
+
         file_menu.addAction(save_action)
         file_menu.addAction(save_as_action)
         file_menu.addAction(convert_to_bundle_action)
@@ -1313,6 +1321,8 @@ class MainWindow(QMainWindow):
 
         self._act_new.setText(tr("action_new"))
         self._act_open.setText(tr("action_open"))
+        if hasattr(self, "_recent_menu"):
+            self._recent_menu.setTitle(tr("action_open_recent"))
         self._act_save.setText(tr("action_save"))
         self._act_save_as.setText(tr("action_save_as"))
         self._act_convert_to_bundle.setText(tr("action_convert_to_bundle"))
@@ -3789,6 +3799,75 @@ class MainWindow(QMainWindow):
         ]
         self._set_project(project, None)
 
+    # ------------------------------------------------------------------
+    # Recent projects (persisted via QSettings)
+    # ------------------------------------------------------------------
+
+    _RECENT_MAX = 10
+
+    def _get_recent_projects(self) -> list[str]:
+        """Return the persisted recent-projects list, pruning missing files."""
+        raw = self._settings.value("recent_projects", []) or []
+        # QSettings on some platforms returns a single string instead of a list
+        if isinstance(raw, str):
+            raw = [raw]
+        out: list[str] = []
+        seen: set[str] = set()
+        for p in raw:
+            if not isinstance(p, str) or not p:
+                continue
+            key = os.path.normcase(os.path.abspath(p))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(p)
+        return out
+
+    def _remember_recent(self, path: str) -> None:
+        """Move *path* to the top of the recent-projects list."""
+        if not path:
+            return
+        norm = os.path.normcase(os.path.abspath(path))
+        items = [p for p in self._get_recent_projects()
+                 if os.path.normcase(os.path.abspath(p)) != norm]
+        items.insert(0, path)
+        items = items[: self._RECENT_MAX]
+        self._settings.setValue("recent_projects", items)
+
+    def _clear_recent_projects(self) -> None:
+        self._settings.setValue("recent_projects", [])
+
+    def _rebuild_recent_menu(self) -> None:
+        """Populate the Open Recent submenu from QSettings."""
+        self._recent_menu.clear()
+        items = self._get_recent_projects()
+        # Filter out files that no longer exist so the menu stays useful.
+        existing = [p for p in items if os.path.exists(p)]
+        if existing != items:
+            self._settings.setValue("recent_projects", existing)
+            items = existing
+
+        if not items:
+            empty = QAction(tr("action_no_recent"), self._recent_menu)
+            empty.setEnabled(False)
+            self._recent_menu.addAction(empty)
+            return
+
+        for i, path in enumerate(items, start=1):
+            label = f"&{i if i < 10 else 0}  {os.path.basename(path)}"
+            act = QAction(label, self._recent_menu)
+            act.setToolTip(path)
+            act.setStatusTip(path)
+            act.triggered.connect(
+                lambda checked=False, p=path: self._open_path_dispatch(p)
+            )
+            self._recent_menu.addAction(act)
+
+        self._recent_menu.addSeparator()
+        clear_act = QAction(tr("action_clear_recent"), self._recent_menu)
+        clear_act.triggered.connect(self._clear_recent_projects)
+        self._recent_menu.addAction(clear_act)
+
     def _on_open_project(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Project", "",
@@ -3867,6 +3946,7 @@ class MainWindow(QMainWindow):
             target_tab = self._create_tab(project, path, bundle_workdir=wd)
             self._check_image_resolution()
         target_tab.bundle_stat = self._stat_bundle(path)
+        self._remember_recent(path)
 
     @staticmethod
     def _figpack_flush_proxy_for(workdir: str) -> None:
@@ -3904,7 +3984,6 @@ class MainWindow(QMainWindow):
             from PyQt6.QtCore import QBuffer, QIODevice
             from PyQt6.QtGui import QImage
             qimg: QImage = ImageExporter.render_to_qimage(project)
-            print(f"[preview] render_to_qimage -> {'None' if qimg is None else f'{qimg.width()}x{qimg.height()} null={qimg.isNull()}'}")
             if qimg is None or qimg.isNull():
                 return None
             # Cap long edge at 1920 px so the preview never bloats
@@ -3925,7 +4004,6 @@ class MainWindow(QMainWindow):
             ok = qimg.save(buf, "JPG", 88)
             data = bytes(buf.data()) if ok else None
             buf.close()
-            print(f"[preview] JPEG encode ok={ok}, bytes={len(data) if data else 0}")
             return data
         except Exception as _e:
             import traceback; traceback.print_exc()
@@ -3991,6 +4069,7 @@ class MainWindow(QMainWindow):
         for i, tab in enumerate(self._tabs):
             if tab.path and os.path.normcase(os.path.abspath(tab.path)) == norm:
                 self._activate_tab(i)
+                self._remember_recent(path)
                 return
 
         if path.lower().endswith(".figpack"):
@@ -4013,6 +4092,7 @@ class MainWindow(QMainWindow):
                 self._remove_tab(self._active_tab_idx)
                 return
             self._check_image_resolution()
+        self._remember_recent(path)
 
     def _on_save_project(self):
         if self._current_project_path:
@@ -4122,6 +4202,7 @@ class MainWindow(QMainWindow):
             self.undo_stack.setClean()
             self.setWindowModified(False)
             self._update_window_title()
+            self._remember_recent(path)
             return True
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to save project: {e}")

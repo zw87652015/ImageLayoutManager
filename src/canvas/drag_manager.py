@@ -1,5 +1,5 @@
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsView
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont
 from PyQt6.QtCore import (QObject, QEvent, QTimer, QPointF, QRectF,
                           QElapsedTimer,
                           pyqtSignal, Qt, QVariantAnimation, QEasingCurve)
@@ -180,6 +180,13 @@ class DragManager(QObject):
             QRectF(0, 0, cap_w, cap_h),
             self._source_scene_rect,
         )
+
+        # Multi-cell indicator: count badge in the top-right corner so the user
+        # can see they're holding N cells (not just the one under the cursor).
+        n_sources = len(self._source_cells)
+        if n_sources > 1:
+            self._draw_multi_count_badge(painter, cap_w, cap_h, n_sources)
+
         painter.end()
 
         self._ghost = QGraphicsPixmapItem(pixmap)
@@ -223,6 +230,41 @@ class DragManager(QObject):
         self._ghost.setGraphicsEffect(shadow)
 
         self.scene.addItem(self._ghost)
+
+    def _draw_multi_count_badge(self, painter, cap_w, cap_h, count):
+        """Paint a circular count badge in the top-right of the ghost pixmap.
+
+        Coordinates are in local pixmap (capture) units, so the badge keeps a
+        consistent visual size relative to the ghost regardless of cell size.
+        """
+        # Badge size scales gently with capture width but stays bounded.
+        diameter = max(36, min(64, int(cap_w * 0.18)))
+        margin = max(6, int(diameter * 0.18))
+        cx = cap_w - margin - diameter / 2.0
+        cy = margin + diameter / 2.0
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # White outer ring (so the badge reads on dark images too).
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 3))
+        painter.setBrush(QBrush(QColor(0, 122, 204, 235)))
+        painter.drawEllipse(QPointF(cx, cy), diameter / 2.0, diameter / 2.0)
+
+        # Count text.
+        font = QFont()
+        font.setBold(True)
+        # Pixel size is in pixmap units; keep proportional to badge.
+        font.setPixelSize(max(14, int(diameter * 0.55)))
+        painter.setFont(font)
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        text = str(count) if count <= 99 else "99+"
+        painter.drawText(
+            QRectF(cx - diameter / 2.0, cy - diameter / 2.0, diameter, diameter),
+            Qt.AlignmentFlag.AlignCenter,
+            text,
+        )
+        painter.restore()
 
     # ------------------------------------------------------------------
     # Lift (pickup) animation
@@ -379,6 +421,14 @@ class DragManager(QObject):
         row_indices = {m.row_index for m in models}
         col_indices = {m.col_index for m in models}
 
+        # Degenerate case: all sources share the same (row_index, col_index).
+        # This happens for subcell leaves (which all default to 0,0 since the
+        # split-children inherit nothing) and would otherwise be misclassified
+        # as a row of zero-offset duplicates.  Treat as arbitrary so the
+        # row-major fallback handles target mapping.
+        if len(row_indices) == 1 and len(col_indices) == 1:
+            return 'arbitrary', None, None
+
         if len(row_indices) == 1:
             # All sources in the same row → row selection
             row_idx = next(iter(row_indices))
@@ -396,6 +446,98 @@ class DragManager(QObject):
 
         return 'arbitrary', None, None
 
+    def _get_split_parent(self, cell_id):
+        """Return the immediate parent Cell of *cell_id* iff it is a split
+        container. None otherwise (top-level cells, leaves outside a split)."""
+        project = getattr(self.scene, 'project', None)
+        if not project or not hasattr(project, 'find_parent_of'):
+            return None
+        parent = project.find_parent_of(cell_id)
+        if parent is not None and getattr(parent, 'split_direction', 'none') != 'none':
+            return parent
+        return None
+
+    def _detect_subcell_group(self):
+        """If every source cell is a direct child of the same split container,
+        return (parent_cell, sorted_child_indices, direction). Else None."""
+        if not self._source_ids:
+            return None
+        parents = [self._get_split_parent(cid) for cid in self._source_ids]
+        if any(p is None for p in parents):
+            return None
+        p0 = parents[0]
+        if any(p.id != p0.id for p in parents):
+            return None
+        indices = []
+        for cid in self._source_ids:
+            idx = next((i for i, c in enumerate(p0.children) if c.id == cid), None)
+            if idx is None:
+                return None
+            indices.append(idx)
+        indices.sort()
+        return p0, indices, p0.split_direction
+
+    def _find_subcell_targets(self, anchor):
+        """Map a same-parent subcell-group source onto a hovered subcell in a
+        different split container of the same direction.
+
+        Returns:
+            None    — not a subcell-group source (caller should fall through).
+            (list, valid: bool) — proposed targets and validity flag.
+        """
+        info = self._detect_subcell_group()
+        if not info:
+            return None
+        src_parent, src_indices, direction = info
+
+        anchor_parent = self._get_split_parent(anchor.cell_id)
+        if anchor_parent is None:
+            # Hovering a non-subcell while dragging a subcell-group: not allowed
+            # via this path. Reject so the user gets a red highlight instead of
+            # an unrelated row/column mapping.
+            return [anchor], False
+        if anchor_parent.id == src_parent.id:
+            return [anchor], False
+        if anchor_parent.split_direction != direction:
+            return [anchor], False
+
+        anchor_idx = next(
+            (i for i, c in enumerate(anchor_parent.children) if c.id == anchor.cell_id),
+            None,
+        )
+        if anchor_idx is None:
+            return [anchor], False
+
+        base = src_indices[0]
+        offsets = [i - base for i in src_indices]
+        run_len = offsets[-1] + 1
+        if run_len > len(anchor_parent.children):
+            # Target split container is smaller than the source run.
+            return [anchor], False
+
+        # Choose a start position so the run fits AND still contains the
+        # hovered anchor. Naturally clamps the run to the right edge when the
+        # user drops near the end (e.g. swapping a full 3-child group onto
+        # another 3-child group regardless of which subcell is under the
+        # cursor).
+        start = max(0, min(anchor_idx, len(anchor_parent.children) - run_len))
+
+        id_to_item = {cid: item for cid, item in self.scene.cell_items.items()
+                      if not item.is_label_cell}
+        targets = []
+        for off in offsets:
+            child = anchor_parent.children[start + off]
+            item = id_to_item.get(child.id)
+            if item is None:
+                return [anchor], False
+            targets.append(item)
+
+        target_ids = {t.cell_id for t in targets}
+        source_ids = set(self._source_ids)
+        if target_ids & source_ids:
+            return targets, False
+        return targets, True
+
     def _find_target_cells(self, scene_pos):
         """Find N target cells starting from the cell under cursor.
         Preserves row/column shape of the source selection when possible.
@@ -407,6 +549,14 @@ class DragManager(QObject):
 
         if n == 1:
             return [anchor], True
+
+        # Subcell-group case: all sources are children of the same split
+        # container. Their row_index/col_index are degenerate, so the generic
+        # row/col shape detection below would misclassify them — handle it
+        # explicitly first.
+        sub_result = self._find_subcell_targets(anchor)
+        if sub_result is not None:
+            return sub_result
 
         shape, shape_idx, offsets = self._detect_source_shape()
         anchor_model = self._get_cell_model(anchor.cell_id)
@@ -472,26 +622,29 @@ class DragManager(QObject):
                     return [], False
                 return targets, True
 
-        # Arbitrary / fallback: consecutive row-major placement
+        # Arbitrary / fallback: forgiving row-major placement.  Walk forward
+        # from the anchor in row-major order, skipping source cells, taking the
+        # first N non-source cells we encounter. This allows mixed-depth /
+        # different-shape selections to swap freely (the "self-willed, unruly"
+        # action the user might wish for).
         all_cells = self._get_all_cells_sorted()
         id_to_idx = {i.cell_id: idx for idx, i in enumerate(all_cells)}
         anchor_idx = id_to_idx.get(anchor.cell_id)
         if anchor_idx is None:
             return [], False
 
-        targets = []
-        for offset in range(n):
-            idx = anchor_idx + offset
-            if idx >= len(all_cells):
-                return [anchor], False
-            targets.append(all_cells[idx])
-
-        target_ids = {t.cell_id for t in targets}
         source_ids = set(self._source_ids)
-        if target_ids & source_ids:
-            if target_ids != source_ids:
-                return targets, False
-            return [], False
+        targets = []
+        i = anchor_idx
+        while len(targets) < n and i < len(all_cells):
+            c = all_cells[i]
+            if c.cell_id not in source_ids:
+                targets.append(c)
+            i += 1
+
+        if len(targets) < n:
+            # Not enough cells after the anchor to satisfy the request.
+            return [anchor], False
 
         return targets, True
 
