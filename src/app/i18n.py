@@ -458,6 +458,15 @@ _T: dict[str, dict[str, str]] = {
     "svgtxt_confirm_delete_title":   {"en": "Delete Group",                    "zh": "删除组"},
     "svgtxt_confirm_delete_msg":     {"en": "Delete group \"{name}\"?",        "zh": "删除组 \"{name}\"？"},
 
+    # ── SVG text normalization (per-cell inspector section) ─────────
+    "grp_svg_normalize":             {"en": "SVG Text Normalization",          "zh": "SVG 文字标准化"},
+    "chk_svg_normalize":             {"en": "Normalize text size",             "zh": "标准化文字大小"},
+    "lbl_svg_normalize_pt":          {"en": "Target size:",                    "zh": "目标大小："},
+    "tip_svg_normalize":             {
+        "en": "Unifies text size in imported SVGs. For non-text elements and rasterized figures, size them correctly at export time.",
+        "zh": "统一导入 SVG 中的文字大小。非文字元素及栅格化图形请在导出时正确设置尺寸。"
+    },
+
     # ── Sidecar assets dialog ──────────────────────────────────────
     "msg_sidecar_title":            {"en": "Save sidecar assets?",          "zh": "保存附件资源？"},
     "msg_sidecar_text":             {"en": "This project is currently backed by a .figpack cache.\n\n"

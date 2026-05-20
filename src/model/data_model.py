@@ -284,6 +284,11 @@ class Cell:
     # PiP insets
     pip_items: List[PiPItem] = field(default_factory=list)
 
+    # SVG text normalization: set all <text>/<tspan> to a uniform pt size,
+    # accounting for ancestor transform scaling.  Off by default.
+    svg_normalize_text: bool = False
+    svg_normalize_text_pt: float = 8.0
+
     @property
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -342,6 +347,8 @@ class Cell:
             "split_direction": self.split_direction,
             "split_ratios": self.split_ratios,
             "pip_items": [p.to_dict() for p in self.pip_items],
+            "svg_normalize_text": self.svg_normalize_text,
+            "svg_normalize_text_pt": self.svg_normalize_text_pt,
         }
 
     @classmethod
@@ -376,6 +383,8 @@ class Cell:
         payload.setdefault("z_index", 0)
         payload.setdefault("split_direction", "none")
         payload.setdefault("split_ratios", [])
+        payload.setdefault("svg_normalize_text", False)
+        payload.setdefault("svg_normalize_text_pt", 8.0)
         payload.setdefault("crop_left", 0.0)
         payload.setdefault("crop_top", 0.0)
         payload.setdefault("crop_right", 1.0)

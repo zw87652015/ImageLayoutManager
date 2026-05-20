@@ -268,6 +268,8 @@ class CanvasScene(QGraphicsScene):
                 getattr(cell, 'crop_right', 1.0),
                 getattr(cell, 'crop_bottom', 1.0),
                 getattr(cell, 'z_index', 0),
+                getattr(cell, 'svg_normalize_text', False),
+                getattr(cell, 'svg_normalize_text_pt', 8.0),
                 is_freeform,
                 len(pip_items),
             )

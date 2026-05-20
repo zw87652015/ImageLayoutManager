@@ -756,6 +756,14 @@ class MainWindow(QMainWindow):
         self._theme_segmented.themeChanged.connect(self._apply_theme)
         self.toolbar.addWidget(self._theme_segmented)
 
+        # ── Preview-mode toggle ──
+        self._act_preview_mode = QAction(tr("action_preview_mode"), self)
+        self._act_preview_mode.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        self._act_preview_mode.setCheckable(True)
+        self._act_preview_mode.triggered.connect(self._on_toggle_preview_mode)
+        self._view_menu.addSeparator()
+        self._view_menu.addAction(self._act_preview_mode)
+
         # Primary Export button (accent colour). QToolButton with
         # ``primary=true`` is styled by the QSS in ``theme.py``.
         export_button = QToolButton(self)
@@ -770,19 +778,13 @@ class MainWindow(QMainWindow):
         export_menu.addAction(export_png_action)
         export_menu.addAction(export_svg_action)
         export_menu.addSeparator()
+        export_menu.addAction(self._act_preview_mode)
+        export_menu.addSeparator()
         export_menu.addAction(set_export_region_action)
         export_menu.addAction(clear_export_region_action)
         export_button.setMenu(export_menu)
         self._export_button = export_button  # icon applied via _refresh_toolbar_icons
         self.toolbar.addWidget(export_button)
-
-        # ── Preview-mode toggle ──
-        self._act_preview_mode = QAction(tr("action_preview_mode"), self)
-        self._act_preview_mode.setShortcut(QKeySequence("Ctrl+Shift+P"))
-        self._act_preview_mode.setCheckable(True)
-        self._act_preview_mode.triggered.connect(self._on_toggle_preview_mode)
-        self._view_menu.addSeparator()
-        self._view_menu.addAction(self._act_preview_mode)
 
         # ── Tab actions ──
         self._act_new_tab = QAction(tr("action_new_tab"), self)
@@ -3728,19 +3730,15 @@ class MainWindow(QMainWindow):
         win.activateWindow()
 
     def _sync_svg_overrides(self):
-        """Recompute and push SVG font-size overrides to the image proxy."""
-        from src.utils.svg_text_utils import build_svg_overrides_for_path, apply_svg_font_overrides
+        """Recompute and push SVG overrides (normalization + group overrides) to the proxy."""
+        from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
         proxy = get_image_proxy()
         proxy.clear_svg_overrides()
-
-        svg_paths = set()
         for cell in self.project.get_all_leaf_cells():
-            if cell.image_path and cell.image_path.lower().endswith('.svg'):
-                svg_paths.add(cell.image_path)
-
-        for path in svg_paths:
-            overrides = build_svg_overrides_for_path(self.project, path)
-            content = apply_svg_font_overrides(path, overrides) if overrides else None
+            path = getattr(cell, 'image_path', None)
+            if not path or not path.lower().endswith('.svg'):
+                continue
+            content = get_svg_override_bytes_for_cell(self.project, cell)
             if content:
                 proxy.set_svg_override(path, content)
 

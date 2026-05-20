@@ -702,6 +702,30 @@ class Inspector(QWidget):
         self.cell_group.hide()
         self.scale_bar_group.hide()
 
+        # --- SVG Text Normalization Group (shown only when cell has .svg image) ---
+        self.svg_normalize_group = CollapsibleSection(tr("grp_svg_normalize"))
+        _svg_norm_layout = self.svg_normalize_group._form
+
+        self.svg_normalize_chk = QCheckBox(tr("chk_svg_normalize"))
+        self.svg_normalize_chk.setToolTip(tr("tip_svg_normalize"))
+        self.svg_normalize_chk.toggled.connect(
+            lambda v: self.cell_property_changed.emit({"svg_normalize_text": v})
+        )
+        _svg_norm_layout.addRow(self.svg_normalize_chk)
+
+        self.svg_normalize_pt = QDoubleSpinBox()
+        self.svg_normalize_pt.setRange(1.0, 200.0)
+        self.svg_normalize_pt.setDecimals(1)
+        self.svg_normalize_pt.setSuffix(" pt")
+        self.svg_normalize_pt.setValue(8.0)
+        self.svg_normalize_pt.valueChanged.connect(
+            lambda v: self.cell_property_changed.emit({"svg_normalize_text_pt": v})
+        )
+        _svg_norm_layout.addRow(self._fl("lbl_svg_normalize_pt"), self.svg_normalize_pt)
+
+        self.layout.addWidget(self.svg_normalize_group)
+        self.svg_normalize_group.hide()
+
         # --- Label Cell Properties Group ---
         self.label_cell_group = CollapsibleSection("Label Cell Settings")
         self.label_cell_layout = self.label_cell_group._form
@@ -1095,6 +1119,9 @@ class Inspector(QWidget):
         self._sec_grid_override.setText(tr("sec_grid_override"))
         self._sec_padding.setText(tr("sec_padding"))
         self.scale_bar_group.set_title(tr("grp_scale_bar"))
+        self.svg_normalize_group.set_title(tr("grp_svg_normalize"))
+        self.svg_normalize_chk.setText(tr("chk_svg_normalize"))
+        self.svg_normalize_chk.setToolTip(tr("tip_svg_normalize"))
 
         self.scale_bar_enabled.setText(tr("chk_scale_enabled"))
         self.scale_bar_show_text.setText(tr("chk_scale_text"))
@@ -1585,6 +1612,7 @@ class Inspector(QWidget):
             self.subcell_group.hide()
             self.pip_group.hide()
             self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()
             if data:
                 self.blockSignals(True)
                 # Combos can't blank cleanly; show first item's value when mixed.
@@ -1623,6 +1651,7 @@ class Inspector(QWidget):
             self.subcell_group.hide()
             self.pip_group.hide()
             self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()  # Hide svg_normalize_group
             count = (data or {}).get("count", 0) if isinstance(data, dict) else 0
             self.multi_label.setText(
                 tr("multi_mixed_selection").format(count=count)
@@ -1640,6 +1669,7 @@ class Inspector(QWidget):
             self.text_group.hide()
             self.subcell_group.hide()
             self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()
             self.label_cell_group.show()
 
             if data:
@@ -1752,7 +1782,10 @@ class Inspector(QWidget):
             
             # Populate shared scale bar section
             self._populate_scale_bar_section(data)
-            
+
+            # SVG normalize section (only for SVG images)
+            self._populate_svg_normalize_section(data)
+
             self.blockSignals(False)
             
         elif item_type == 'text':
@@ -1764,6 +1797,7 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.subcell_group.hide()
             self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()
             self.text_group.show()
             
             self.blockSignals(True)
@@ -1834,6 +1868,7 @@ class Inspector(QWidget):
             self.subcell_group.hide()
             self.text_group.hide()
             self.label_cell_group.hide()
+            self.svg_normalize_group.hide()
             self.pip_group.show()
 
             self.blockSignals(True)
@@ -1861,6 +1896,7 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.pip_group.hide()
             self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()
             self.no_selection_label.hide() # We show project settings instead
             
             # When item_type is None, 'data' might actually be project_data (legacy call)
@@ -1907,6 +1943,21 @@ class Inspector(QWidget):
             else:
                 self.project_group.hide()
                 self.no_selection_label.show()
+    def _populate_svg_normalize_section(self, data: dict) -> None:
+        """Show/populate the SVG text normalization group; hide it for non-SVG cells."""
+        if not data:
+            self.svg_normalize_group.hide()
+            return
+        img_path = data.get("image_path") or ""
+        if not img_path.lower().endswith(".svg"):
+            self.svg_normalize_group.hide()
+            return
+        self.blockSignals(True)
+        self.svg_normalize_chk.setChecked(bool(data.get("svg_normalize_text", False)))
+        self.svg_normalize_pt.setValue(float(data.get("svg_normalize_text_pt", 8.0)))
+        self.blockSignals(False)
+        self.svg_normalize_group.show()
+
     def _populate_scale_bar_section(self, data: dict):
         """Populate the collapsible scale bar group with data from a Cell or PiPItem."""
         if not data:
