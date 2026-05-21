@@ -36,9 +36,10 @@ import secrets
 import shutil
 import stat
 import sys
+import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Iterator, List, Optional, Tuple
+from typing import Callable, Iterator, List, Optional, Set, Tuple
 
 from src.utils.figpack.encoding import to_nfc
 from src.utils.figpack.errors import BundleError
@@ -58,6 +59,31 @@ EXTRACTING_GRACE_SECONDS = 10 * 60
 DEFAULT_QUOTA_BYTES = 10 * 1024 ** 3  # 10 GiB
 DELETE_RETRIES = 3
 DELETE_RETRY_BACKOFF_S = 0.1
+
+# ──────────────────────────────────────────────────────────────────────
+# Process-local held-path registry
+# ──────────────────────────────────────────────────────────────────────
+# On Windows msvcrt.locking is per-fd, not per-process: is_locked() opens
+# a new fd and can re-acquire the lock even when this process already holds
+# it via another fd, falsely reporting the dir as orphaned.  We track all
+# working dirs held by *this* process so cleanup_orphans can skip them.
+_held_lock: threading.Lock = threading.Lock()
+_held_paths: Set[str] = set()
+
+
+def _register_held(path: str) -> None:
+    with _held_lock:
+        _held_paths.add(os.path.normcase(os.path.abspath(path)))
+
+
+def _unregister_held(path: str) -> None:
+    with _held_lock:
+        _held_paths.discard(os.path.normcase(os.path.abspath(path)))
+
+
+def _is_held_by_us(path: str) -> bool:
+    with _held_lock:
+        return os.path.normcase(os.path.abspath(path)) in _held_paths
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -179,6 +205,7 @@ class WorkingDir:
         self.release()
 
     def release(self) -> None:
+        _unregister_held(self.path)
         self._lock.release()
 
 
@@ -218,6 +245,7 @@ def allocate_working_dir(
     lock = ExclusiveLock(os.path.join(workdir, LOCK_FILENAME))
     try:
         lock.acquire()
+        _register_held(workdir)
     except BaseException:
         # Allocation failed; tear down the empty dir so we don't leak.
         try:
@@ -243,34 +271,36 @@ def cleanup_orphans(cache_root: Optional[str] = None) -> List[str]:
     Returns the list of paths that were successfully deleted.
     """
     root = cache_root or default_cache_root()
-    deleted: List[str] = []
     if not os.path.isdir(root):
-        return deleted
-
+        return []
+    deleted: List[str] = []
     for name in os.listdir(root):
         sub = os.path.join(root, name)
-        if not os.path.isdir(sub):
-            continue
-        lock_path = os.path.join(sub, LOCK_FILENAME)
-        sentinel = os.path.join(sub, EXTRACTING_SENTINEL)
-
-        # If the lock file doesn't exist at all, the dir is malformed
-        # (probably leftover from a failed mkdir); reap it.
-        lock_exists = os.path.exists(lock_path)
-        if lock_exists and is_locked(lock_path):
-            continue  # owned by another live instance
-
-        if os.path.exists(sentinel):
-            try:
-                age = time.time() - os.path.getmtime(sentinel)
-            except OSError:
-                age = 0
-            if age < EXTRACTING_GRACE_SECONDS:
-                continue
-
-        if _safe_rmtree(sub):
+        if os.path.isdir(sub) and _should_reap(sub) and _safe_rmtree(sub):
             deleted.append(sub)
     return deleted
+
+
+def _should_reap(sub: str) -> bool:
+    """Return True if *sub* is an orphaned working dir that can be deleted."""
+    # Held by this process — on Windows msvcrt.locking is per-fd, so
+    # is_locked() would falsely report our own lock as free.
+    if _is_held_by_us(sub):
+        return False
+    lock_path = os.path.join(sub, LOCK_FILENAME)
+    if os.path.exists(lock_path) and is_locked(lock_path):
+        return False  # owned by another live instance
+    sentinel = os.path.join(sub, EXTRACTING_SENTINEL)
+    if os.path.exists(sentinel) and _sentinel_age(sentinel) < EXTRACTING_GRACE_SECONDS:
+        return False  # another instance is mid-extraction
+    return True
+
+
+def _sentinel_age(sentinel: str) -> float:
+    try:
+        return time.time() - os.path.getmtime(sentinel)
+    except OSError:
+        return float("inf")
 
 
 def _check_disk_free(cache_root: str, incoming_bytes: int) -> None:

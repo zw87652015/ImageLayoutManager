@@ -437,7 +437,7 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_um_per_px = 0.1301
         self.scale_bar_length_um = 10.0
         self.scale_bar_color = "#FFFFFF"
-        self.scale_bar_show_text = True
+        self.scale_bar_show_text = False
         self.scale_bar_thickness_mm = 0.5
         self.scale_bar_position = "bottom_right"
         self.scale_bar_offset_x = 2.0
@@ -485,7 +485,8 @@ class CellItem(QGraphicsRectItem):
         self.hover_brush = QBrush(QColor(8, 145, 178, 25))
         self.normal_brush = QBrush(Qt.GlobalColor.white)
         self.placeholder_brush = QBrush(QColor("#F5F5F5"))
-        
+        self._placeholder_fg = "#AAAAAA"
+
         self.is_hovered = False
         self._drag_start_pos = None
         self._freeform = False  # Whether this item is in freeform interactive mode
@@ -939,8 +940,11 @@ class CellItem(QGraphicsRectItem):
         """Recolour pens/brushes from design tokens. Called on theme switch."""
         self.border_pen.setColor(QColor(tokens.get("border", "#CCCCCC")))
         self.placeholder_pen.setColor(QColor(tokens.get("placeholder", "#AEAEB2")))
+        # Placeholder background stays light — same paper-backing rationale.
+        self._placeholder_fg = tokens.get("text_tert", "#AAAAAA")
         self.selected_pen.setColor(QColor(tokens.get("accent", "#0891B2")))
-        self.normal_brush.setColor(QColor(tokens.get("surface", "#FFFFFF")))
+        # Cell backgrounds stay white regardless of theme — transparent images
+        # need a white backing and the cell represents paper, not UI chrome.
         accent = QColor(tokens.get("accent", "#0891B2"))
         self._accent_color = tokens.get("accent", "#0891B2")
         self.hover_brush.setColor(QColor(accent.red(), accent.green(), accent.blue(), 25))
@@ -951,7 +955,7 @@ class CellItem(QGraphicsRectItem):
                      scale_bar_mode: str = "rgb",
                      scale_bar_um_per_px: float = 0.0,  # 0.0 means inherit from parent if zoom type
                      scale_bar_length_um: float = 10.0,
-                     scale_bar_color="#FFFFFF", scale_bar_show_text=True, scale_bar_thickness_mm=0.5,
+                     scale_bar_color="#FFFFFF", scale_bar_show_text=False, scale_bar_thickness_mm=0.5,
                      scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0,
                      scale_bar_custom_text=None, scale_bar_text_size_mm=2.0, scale_bar_unit="µm",
                      crop_left=0.0, crop_top=0.0, crop_right=1.0, crop_bottom=1.0):
@@ -1191,9 +1195,11 @@ class CellItem(QGraphicsRectItem):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRect(origin_rect)
 
-            # Draw inset image
+            # Draw inset image (shrunk by content_padding_pt if set)
+            pad_mm = getattr(pip, 'content_padding_pt', 0.0) * (25.4 / 72.0)
+            img_rect = inset_rect.adjusted(pad_mm, pad_mm, -pad_mm, -pad_mm)
             painter.save()
-            painter.setClipRect(inset_rect)
+            painter.setClipRect(img_rect)
             if pip.pip_type == "zoom" and self._pixmap and not self._pixmap.isNull():
                 img_w, img_h = self._pixmap.width(), self._pixmap.height()
                 src_rect = QRectF(
@@ -1202,26 +1208,26 @@ class CellItem(QGraphicsRectItem):
                     (pip.crop_right - pip.crop_left) * img_w,
                     (pip.crop_bottom - pip.crop_top) * img_h
                 )
-                # Use containment logic to ensure tight wrapping even if inset_rect is off by a hair
+                # Use containment logic to ensure tight wrapping even if img_rect is off by a hair
                 if src_rect.width() > 0 and src_rect.height() > 0:
-                    ratio = min(inset_rect.width() / src_rect.width(), inset_rect.height() / src_rect.height())
+                    ratio = min(img_rect.width() / src_rect.width(), img_rect.height() / src_rect.height())
                     dw = src_rect.width() * ratio
                     dh = src_rect.height() * ratio
                     dest = QRectF(
-                        inset_rect.x() + (inset_rect.width() - dw) / 2,
-                        inset_rect.y() + (inset_rect.height() - dh) / 2,
+                        img_rect.x() + (img_rect.width() - dw) / 2,
+                        img_rect.y() + (img_rect.height() - dh) / 2,
                         dw, dh
                     )
                     painter.drawPixmap(dest, self._pixmap, src_rect)
             elif pip.pip_type == "external" and pip.image_path:
                 ext_pix = self.proxy.get_pixmap(pip.image_path) if os.path.exists(pip.image_path) else None
                 if ext_pix and not ext_pix.isNull():
-                    ratio = min(inset_rect.width() / ext_pix.width(), inset_rect.height() / ext_pix.height())
+                    ratio = min(img_rect.width() / ext_pix.width(), img_rect.height() / ext_pix.height())
                     dw = ext_pix.width() * ratio
                     dh = ext_pix.height() * ratio
                     dest = QRectF(
-                        inset_rect.x() + (inset_rect.width() - dw) / 2,
-                        inset_rect.y() + (inset_rect.height() - dh) / 2,
+                        img_rect.x() + (img_rect.width() - dw) / 2,
+                        img_rect.y() + (img_rect.height() - dh) / 2,
                         dw, dh,
                     )
                     painter.drawPixmap(dest, ext_pix, QRectF(ext_pix.rect()))
@@ -1263,8 +1269,8 @@ class CellItem(QGraphicsRectItem):
                     pip_crop = (0, 0, 1, 1)
                     pip_fit = FitMode.CONTAIN # External PiPs use CONTAIN
                 
-                # Draw scale bar relative to the inset
-                self._draw_scale_bar_logic(painter, inset_rect, pip_params, pip_path, pip_crop, 0, pip_fit)
+                # Draw scale bar relative to the image area (inside padding)
+                self._draw_scale_bar_logic(painter, img_rect, pip_params, pip_path, pip_crop, 0, pip_fit)
 
             # Draw selection highlight; resize handles only when resize mode is active
             if is_sel:
@@ -1398,20 +1404,23 @@ class CellItem(QGraphicsRectItem):
             self._draw_label_cell(painter, rect)
             return
         
-        if self.is_placeholder:
+        scene = self.scene()
+        in_preview = scene and getattr(scene, 'preview_mode', False)
+
+        if self.is_placeholder and not in_preview:
             painter.fillRect(rect, self.placeholder_brush)
         else:
             painter.fillRect(rect, self.normal_brush)
-            
+
         if self.is_hovered:
             painter.fillRect(rect, self.hover_brush)
-            
+
         # Draw image
         if self.image_path and self._image_file_missing and not self.is_placeholder:
             self._draw_missing_file_icon(painter, rect)
         elif self._pixmap and not self._pixmap.isNull():
             self._draw_image(painter, rect)
-        elif self.is_placeholder:
+        elif self.is_placeholder and not in_preview:
             self._draw_placeholder_icon(painter, rect)
 
         # Draw PiP insets
@@ -1428,8 +1437,7 @@ class CellItem(QGraphicsRectItem):
 
         # Draw Size Group badge (small color chip in top-left corner).
         # Suppressed in preview/export.
-        scene = self.scene()
-        if scene and not getattr(scene, 'preview_mode', False):
+        if not in_preview:
             project = getattr(scene, 'project', None)
             if project is not None:
                 cell = project.find_cell_by_id(self.cell_id)
@@ -1438,7 +1446,7 @@ class CellItem(QGraphicsRectItem):
                     self._draw_size_group_badge(painter, rect, gid)
 
         # Draw Border (suppressed in preview mode)
-        if not (scene and getattr(scene, 'preview_mode', False)):
+        if not in_preview:
             if self.isSelected():
                 glow_color = QColor(self.selected_pen.color())
                 glow_color.setAlpha(55)
@@ -1503,8 +1511,7 @@ class CellItem(QGraphicsRectItem):
     def _draw_label_cell(self, painter: QPainter, rect: QRectF):
         """Draw a label-only cell with centered text."""
         painter.fillRect(rect, self.normal_brush)
-        scene = self.scene()
-        if not (scene and getattr(scene, 'preview_mode', False)):
+        if not getattr(self.scene(), 'preview_mode', False):
             painter.setPen(self.border_pen)
             painter.drawRect(rect)
         
@@ -1692,13 +1699,14 @@ class CellItem(QGraphicsRectItem):
         # Scale line width (proportional to mark size, clamped between 1 and 4)
         line_width = max(1, min(4, s / 10))
         
-        painter.setPen(QPen(QColor("#AAAAAA"), line_width))
+        fg = QColor(self._placeholder_fg)
+        painter.setPen(QPen(fg, line_width))
         c = rect.center()
         painter.drawLine(int(c.x() - s), int(c.y()), int(c.x() + s), int(c.y()))
         painter.drawLine(int(c.x()), int(c.y() - s), int(c.x()), int(c.y() + s))
-        
+
         # Draw text "Drop Image Here" with dynamic font size
-        painter.setPen(QPen(QColor("#888888")))
+        painter.setPen(QPen(fg))
         font = painter.font()
         
         # Calculate font size based on cell dimensions (8% of smaller dimension, clamped between 8 and 16)
@@ -1708,7 +1716,8 @@ class CellItem(QGraphicsRectItem):
         
         # Position text with padding from bottom
         text_rect = rect.adjusted(5, 0, -5, -s * 1.5)
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignBottom, "Drop Image Here")
+        from src.app.i18n import tr
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignBottom, tr("placeholder_drop_image"))
 
     def _get_scale_bar_params(self, obj):
         """Helper to get scale bar params from either a CellItem or a PiPItem-like dict/object."""

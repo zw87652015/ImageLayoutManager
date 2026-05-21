@@ -1380,7 +1380,9 @@ class AutoLabelOutCellCommand(QUndoCommand):
             if not (t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner')
         ]
 
-        self.project.label_placement = 'label_row_above'
+        _OUT_CELL_MODES = {'label_row_above', 'label_row_below', 'label_col_left', 'label_col_right'}
+        if self.project.label_placement not in _OUT_CELL_MODES:
+            self.project.label_placement = 'label_row_above'
 
         if not self.new_labels:
             AutoLabel.generate_labels(self.project)

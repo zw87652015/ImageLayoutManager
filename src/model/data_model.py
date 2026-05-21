@@ -86,6 +86,7 @@ class PiPItem:
     border_color: str = "#FFFFFF"
     border_width_pt: float = 1.5
     border_style: str = "solid"   # "solid" | "dashed"
+    content_padding_pt: float = 0.0  # inner padding between border and image
     show_origin_box: bool = True
     origin_box_color: str = "#FFFFFF"
     origin_box_style: str = "solid"
@@ -98,7 +99,7 @@ class PiPItem:
     scale_bar_length_um: float = 10.0
     scale_bar_unit: str = "µm"
     scale_bar_color: str = "#FFFFFF"
-    scale_bar_show_text: bool = True
+    scale_bar_show_text: bool = False
     scale_bar_thickness_mm: float = 0.5
     scale_bar_position: str = "bottom_right"
     scale_bar_offset_x: float = 2.0
@@ -123,6 +124,7 @@ class PiPItem:
             "border_color": self.border_color,
             "border_width_pt": self.border_width_pt,
             "border_style": self.border_style,
+            "content_padding_pt": self.content_padding_pt,
             "show_origin_box": self.show_origin_box,
             "origin_box_color": self.origin_box_color,
             "origin_box_style": self.origin_box_style,
@@ -251,7 +253,7 @@ class Cell:
     scale_bar_um_per_px: float = 0.1301  # µm per source-image pixel for the chosen mapping
     scale_bar_length_um: float = 10.0
     scale_bar_color: str = "#FFFFFF"  # white or black
-    scale_bar_show_text: bool = True
+    scale_bar_show_text: bool = False
     scale_bar_thickness_mm: float = 0.5
     scale_bar_position: str = "bottom_right"  # bottom_left | bottom_center | bottom_right
     scale_bar_offset_x: float = 2.0
@@ -508,7 +510,7 @@ class Project:
     label_offset_x: float = 0.0  # mm, horizontal offset for fine-tuning label position
     label_offset_y: float = 0.0  # mm, vertical offset for fine-tuning label position
     label_row_height: float = 0.0  # mm, 0 = auto (computed from font size)
-    label_col_width: float = 10.0  # mm, width of label column for label_col_left/right placement
+    label_col_width: float = 0.0   # mm, 0 = auto (computed from font size)
 
     # FigSpace / publication metadata — read by FigSpace without unpacking the full project.
     figure_number: str = ""   # e.g. "Figure 1", "Supplementary Figure 3"

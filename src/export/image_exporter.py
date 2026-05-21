@@ -260,14 +260,16 @@ class ImageExporter:
                 pip.w * cw,
                 pip.h * ch,
             )
+            pad_px = getattr(pip, 'content_padding_pt', 0.0) * (scale * 25.4 / 72.0)
+            img_rect = inset_rect.adjusted(pad_px, pad_px, -pad_px, -pad_px)
             painter.save()
-            painter.setClipRect(inset_rect)
+            painter.setClipRect(img_rect)
             # Draw pip image
             if pip.pip_type == "zoom" and cell.image_path and os.path.exists(cell.image_path):
                 src_crop = (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom)
-                ImageExporter._draw_raster(painter, cell.image_path, inset_rect, "contain", 0, src_crop)
+                ImageExporter._draw_raster(painter, cell.image_path, img_rect, "contain", 0, src_crop)
             elif pip.pip_type == "external" and pip.image_path and os.path.exists(pip.image_path):
-                ImageExporter._draw_image(painter, pip.image_path, inset_rect, "contain", 0)
+                ImageExporter._draw_image(painter, pip.image_path, img_rect, "contain", 0)
             painter.restore()
 
             # Draw PiP scale bar if enabled
@@ -285,7 +287,7 @@ class ImageExporter:
                 
                 # PiP zoom type is STRETCH, external is CONTAIN
                 pip_fit = "stretch" if pip.pip_type == "zoom" else "contain"
-                ImageExporter._draw_scale_bar(painter, pip, inset_rect, scale, fit_mode_override=pip_fit)
+                ImageExporter._draw_scale_bar(painter, pip, img_rect, scale, fit_mode_override=pip_fit)
                 
                 # Restore
                 pip.scale_bar_um_per_px = old_um

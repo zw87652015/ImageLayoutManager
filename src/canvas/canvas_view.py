@@ -112,6 +112,10 @@ class CanvasView(QGraphicsView):
                 self._rb_current = self._rb_origin
                 if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
                     self.scene().clearSelection()
+                # Also deselect any focused PiP (handles clicks outside the scene rect)
+                for item in self.scene().cell_items.values():
+                    if item._selected_pip_id is not None:
+                        item.deselect_pip()
                 event.accept()
             else:
                 self._rb_origin = None

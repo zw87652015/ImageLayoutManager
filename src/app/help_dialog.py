@@ -46,7 +46,7 @@ _SHORTCUTS_EN = [
     ("Scroll wheel",      "Zoom canvas in / out"),
     ("Middle-click drag", "Pan canvas"),
     ("Ctrl + Shift+T",    "Toggle light / dark theme"),
-    ("Ctrl + \\",         "Toggle Layers panel"),
+    ("Ctrl + \\",         "Toggle Layers cell"),
     ("Arrow keys",        "Nudge selected cell (freeform mode)"),
     ("Shift + Arrow",     "Navigate between cells"),
 ]
@@ -60,7 +60,7 @@ _SHORTCUTS_ZH = [
     ("Ctrl + W",          "关闭当前标签页"),
     ("Ctrl + Z",          "撤销"),
     ("Ctrl + Y",          "重做"),
-    ("Ctrl + Shift+L",    "自动标注（嵌入图片）"),
+    ("Ctrl + Shift+L",    "自动标注（图内）"),
     ("Ctrl + Shift+K",    "自动标注（上方行）"),
     ("Ctrl + Shift+A",    "自动布局"),
     ("Ctrl + Shift+P",    "切换导出预览模式"),
@@ -72,7 +72,7 @@ _SHORTCUTS_ZH = [
     ("滚轮",              "缩放画布"),
     ("中键拖动",          "平移画布"),
     ("Ctrl + Shift+T",    "切换浅色/深色主题"),
-    ("Ctrl + \\",         "显示/隐藏图层面板"),
+    ("Ctrl + \\",         "显示/隐藏图层单元格"),
     ("方向键",            "微移选中单元格（自由布局模式）"),
     ("Shift + 方向键",    "在单元格间导航"),
 ]
@@ -157,11 +157,11 @@ _GETTING_STARTED_HTML_ZH = """
 </ul>
 <p>标题栏显示 <b>[*]</b> 表示有未保存的更改。</p>
 
-<h3>三栏布局</h3>
+<h3>界面布局</h3>
 <ul>
   <li><b>左侧 — 图层：</b>显示行/单元格树形结构，点击任意行可选中。</li>
-  <li><b>中间 — 画布：</b>图表的实时预览。</li>
-  <li><b>右侧 — 检查器：</b>显示选中单元格、行或项目的属性。</li>
+  <li><b>中间 — 画布：</b>图表的实时预览区域。</li>
+  <li><b>右侧 — 属性检查器：</b>显示选中单元格、行或项目的属性。</li>
 </ul>
 """
 
@@ -182,10 +182,10 @@ _IMAGES_HTML_EN = """
   <li>Hold <b>Ctrl</b> while dragging to swap multiple selected cells at once.</li>
 </ul>
 
-<h3>Picture-in-Picture (PiP) / Insets</h3>
+<h3>Insets</h3>
 <ul>
-  <li><b>Right-click</b> an image cell and choose <b>Insert → PiP</b> to add a smaller sub-image on top.</li>
-  <li>Drag the PiP to move it; use the Inspector to adjust its size, border, and position (in % of parent).</li>
+  <li><b>Right-click</b> an image cell and choose <b>Insert → Inset</b> to add a smaller sub-image on top.</li>
+  <li>Drag the inset to move it; use the Inspector to adjust its size, border, and position (in % of parent).</li>
 </ul>
 
 <h3>Cropping</h3>
@@ -216,7 +216,7 @@ _IMAGES_HTML_ZH = """
 <ul>
   <li><b>拖放</b>图片文件到画布上的单元格中。</li>
   <li><b>文件 → 导入图片…</b> — 选择一张或多张图片，从左至右、从上至下依次填充空单元格。</li>
-  <li><b>文件 → 以网格打开图片…</b> — 自动创建适合所选图片数量的网格。</li>
+  <li><b>文件 → 新建图片网格…</b> — 自动创建适合所选图片数量的网格。</li>
 </ul>
 
 <h3>替换与交换</h3>
@@ -226,10 +226,10 @@ _IMAGES_HTML_ZH = """
   <li>按住 <b>Ctrl</b> 拖动可同时交换多个选中的单元格。</li>
 </ul>
 
-<h3>画中画 (PiP) / 插图</h3>
+<h3>插图 (Inset)</h3>
 <ul>
-  <li><b>右键点击</b>图片单元格并选择<b>插入 → 以子图插入</b>，可在上方添加较小的子图。</li>
-  <li>拖动子图可移动位置；使用检查器调整其大小、边框和位置（占父单元格的百分比）。</li>
+  <li><b>右键点击</b>图片单元格并选择<b>插入 → 插图 (Inset)</b>，可在上方添加较小的子图。</li>
+  <li>拖动插图可移动位置；使用检查器调整其大小、边框和位置（占父单元格的百分比）。</li>
 </ul>
 
 <h3>裁剪</h3>
@@ -238,10 +238,10 @@ _IMAGES_HTML_ZH = """
   <li>拖动手柄进行调整；按住 <b>Shift</b> 可锁定比例。按 <b>Enter</b> 确认应用。</li>
 </ul>
 
-<h3>缩放模式（检查器 → 单元格）</h3>
+<h3>自适应模式（检查器 → 单元格）</h3>
 <ul>
-  <li><b>包含</b> — 图片完整显示在单元格内，保留空白边。</li>
-  <li><b>覆盖</b> — 图片填满单元格，超出部分被裁剪。</li>
+  <li><b>适应 (Scale to Fit)</b> — 图片完整显示在单元格内，保留空白边。</li>
+  <li><b>填充 (Crop to Fill)</b> — 图片填满单元格，超出部分将被裁剪。</li>
   <li><b>拉伸</b> — 图片被拉伸以完全填充单元格。</li>
 </ul>
 
@@ -293,11 +293,11 @@ _CELLS_HTML_ZH = """
 <p>默认情况下，画布为简单的行列网格。
 每行可以有不同的列数和高度比例（在检查器中选中行后设置）。</p>
 
-<h3>分割单元格</h3>
+<h3>细分单元格</h3>
 <ol>
   <li>在画布上<b>右键单击</b>一个单元格。</li>
-  <li>在插入菜单中选择<b>分割/子单元格</b>。</li>
-  <li>在父单元格内生成两个子单元格。</li>
+  <li>在插入菜单中选择<b>细分为子单元格</b>。</li>
+  <li>默认在父单元格内生成两个子单元格。</li>
   <li>可继续分割子单元格，层级无限制。</li>
 </ol>
 
@@ -308,7 +308,7 @@ _CELLS_HTML_ZH = """
 <h3>自由布局模式</h3>
 <ul>
   <li>通过 <b>布局 → 切换至自由布局模式</b> 解锁自由定位。</li>
-  <li>可任意拖动单元格，并在检查器中通过 X、Y、W、H（单位 mm）调整大小。</li>
+  <li>可任意拖动单元格，并在检查器中通过 X、Y、宽度、高度（单位 mm）调整大小。</li>
   <li>使用 <b>置于顶层</b> / <b>置于底层</b>（<code>Ctrl+]</code> / <code>Ctrl+[</code>）控制重叠顺序。</li>
   <li>通过 <b>布局 → 切换至网格模式</b> 切换回网格模式（位置信息将保留）。</li>
 </ul>
@@ -321,7 +321,7 @@ _LABELS_HTML_EN = """
 <h2 style="margin-top:0">Labels &amp; Text</h2>
 
 <h3>Auto Label</h3>
-<p>Press <code>Ctrl+Shift+L</code> or <b>Edit → Auto Label</b> to add panel labels
+<p>Press <code>Ctrl+Shift+L</code> or <b>Edit → Auto Label</b> to add cell labels
 (a, b, c… or A, B, C…) to all leaf cells automatically.</p>
 <p>The labelling scheme, font, size, colour, and position are all
 set in the <b>Inspector → Project Settings → Label</b> section.</p>
@@ -329,13 +329,13 @@ set in the <b>Inspector → Project Settings → Label</b> section.</p>
 <h3>Editing a Label</h3>
 <ol>
   <li>Click a label on the canvas to select it.</li>
-  <li>The Inspector shows the <b>Label Cell</b> panel.</li>
+  <li>The Inspector shows the <b>Label Cell</b> cell.</li>
   <li>Edit the text directly in the <b>Label Text</b> field.</li>
   <li>Use <b>Apply Color to All</b> to sync the colour across the whole group.</li>
 </ol>
 
 <h3>Adding Free Text</h3>
-<p>Go to <b>Edit → Add Text</b> to insert a free-floating text item.
+<p>Go to <b>Edit → Add Text Box</b> to insert a free-floating text item.
 Drag it anywhere on the canvas. Edit its font, size, and colour in the Inspector.</p>
 
 <h3>Corner Labels</h3>
@@ -351,25 +351,25 @@ _LABELS_HTML_ZH = """
 <h2 style="margin-top:0">标注与文字</h2>
 
 <h3>自动标注</h3>
-<p>按 <code>Ctrl+Shift+L</code> 或 <b>编辑 → 自动标注</b>，自动为所有叶子单元格添加面板标签（a、b、c… 或 A、B、C…）。</p>
+<p>按 <code>Ctrl+Shift+L</code> 或 <b>编辑 → 自动标注</b>，自动为所有叶子单元格添加单元格标签（a、b、c… 或 A、B、C…）。</p>
 <p>标注方案、字体、大小、颜色和位置均在<b>检查器 → 项目设置 → 标注</b>部分设置。</p>
 
 <h3>编辑标注</h3>
 <ol>
   <li>点击画布上的标注将其选中。</li>
-  <li>检查器将显示<b>标注单元格</b>面板。</li>
+  <li>检查器将显示<b>标注单元格</b>单元格。</li>
   <li>在<b>标注文字</b>字段中直接编辑文本。</li>
-  <li>使用<b>应用颜色到全部</b>同步整组的颜色。</li>
+  <li>使用<b>应用到全部</b>同步整组的设置。</li>
 </ol>
 
-<h3>添加浮动文字</h3>
-<p>通过 <b>编辑 → 添加浮动文字</b> 插入自由浮动的文字项，可拖放到画布任意位置，并在检查器中编辑字体、大小和颜色。</p>
+<h3>添加文本框</h3>
+<p>通过 <b>编辑 → 添加文本框</b> 插入自由浮动的文字项，可拖放到画布任意位置，并在检查器中编辑字体、大小和颜色。</p>
 
 <h3>角标</h3>
-<p>选中单元格后，在检查器的<b>角标</b>部分可在四个角（左上、右上、左下、右下）输入简短的注释文字。</p>
+<p>选中单元格后，在检查器的<b>角标</b>单元格中可在四个角（左上、右上、左下、右下）输入简短的注释文字。</p>
 
 <h3>比例尺（显微图像）</h3>
-<p>在<b>检查器 → 比例尺</b>中为显微图像启用比例尺，可设置 µm/像素校准值、比例尺长度、颜色和位置。</p>
+<p>在<b>检查器 → 比例尺</b>中为显微图像启用比例尺，可设置 µm/像素校准值、比例尺的长度、颜色及位置。</p>
 """
 
 _EXPORT_HTML_EN = """
@@ -400,7 +400,7 @@ PDF export resolution is separate from this setting.</p>
 
 <h3>Tips for Publication</h3>
 <ul>
-  <li>Keep gap ≥ 1 mm so panels don't touch.</li>
+  <li>Keep gap ≥ 1 mm so cells don't touch.</li>
   <li>Use SVG source images when possible — they stay crisp in PDF exports.</li>
   <li>Set DPI ≥ 300 for raster exports submitted to journals.</li>
 </ul>
@@ -411,30 +411,30 @@ _EXPORT_HTML_ZH = """
 
 <h3>支持的格式</h3>
 <ul>
-  <li><b>PDF</b> — 基于矢量；适合期刊投稿，标注和 SVG 图片保持矢量质量。</li>
-  <li><b>TIFF</b> — 无损光栅，分辨率由检查器 → 项目 → DPI 指定。</li>
-  <li><b>JPG</b> — 压缩光栅，质量固定为 95%。</li>
+  <li><b>PDF</b> — 矢量格式；适合期刊投稿，标注和 SVG 图片将保持矢量特性。</li>
+  <li><b>TIFF</b> — 无损位图，分辨率通过“检查器 → 项目设置 → DPI”指定。</li>
+  <li><b>JPG</b> — 压缩位图，质量固定为 95%。</li>
   <li><b>PNG / SVG</b> — 适合网页使用的格式。</li>
 </ul>
 
 <h3>项目包 (.figpack)</h3>
 <p>标准的 <code>.figlayout</code> 文件仅保存图片路径。若移动图片，布局将失效。
-使用<b>文件 → 转换为 .figpack</b> 可创建一个包含所有源图片的自持归档包。
+使用<b>文件 → 打包为 .figpack 项目</b> 可创建一个包含所有源图片的独立归档包。
 非常适合与合作者分享或归档项目。</p>
 
 <h3>导出区域</h3>
 <p>默认导出整个页面。使用<b>布局 → 设置导出区域</b>在画布上拖拽选择，仅所选区域会被保存在导出文件中。</p>
 
 <h3>DPI 设置</h3>
-<p>DPI（每英寸像素数）决定光栅导出的像素尺寸：</p>
-<p style="margin-left:16px"><code>像素数 = (尺寸_mm / 25.4) × DPI</code></p>
+<p>DPI（每英寸像素数）决定位图导出的像素尺寸：</p>
+<p style="margin-left:16px"><code>像素数 = (物理尺寸_mm / 25.4) × DPI</code></p>
 <p>大多数期刊要求 TIFF/JPG 导出时 <b>300 DPI</b> 即可。PDF 导出分辨率与此设置无关。</p>
 
 <h3>出版建议</h3>
 <ul>
-  <li>间距保持 ≥ 1 mm，避免面板互相接触。</li>
+  <li>间距保持 ≥ 1 mm，避免单元格互相接触。</li>
   <li>尽量使用 SVG 源图片 — PDF 导出时保持清晰。</li>
-  <li>向期刊投稿时，光栅导出 DPI 应 ≥ 300。</li>
+  <li>向期刊投稿时，位图导出的 DPI 建议设置 ≥ 300。</li>
 </ul>
 """
 
@@ -447,12 +447,12 @@ Go to <b>View → SVG Text Groups…</b> to open the inspector.
 Group text elements across different cells to sync their font size and content.</p>
 
 <h3>Size Groups</h3>
-<p>Synchronize the dimensions of multiple cells or PiPs. 
+<p>Synchronize the dimensions of multiple cells or insets. 
 In the Inspector, assign a <b>Size Group</b> to selected items. 
 Changing the width or height of one member will automatically update all others in the group.</p>
 
 <h3>Layer Tree</h3>
-<p>Use the <b>Layers</b> panel on the left to see the hierarchical structure of your project. 
+<p>Use the <b>Layers</b> cell on the left to see the hierarchical structure of your project. 
 You can select, hide, or reorder elements easily from here.</p>
 """
 
@@ -461,14 +461,14 @@ _ADVANCED_HTML_ZH = """
 
 <h3>SVG 文字组</h3>
 <p>使用 SVG 单元格时，您可以批量编辑文字元素。
-通过 <b>视图 → SVG 文字组…</b> 打开检查器。跨不同单元格对文字元素进行分组，以同步它们的字号和内容。</p>
+通过 <b>视图 → SVG 文字组…</b> 打开检查器。可以将不同单元格内的文字元素进行分组，以同步它们的字号和内容。</p>
 
 <h3>尺寸组</h3>
 <p>同步多个单元格或子图的尺寸。
-在检查器中为选中项分配<b>尺寸组</b>。更改其中一个成员的宽度或高度将自动更新组内所有其他成员。</p>
+在检查器中为选中的多个项分配相同的<b>尺寸组</b>。更改其中一个成员的宽度或高度将自动更新组内所有其他成员。</p>
 
 <h3>图层树</h3>
-<p>使用左侧的<b>图层</b>面板查看项目的层级结构。
+<p>使用左侧的<b>图层</b>单元格查看项目的层级结构。
 您可以从这里轻松地选择、隐藏或重新排序元素。</p>
 """
 

@@ -244,9 +244,9 @@ class CollapsibleSection(QWidget):
         self._body = QWidget()
         self._body.setObjectName("sectionBody")
         self._form = QFormLayout(self._body)
-        self._form.setVerticalSpacing(8)
-        self._form.setHorizontalSpacing(10)
-        self._form.setContentsMargins(14, 4, 14, 14)
+        self._form.setVerticalSpacing(4)
+        self._form.setHorizontalSpacing(8)
+        self._form.setContentsMargins(10, 6, 10, 10)
         self._form.setLabelAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
@@ -268,9 +268,40 @@ class CollapsibleSection(QWidget):
         self._title_lbl.setText(title.upper())
 
     def _toggle(self) -> None:
-        self._collapsed = not self._collapsed
-        self._body.setVisible(not self._collapsed)
-        self._chevron.setText("▸" if self._collapsed else "▾")
+        self.set_collapsed(not self._collapsed)
+
+    def set_collapsed(self, collapsed: bool, animate: bool = True) -> None:
+        if self._collapsed == collapsed:
+            return
+        self._collapsed = collapsed
+        self._chevron.setText("▸" if collapsed else "▾")
+
+        if not animate:
+            self._body.setVisible(not collapsed)
+            self._body.setMaximumHeight(0 if collapsed else 16777215)
+            return
+
+        if collapsed:
+            start_h = self._body.height()
+            self._body.setMaximumHeight(start_h)
+            anim = QPropertyAnimation(self._body, b"maximumHeight", self)
+            anim.setDuration(180)
+            anim.setStartValue(start_h)
+            anim.setEndValue(0)
+            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+            anim.finished.connect(lambda: self._body.setVisible(False))
+            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        else:
+            self._body.setVisible(True)
+            self._body.setMaximumHeight(0)
+            target_h = self._body.sizeHint().height()
+            anim = QPropertyAnimation(self._body, b"maximumHeight", self)
+            anim.setDuration(180)
+            anim.setStartValue(0)
+            anim.setEndValue(target_h)
+            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+            anim.finished.connect(lambda: self._body.setMaximumHeight(16777215))
+            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
 class Inspector(QWidget):
@@ -436,15 +467,6 @@ class Inspector(QWidget):
         )
         self.project_layout.addRow(self._fl("lbl_label_placement"), self.label_placement_combo)
 
-        self.label_col_width_spin = QDoubleSpinBox()
-        self.label_col_width_spin.setRange(1.0, 200.0)
-        self.label_col_width_spin.setSingleStep(0.5)
-        self.label_col_width_spin.setDecimals(1)
-        self.label_col_width_spin.setSuffix(" mm")
-        self.label_col_width_spin.valueChanged.connect(
-            lambda v: self.project_property_changed.emit({"label_col_width": float(v)})
-        )
-        self.project_layout.addRow(self._fl("lbl_label_col_width"), self.label_col_width_spin)
 
         # Gap between cells
         self._sec_layout = QLabel("<b>Layout</b>")
@@ -808,6 +830,18 @@ class Inspector(QWidget):
         )
         self.label_cell_layout.addRow(self._fl("lbl_row_height"), self.label_row_height)
 
+        self.label_col_width_spin = QDoubleSpinBox()
+        self.label_col_width_spin.setRange(0.0, 200.0)
+        self.label_col_width_spin.setSingleStep(0.5)
+        self.label_col_width_spin.setDecimals(1)
+        self.label_col_width_spin.setSuffix(" mm")
+        self.label_col_width_spin.setSpecialValueText(tr("special_auto"))
+        self.label_col_width_spin.setValue(0.0)
+        self.label_col_width_spin.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"label_col_width": float(v)})
+        )
+        self.label_cell_layout.addRow(self._fl("lbl_label_col_width"), self.label_col_width_spin)
+
         self.layout.addWidget(self.label_cell_group)
         self.label_cell_group.hide()
 
@@ -866,46 +900,39 @@ class Inspector(QWidget):
         self.pip_group = CollapsibleSection("Selected PiP")
         self.pip_layout = self.pip_group._form
 
-        # Geometry controls (values are 0-100 %, model stores 0.0-1.0)
-        self.pip_x = QDoubleSpinBox()
-        self.pip_x.setRange(0.0, 100.0)
-        self.pip_x.setDecimals(1)
-        self.pip_x.setSingleStep(0.5)
-        self.pip_x.setSuffix(" %")
-        self.pip_x.valueChanged.connect(
-            lambda v: self.pip_property_changed.emit({"x": v / 100.0})
-        )
-        self.pip_layout.addRow(self._fl("lbl_pip_x"), self.pip_x)
+        # Geometry controls (values are 0-100 %, model stores 0.0-1.0).
+        # X/Y and W/H are paired side-by-side to save vertical space.
+        def _mk_pct_spin(emit_key):
+            s = QDoubleSpinBox()
+            s.setRange(0.0, 100.0)
+            s.setDecimals(1)
+            s.setSingleStep(0.5)
+            s.setSuffix(" %")
+            s.valueChanged.connect(
+                lambda v, k=emit_key: self.pip_property_changed.emit({k: v / 100.0})
+            )
+            return s
 
-        self.pip_y = QDoubleSpinBox()
-        self.pip_y.setRange(0.0, 100.0)
-        self.pip_y.setDecimals(1)
-        self.pip_y.setSingleStep(0.5)
-        self.pip_y.setSuffix(" %")
-        self.pip_y.valueChanged.connect(
-            lambda v: self.pip_property_changed.emit({"y": v / 100.0})
-        )
-        self.pip_layout.addRow(self._fl("lbl_pip_y"), self.pip_y)
+        self.pip_x = _mk_pct_spin("x")
+        self.pip_y = _mk_pct_spin("y")
+        self.pip_w = _mk_pct_spin("w")
+        self.pip_h = _mk_pct_spin("h")
+        self.pip_w.setMinimum(1.0)
+        self.pip_h.setMinimum(1.0)
 
-        self.pip_w = QDoubleSpinBox()
-        self.pip_w.setRange(1.0, 100.0)
-        self.pip_w.setDecimals(1)
-        self.pip_w.setSingleStep(0.5)
-        self.pip_w.setSuffix(" %")
-        self.pip_w.valueChanged.connect(
-            lambda v: self.pip_property_changed.emit({"w": v / 100.0})
-        )
-        self.pip_layout.addRow(self._fl("lbl_pip_w"), self.pip_w)
+        def _pair_row(a_label, a_widget, b_label, b_widget):
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            la = QLabel(a_label); la.setFixedWidth(14)
+            lb = QLabel(b_label); lb.setFixedWidth(14)
+            h.addWidget(la); h.addWidget(a_widget, 1)
+            h.addWidget(lb); h.addWidget(b_widget, 1)
+            return row
 
-        self.pip_h = QDoubleSpinBox()
-        self.pip_h.setRange(1.0, 100.0)
-        self.pip_h.setDecimals(1)
-        self.pip_h.setSingleStep(0.5)
-        self.pip_h.setSuffix(" %")
-        self.pip_h.valueChanged.connect(
-            lambda v: self.pip_property_changed.emit({"h": v / 100.0})
-        )
-        self.pip_layout.addRow(self._fl("lbl_pip_h"), self.pip_h)
+        self.pip_layout.addRow(self._fl("lbl_pip_pos"), _pair_row("X", self.pip_x, "Y", self.pip_y))
+        self.pip_layout.addRow(self._fl("lbl_pip_size"), _pair_row("W", self.pip_w, "H", self.pip_h))
 
         self.pip_border_enabled = QCheckBox(tr("chk_border_enabled"))
         self.pip_border_enabled.toggled.connect(
@@ -936,7 +963,17 @@ class Inspector(QWidget):
         )
         self.pip_layout.addRow(self._fl("lbl_color"), self.pip_border_color)
 
-        self.pip_delete_btn = QPushButton(self._fl("btn_delete_pip"))
+        self.pip_content_padding = QDoubleSpinBox()
+        self.pip_content_padding.setRange(0.0, 20.0)
+        self.pip_content_padding.setSingleStep(0.5)
+        self.pip_content_padding.setDecimals(1)
+        self.pip_content_padding.setSuffix(" pt")
+        self.pip_content_padding.valueChanged.connect(
+            lambda v: self.pip_property_changed.emit({"content_padding_pt": v})
+        )
+        self.pip_layout.addRow(self._fl("lbl_pip_padding"), self.pip_content_padding)
+
+        self.pip_delete_btn = QPushButton(tr("btn_delete_pip"))
         self.pip_delete_btn.clicked.connect(self.pip_delete_requested)
         self.pip_layout.addRow(self.pip_delete_btn)
 
@@ -1095,6 +1132,12 @@ class Inspector(QWidget):
         self._make_collapsible(self.cell_group)
         self._make_collapsible(self.row_group)
 
+        # Start with every section collapsed so a first-time user sees the
+        # full list of available groups at a glance instead of having to
+        # scroll through expanded panels.
+        for section in self.findChildren(CollapsibleSection):
+            section.set_collapsed(True, animate=False)
+
     def _fl(self, key: str) -> QLabel:
         """Create a form-row QLabel, register it for retranslation, and return it."""
         lbl = QLabel(tr(key))
@@ -1155,12 +1198,25 @@ class Inspector(QWidget):
         self.scale_bar_custom_text.setPlaceholderText(tr("placeholder_scale_bar_text"))
         self.label_text_edit.setPlaceholderText(tr("placeholder_label_text"))
         self.label_row_height.setSpecialValueText(tr("special_auto"))
+        self.label_col_width_spin.setSpecialValueText(tr("special_auto"))
         self.col_ratios_edit.setPlaceholderText(tr("placeholder_col_ratios"))
         self.subcell_fixed_size.setSpecialValueText(tr("special_auto_ratio"))
 
         self.corner_label_color.retranslate_ui()
         self.scale_bar_color.retranslate_ui()
         self.label_color.retranslate_ui()
+
+        # Re-translate the two sentinel items in the size-group combo
+        # (group names are user data and stay unchanged).
+        c = self.size_group_combo
+        c.blockSignals(True)
+        none_idx = c.findData("")
+        if none_idx >= 0:
+            c.setItemText(none_idx, tr("size_group_none"))
+        new_idx = c.findData("__new__")
+        if new_idx >= 0:
+            c.setItemText(new_idx, tr("size_group_new"))
+        c.blockSignals(False)
         self.text_color.retranslate_ui()
 
     def apply_theme(self, tokens: dict) -> None:
@@ -1688,6 +1744,7 @@ class Inspector(QWidget):
                 self.label_offset_x.setValue(data.get("label_offset_x", 0.0))
                 self.label_offset_y.setValue(data.get("label_offset_y", 0.0))
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
+                self.label_col_width_spin.setValue(data.get("label_col_width", 0.0))
                 self.blockSignals(False)
             return
 
@@ -1880,7 +1937,8 @@ class Inspector(QWidget):
             self.pip_border_style.setCurrentText(data.get("border_style", "solid"))
             self.pip_border_width.setValue(float(data.get("border_width_pt", 1.5)))
             self.pip_border_color.set_color(data.get("border_color", "#FFFFFF"))
-            
+            self.pip_content_padding.setValue(float(data.get("content_padding_pt", 0.0)))
+
             self.scale_bar_offset_y.setValue(data.get("scale_bar_offset_y", 2.0))
             
             # Populate shared scale bar section

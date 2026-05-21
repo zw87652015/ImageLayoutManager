@@ -208,9 +208,10 @@ class _BundleOpenWorker(QThread):
     finished_ok = pyqtSignal(object, object)
     failed = pyqtSignal(str)
 
-    def __init__(self, pack_path: str, parent=None):
+    def __init__(self, pack_path: str, cache_root: Optional[str] = None, parent=None):
         super().__init__(parent)
         self._pack_path = pack_path
+        self._cache_root = cache_root or None
         self._cancel_flag = False
 
     def cancel(self):
@@ -220,6 +221,7 @@ class _BundleOpenWorker(QThread):
         try:
             wd, ur = open_bundle(
                 self._pack_path,
+                cache_root=self._cache_root,
                 cancel=lambda: self._cancel_flag,
             )
             self.finished_ok.emit(wd, ur)
@@ -368,7 +370,8 @@ class MainWindow(QMainWindow):
         # behind by previous (possibly crashed) sessions. Runs once at
         # app start; subsequent sweeps happen on every bundle open.
         try:
-            cleanup_orphans()
+            _startup_cache_root = self._settings.value("figpack_cache_root", "").strip() or None
+            cleanup_orphans(_startup_cache_root)
         except Exception:
             pass
 
@@ -463,12 +466,7 @@ class MainWindow(QMainWindow):
         edit_menu   = self._edit_menu
         help_menu   = self._help_menu
 
-        # ── SVG Text Groups action (View menu) ──
-        self._act_svg_text_groups = QAction(tr("action_svg_text_groups"), self)
-        self._act_svg_text_groups.triggered.connect(self._on_show_svg_text_groups)
-        self._view_menu.addAction(self._act_svg_text_groups)
         self._view_menu.addSeparator()
-        self._svg_text_groups_panel = None  # lazy-created
 
         # ── View menu (theme + language toggles) ──
         self._act_toggle_layers = QAction(tr("action_toggle_layers"), self)
@@ -488,6 +486,33 @@ class MainWindow(QMainWindow):
         self._lang_action.setShortcut("Ctrl+Shift+G")
         self._lang_action.triggered.connect(self._on_toggle_language)
         self._view_menu.addAction(self._lang_action)
+
+        # ── UI font zoom (Ctrl/Cmd + / - / 0) ──
+        self._view_menu.addSeparator()
+        self._act_font_zoom_in = QAction(tr("action_font_zoom_in"), self)
+        # ZoomIn covers Ctrl/Cmd + and Ctrl/Cmd =
+        self._act_font_zoom_in.setShortcuts([
+            QKeySequence.StandardKey.ZoomIn,
+            QKeySequence("Ctrl+="),
+        ])
+        self._act_font_zoom_in.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._act_font_zoom_in.triggered.connect(lambda: self._adjust_font_scale(+1))
+        self._view_menu.addAction(self._act_font_zoom_in)
+
+        self._act_font_zoom_out = QAction(tr("action_font_zoom_out"), self)
+        self._act_font_zoom_out.setShortcuts([
+            QKeySequence.StandardKey.ZoomOut,
+            QKeySequence("Ctrl+-"),
+        ])
+        self._act_font_zoom_out.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._act_font_zoom_out.triggered.connect(lambda: self._adjust_font_scale(-1))
+        self._view_menu.addAction(self._act_font_zoom_out)
+
+        self._act_font_zoom_reset = QAction(tr("action_font_zoom_reset"), self)
+        self._act_font_zoom_reset.setShortcut(QKeySequence("Ctrl+0"))
+        self._act_font_zoom_reset.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        self._act_font_zoom_reset.triggered.connect(self._reset_font_scale)
+        self._view_menu.addAction(self._act_font_zoom_reset)
 
         self._about_action = QAction(tr("action_about"), self)
         self._about_action.setMenuRole(QAction.MenuRole.NoRole)
@@ -736,7 +761,14 @@ class MainWindow(QMainWindow):
 
         # ── Toolbar — quick actions ──
         self.toolbar.addAction(auto_label_incell_action)
-        self.toolbar.addAction(auto_label_outcell_action)
+
+        outcell_btn = QToolButton(self)
+        outcell_btn.setDefaultAction(auto_label_outcell_action)
+        outcell_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        outcell_btn.setMenu(placement_menu)
+        outcell_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.toolbar.addWidget(outcell_btn)
+
         self.toolbar.addAction(auto_layout_action)
         self.toolbar.addSeparator()
 
@@ -1198,7 +1230,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue("theme", theme)
         app = QApplication.instance()
         app.setPalette(build_palette(theme))
-        app.setStyleSheet(get_stylesheet(theme))
+        app.setStyleSheet(get_stylesheet(theme, self._current_font_scale()))
         tokens = get_tokens(theme)
         self.layers_panel.apply_theme(tokens)
         if hasattr(self, 'inspector'):
@@ -1291,6 +1323,27 @@ class MainWindow(QMainWindow):
         set_language(new_lang)
         self._settings.setValue("language", new_lang)
         self.retranslate_ui()
+
+    # ── UI font scaling ───────────────────────────────────────────────
+    def _current_font_scale(self) -> float:
+        try:
+            return float(self._settings.value("ui/font_scale", 1.0))
+        except (TypeError, ValueError):
+            return 1.0
+
+    def _apply_and_persist_font_scale(self, scale: float):
+        from src.app.theme import apply_font_scale
+        applied = apply_font_scale(QApplication.instance(), scale, self._current_theme)
+        self._settings.setValue("ui/font_scale", applied)
+
+    def _adjust_font_scale(self, direction: int):
+        from src.app.theme import FONT_SCALE_STEP
+        self._apply_and_persist_font_scale(
+            self._current_font_scale() + direction * FONT_SCALE_STEP
+        )
+
+    def _reset_font_scale(self):
+        self._apply_and_persist_font_scale(1.0)
 
     def _on_toggle_preview_mode(self, checked: bool):
         if self.scene:
@@ -1993,13 +2046,6 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
 
-        resize_act = menu.addAction(tr("pip_ctx_resize"))
-        resize_act.triggered.connect(
-            lambda: cell_item.select_pip(pip_id, resize=True) if cell_item else None
-        )
-
-        menu.addSeparator()
-
         remove_act = menu.addAction(tr("pip_ctx_remove"))
         remove_act.triggered.connect(lambda: self._ctx_remove_pip(cell_id, pip))
 
@@ -2174,6 +2220,7 @@ class MainWindow(QMainWindow):
                     "label_offset_x": self.project.label_offset_x,
                     "label_offset_y": self.project.label_offset_y,
                     "label_row_height": getattr(self.project, 'label_row_height', 0.0),
+                    "label_col_width": getattr(self.project, 'label_col_width', 0.0),
                 }
                 self.inspector.set_selection('label_cell', label_data)
                 return
@@ -3102,8 +3149,9 @@ class MainWindow(QMainWindow):
                 menu.addSeparator()
                 svg_txt_action = menu.addAction(tr("ctx_svg_text_inspector"))
                 _svg_path = cell.image_path
+                _svg_cell = cell
                 svg_txt_action.triggered.connect(
-                    lambda checked=False, p=_svg_path: self._on_open_svg_text_inspector(p)
+                    lambda checked=False, p=_svg_path, c=_svg_cell: self._on_open_svg_text_inspector(p, c)
                 )
 
             # --- Crop ---
@@ -3708,23 +3756,12 @@ class MainWindow(QMainWindow):
             SvgExporter.export(self.project, path)
             QMessageBox.information(self, "Export", f"Exported to {path}")
 
-    def _on_show_svg_text_groups(self):
-        """Open (or raise) the SVG Text Groups management panel."""
-        if self._svg_text_groups_panel is None or not self._svg_text_groups_panel.isVisible():
-            from src.app.svg_text_groups_panel import SvgTextGroupsPanel
-            self._svg_text_groups_panel = SvgTextGroupsPanel(self.project, parent=self)
-            self._svg_text_groups_panel.groups_changed.connect(self._on_svg_text_groups_changed)
-        else:
-            self._svg_text_groups_panel.refresh(self.project)
-        self._svg_text_groups_panel.show()
-        self._svg_text_groups_panel.raise_()
-        self._svg_text_groups_panel.activateWindow()
-
-    def _on_open_svg_text_inspector(self, svg_path: str):
+    def _on_open_svg_text_inspector(self, svg_path: str, cell=None):
         """Open a stand-alone SVG text inspector for the given SVG file."""
         from src.app.svg_text_inspector import SvgTextInspectorWindow
-        win = SvgTextInspectorWindow(svg_path, self.project, parent=self)
+        win = SvgTextInspectorWindow(svg_path, self.project, cell=cell, parent=self)
         win.groups_changed.connect(self._on_svg_text_groups_changed)
+        win.finished.connect(self._on_svg_text_groups_changed)
         win.show()
         win.raise_()
         win.activateWindow()
@@ -3890,7 +3927,8 @@ class MainWindow(QMainWindow):
         dlg.setAutoClose(False)
         dlg.setAutoReset(False)
 
-        worker = _BundleOpenWorker(path, parent=self)
+        cache_root = self._settings.value("figpack_cache_root", "").strip() or None
+        worker = _BundleOpenWorker(path, cache_root=cache_root, parent=self)
         result: dict = {}
 
         def on_ok(wd, ur):

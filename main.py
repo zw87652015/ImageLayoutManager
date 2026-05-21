@@ -36,7 +36,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QSurfaceFormat
 from src.app.main_window import MainWindow
-from src.app.theme import build_palette, get_stylesheet, LIGHT
+from src.app.theme import build_palette, apply_font_scale, LIGHT
 
 def main():
     fmt = QSurfaceFormat()
@@ -47,9 +47,17 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Academic Figure Layout")
 
-    # Apply initial theme (light)
+    # Restore persisted font scale before building any widgets so the
+    # initial layout uses the user's preferred size.
+    from PyQt6.QtCore import QSettings
+    _settings = QSettings("AcademicFigureLayout", "ImageLayoutManager")
+    try:
+        _scale = float(_settings.value("ui/font_scale", 1.0))
+    except (TypeError, ValueError):
+        _scale = 1.0
+    # Apply initial theme (light) + persisted font scale together.
     app.setPalette(build_palette(LIGHT))
-    app.setStyleSheet(get_stylesheet(LIGHT))
+    apply_font_scale(app, _scale, LIGHT)
     
     window = MainWindow()
 

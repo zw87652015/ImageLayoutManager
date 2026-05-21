@@ -97,7 +97,7 @@ class CanvasScene(QGraphicsScene):
         """Update all canvas visuals from design tokens. Call on theme switch."""
         self._canvas_bg = tokens["canvas_bg"]
         self._grid_line = tokens["grid_line"]
-        self.page_item.setBrush(QBrush(QColor(tokens.get("surface", "#FFFFFF"))))
+        self.page_item.setBrush(QBrush(Qt.GlobalColor.white))
         self.margin_item.setPen(
             QPen(QColor(tokens.get("border", "#DDDDDD")), 0.3, Qt.PenStyle.DashLine)
         )

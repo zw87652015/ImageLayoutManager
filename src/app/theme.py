@@ -97,7 +97,7 @@ _TOKENS_DARK = {
     "accent_ring":   "rgba(34, 211, 238, 0.40)",
     "on_accent":     "#001018",
     "danger":        "#F87171",
-    "placeholder":   "#636366",
+    "placeholder":   "#8E8E93",
     "grid_line":     "#48484A",
     "radius_panel":  "6px",
     "radius_button": "4px",
@@ -122,7 +122,7 @@ def _palette_tokens_to_roles(tokens: dict) -> dict:
         QPalette.ColorRole.Link:            tokens["accent"],
         QPalette.ColorRole.Highlight:       tokens["accent"],
         QPalette.ColorRole.HighlightedText: tokens["on_accent"],
-        QPalette.ColorRole.PlaceholderText: tokens["text_tert"],
+        QPalette.ColorRole.PlaceholderText: tokens["placeholder"],
     }
 
 
@@ -136,7 +136,7 @@ _QSS_TEMPLATE = """
         background-color: %(panel)s;
         color: %(text)s;
         font-family: system-ui, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-        font-size: 13px;
+        font-size: %(font_base)s;
     }
 
     /* Splitters between panels */
@@ -188,21 +188,23 @@ _QSS_TEMPLATE = """
         background: transparent;
     }
     QWidget#sectionHead {
-        background: transparent;
+        background: %(surface_subtle)s;
+        border-left: 3px solid %(accent)s;
+        border-bottom: 1px solid %(divider)s;
     }
     QWidget#sectionHead:hover {
-        background: %(hover)s;
+        background: %(accent_tint)s;
     }
     QLabel#sectionTitle {
-        font-size: 11px;
-        font-weight: 600;
-        color: %(label_caps)s;
-        letter-spacing: 1px;
+        font-size: %(font_md)s;
+        font-weight: 700;
+        color: %(text)s;
+        letter-spacing: 0.5px;
         background: transparent;
     }
     QLabel#sectionChevron {
         color: %(text_tert)s;
-        font-size: 10px;
+        font-size: %(font_xs)s;
         background: transparent;
     }
     QWidget#sectionBody {
@@ -216,7 +218,7 @@ _QSS_TEMPLATE = """
 
     /* ── Group boxes (legacy / dialogs) ──────────────────────────── */
     QGroupBox {
-        font-weight: 600; font-size: 11px;
+        font-weight: 600; font-size: %(font_sm)s;
         color: %(label_caps)s;
         border: 1px solid %(divider)s;
         border-radius: %(radius_panel)s;
@@ -245,7 +247,7 @@ _QSS_TEMPLATE = """
         padding: 2px 8px;
         color: %(text)s;
         min-height: 24px;
-        font-size: 12px;
+        font-size: %(font_md)s;
         selection-background-color: %(accent)s;
         selection-color: %(on_accent)s;
     }
@@ -325,7 +327,7 @@ _QSS_TEMPLATE = """
         border: none;
         border-radius: 3px;
         padding: 2px 10px;
-        font-size: 12px;
+        font-size: %(font_md)s;
     }
     QFrame#themeSegmented QToolButton[segmentedButton="true"]:hover {
         color: %(text)s;
@@ -338,11 +340,20 @@ _QSS_TEMPLATE = """
     }
 
     /* ── Tabs ─────────────────────────────────────────────────────── */
+    /* On macOS the strip behind QTabBar falls back to the system palette
+       (dark in system dark mode) unless we paint it explicitly. */
+    QTabWidget {
+        background: %(panel)s;
+    }
     QTabWidget::pane {
         border: 1px solid %(divider)s;
         border-radius: %(radius_panel)s;
         top: -1px;
         background: %(panel)s;
+    }
+    QTabBar {
+        background: %(panel)s;
+        border: none;
     }
     QTabBar::tab {
         background: transparent;
@@ -417,7 +428,7 @@ _QSS_TEMPLATE = """
         background: %(panel)s;
         color: %(text_sec)s;
         border-top: 1px solid %(divider)s;
-        font-size: 11px;
+        font-size: %(font_sm)s;
         min-height: 24px;
         max-height: 24px;
     }
@@ -444,7 +455,7 @@ _LAYERS_TREE_TEMPLATE = """
         border: none;
         outline: none;
         show-decoration-selected: 0;
-        font-size: 12px;
+        font-size: %(font_md)s;
     }
     QTreeWidget::item {
         padding: 1px 4px;
@@ -492,13 +503,55 @@ def build_palette(theme: str) -> QPalette:
     return palette
 
 
-def get_stylesheet(theme: str) -> str:
-    tokens = get_tokens(theme)
+def _font_tokens(scale: float) -> dict:
+    """Return font-size tokens as px strings for the given scale factor."""
+    scale = max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, float(scale)))
+    return {
+        "font_base": f"{round(13 * scale)}px",
+        "font_md":   f"{round(12 * scale)}px",
+        "font_sm":   f"{round(11 * scale)}px",
+        "font_xs":   f"{round(10 * scale)}px",
+    }
+
+
+def get_stylesheet(theme: str, scale: float = 1.0) -> str:
+    tokens = {**get_tokens(theme), **_font_tokens(scale)}
     arrow = _ARROW_DOWN_DARK if theme == DARK else _ARROW_DOWN_LIGHT
     return (_QSS_TEMPLATE % tokens) \
         .replace("__CHECK_ON__", _CHECK_ON) \
         .replace("__ARROW_DOWN__", arrow)
 
 
-def get_layers_tree_stylesheet(theme: str) -> str:
-    return _LAYERS_TREE_TEMPLATE % get_tokens(theme)
+def get_layers_tree_stylesheet(theme: str, scale: float = 1.0) -> str:
+    tokens = {**get_tokens(theme), **_font_tokens(scale)}
+    return _LAYERS_TREE_TEMPLATE % tokens
+
+
+# ── App-wide font scaling ────────────────────────────────────────────────
+# Captured once on startup so successive zoom-in/zoom-out steps remain
+# relative to the platform default rather than compounding.
+_BASE_APP_FONT_PT = None
+FONT_SCALE_MIN = 0.75
+FONT_SCALE_MAX = 2.0
+FONT_SCALE_STEP = 0.1
+
+
+def apply_font_scale(app, scale: float, theme: str = LIGHT) -> float:
+    """Scale the QApplication font by *scale* (clamped) and re-apply the stylesheet.
+
+    Re-applying the stylesheet is required because font-size values are
+    hardcoded as px in the QSS — app.setFont() alone is overridden by them.
+    Returns the clamped scale that was actually applied.
+    """
+    global _BASE_APP_FONT_PT
+    f = app.font()
+    if _BASE_APP_FONT_PT is None:
+        base = f.pointSizeF()
+        if base <= 0:
+            base = max(f.pixelSize(), 9) * 0.75
+        _BASE_APP_FONT_PT = base
+    scale = max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, float(scale)))
+    f.setPointSizeF(_BASE_APP_FONT_PT * scale)
+    app.setFont(f)
+    app.setStyleSheet(get_stylesheet(theme, scale))
+    return scale

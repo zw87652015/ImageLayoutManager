@@ -13,13 +13,15 @@ class LayoutResult:
 class LayoutEngine:
     @staticmethod
     def _label_row_height_mm(project: Project) -> float:
-        """Height of a label row based on label font settings.
-        
-        QGraphicsTextItem uses 72 DPI internally, so 1pt = 1 scene unit (mm).
-        The row height should accommodate the font at this scale.
-        """
+        """Height of a label row based on label font settings."""
         h = project.label_font_size * 1.2 + 2.0
         return max(5.0, min(50.0, h))
+
+    @staticmethod
+    def _label_col_width_mm(project: Project) -> float:
+        """Width of a label column based on label font settings (same formula as row height)."""
+        w = project.label_font_size * 1.2 + 2.0
+        return max(5.0, min(50.0, w))
 
     @staticmethod
     def _compute_col_widths(r_temp: RowTemplate, content_width: float, gap_mm: float) -> List[float]:
@@ -101,7 +103,11 @@ class LayoutEngine:
             label_row_h = custom_h if custom_h > 0 else LayoutEngine._label_row_height_mm(project)
         else:
             label_row_h = 0.0
-        label_col_w = float(getattr(project, 'label_col_width', 10.0)) if (label_col_left or label_col_right) else 0.0
+        if label_col_left or label_col_right:
+            custom_w = getattr(project, 'label_col_width', 0.0)
+            label_col_w = custom_w if custom_w > 0 else LayoutEngine._label_col_width_mm(project)
+        else:
+            label_col_w = 0.0
 
         # Build set of cell_ids that have numbering labels and determine
         # which row indices need a label row/column.
