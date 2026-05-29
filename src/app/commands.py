@@ -1234,8 +1234,21 @@ class ChangeSubCellRatioCommand(QUndoCommand):
         self.cell_id = cell_id
         self.new_ratio = new_ratio
         self.update_callback = update_callback
+        self.timestamp = time.time()
         import copy
         self.old_cells = copy.deepcopy(project.cells)
+
+    def id(self):
+        return hash(self.cell_id) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        if not isinstance(other, ChangeSubCellRatioCommand) or other.cell_id != self.cell_id:
+            return False
+        if time.time() - self.timestamp > MERGE_TIMEOUT:
+            return False
+        self.new_ratio = other.new_ratio
+        self.timestamp = time.time()
+        return True
 
     def redo(self):
         parent = self.project.find_parent_of(self.cell_id)

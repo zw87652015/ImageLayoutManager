@@ -31,6 +31,8 @@ Additional highlights:
   Pack a project and all its referenced images into a single portable `.figpack` file. Share it with collaborators without worrying about broken image paths.
 - **File locking**
   Opening a project file locks it so the same file cannot be opened twice — in the same instance or in a separate one — preventing accidental concurrent edits.
+- **AI/MCP-assisted figure editing**
+  Connect Claude Desktop, Claude Code, Cursor, Windsurf, Cline, or another MCP host to the running app. AI can build layouts, import images, style labels/text, crop/rotate/pad panels, add scale bars, add PiP insets, manage size groups, set export regions, request screenshots, and save/export projects.
 
 ## Downloads
 
@@ -91,6 +93,7 @@ A headless CLI tool (`imagelayout-cli.exe`) is included with the Windows install
 | `pack`    | `.figlayout` → `.figpack` (bundle layout + referenced assets)   |
 | `unpack`  | `.figpack` → folder containing assets + sidecar `.figlayout`    |
 | `inspect` | Print page size, DPI, cell counts, etc. (text or `--json`)      |
+| `mcp`     | Stdio MCP adapter for AI hosts; proxies tools to the running GUI |
 
 ### Examples
 
@@ -114,7 +117,12 @@ imagelayout-cli.exe unpack figure_4.figpack -o ./extracted/
 # Quick summary
 imagelayout-cli.exe inspect figure_4.figpack
 imagelayout-cli.exe inspect figure_4.figpack --json
+
+# MCP adapter used by Claude/Cursor/Windsurf after enabling MCP Server in the GUI
+imagelayout-cli.exe mcp
 ```
+
+For setup instructions, see [`docs/mcp_setup.md`](docs/mcp_setup.md). After upgrading, restart both ImageLayoutManager and your AI host so the GUI server and `imagelayout-cli.exe mcp` load the same tool list.
 
 ### Access
 

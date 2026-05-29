@@ -310,6 +310,20 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# mcp (MCP-over-stdio adapter — no Qt required)
+# ---------------------------------------------------------------------------
+
+def _cmd_mcp(args: argparse.Namespace) -> int:
+    import asyncio
+    from src.agent.mcp_stdio import run_stdio
+    try:
+        asyncio.run(run_stdio())
+    except (KeyboardInterrupt, BrokenPipeError):
+        pass
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # argparse wiring
 # ---------------------------------------------------------------------------
 
@@ -373,6 +387,13 @@ def _build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--json", action="store_true",
                      help="Emit machine-readable JSON instead of text.")
     ins.set_defaults(func=_cmd_inspect)
+
+    # mcp --------------------------------------------------------------------
+    mcp = sub.add_parser(
+        "mcp",
+        help="Run the MCP-over-stdio adapter (launched by AI hosts, not by humans).",
+    )
+    mcp.set_defaults(func=_cmd_mcp)
 
     return p
 

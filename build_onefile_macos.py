@@ -147,23 +147,31 @@ def main() -> int:
     if dist_app.exists():
         # Inject metadata into Info.plist
         version_py = project_root / "src" / "version.py"
-        app_version = "1.0.0"
-        if version_py.exists():
-            v_match = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', version_py.read_text(encoding="utf-8"))
-            if v_match:
-                app_version = v_match.group(1)
-        
+        version_text = version_py.read_text(encoding="utf-8") if version_py.exists() else ""
+
+        def _grab(field: str, default: str) -> str:
+            m = re.search(rf'{field}\s*=\s*["\']([^"\']+)["\']', version_text)
+            return m.group(1) if m else default
+
+        app_version = _grab("APP_VERSION", "1.0.0")
+        publisher = _grab("APP_PUBLISHER", "zw87652015")
+        year = _grab("APP_COPYRIGHT_YEAR", "2026")
+        license_str = _grab("APP_LICENSE", "Apache-2.0")
+        copyright_str = (
+            f"Copyright (C) {year} {publisher}. Licensed under {license_str}."
+        )
+
         plist_path = dist_app / "Contents" / "Info.plist"
         if plist_path.exists():
             print(f"Applying metadata to {plist_path} (Version: {app_version})...")
             with open(plist_path, 'rb') as f:
                 pl = plistlib.load(f)
-            
+
             pl['CFBundleShortVersionString'] = app_version
             pl['CFBundleVersion'] = app_version
             pl['CFBundleName'] = "ImageLayoutManager"
             pl['CFBundleDisplayName'] = "ImageLayoutManager"
-            pl['NSHumanReadableCopyright'] = "Copyright © 2026. All rights reserved."
+            pl['NSHumanReadableCopyright'] = copyright_str
             pl['CFBundleDocumentTypes'] = [
                 {
                     'CFBundleTypeName': 'Academic Figure Layout',

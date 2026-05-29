@@ -39,6 +39,14 @@ from src.app.main_window import MainWindow
 from src.app.theme import build_palette, apply_font_scale, LIGHT
 
 def main():
+    # ``--agent-server`` enables the JSON-RPC server at launch. We strip it
+    # from ``argv`` *before* handing off to ``QApplication`` so Qt's own
+    # argument parser doesn't choke on it, and before the positional-file
+    # check below treats it as a path to open.
+    enable_agent_server = "--agent-server" in sys.argv
+    if enable_agent_server:
+        sys.argv = [a for a in sys.argv if a != "--agent-server"]
+
     fmt = QSurfaceFormat()
     fmt.setSamples(8)
     QSurfaceFormat.setDefaultFormat(fmt)
@@ -58,7 +66,7 @@ def main():
     # Apply initial theme (light) + persisted font scale together.
     app.setPalette(build_palette(LIGHT))
     apply_font_scale(app, _scale, LIGHT)
-    
+
     window = MainWindow()
 
     # Open a file passed as a command-line argument (double-click in Explorer).
@@ -67,6 +75,9 @@ def main():
         cli_path = sys.argv[1]
         if os.path.isfile(cli_path):
             window.open_file_from_cli(cli_path)
+
+    if enable_agent_server:
+        window.toggle_agent_server(True)
 
     window.show()
 

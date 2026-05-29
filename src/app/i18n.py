@@ -8,7 +8,38 @@ _T: dict[str, dict[str, str]] = {
     "menu_edit":            {"en": "Edit",              "zh": "编辑"},
     "menu_layout":          {"en": "Layout",            "zh": "布局"},
     "menu_view":            {"en": "View",              "zh": "视图"},
+    "menu_tools":           {"en": "Tools",             "zh": "工具"},
     "menu_help":            {"en": "Help",              "zh": "帮助"},
+
+    "action_enable_agent_server":  {"en": "Enable MCP Server",  "zh": "启用 MCP 服务"},
+    "action_disable_agent_server": {"en": "Disable MCP Server", "zh": "停止 MCP 服务"},
+    "action_mcp_setup_guide":      {"en": "MCP Setup Guide…",   "zh": "MCP 配置指南…"},
+    "btn_copy_mcp_config":  {"en": "Copy MCP Config JSON", "zh": "复制 MCP 配置"},
+    "btn_auto_register":    {"en": "Auto Register…",      "zh": "一键注册…"},
+    "msg_registered": {
+        "en": "Registered imagelayout MCP server in:\n{path}\n\nRestart {host} to activate.",
+        "zh": "已在以下位置注册 imagelayout MCP 服务：\n{path}\n\n请重启 {host} 以生效。",
+    },
+    "msg_register_failed": {
+        "en": "Failed to write config:\n{error}",
+        "zh": "写入配置失败：\n{error}",
+    },
+    "msg_no_hosts_found": {
+        "en": "No supported MCP host config files found on this machine.\n\n"
+              "Copy the config JSON and paste it into your host's MCP settings manually.",
+        "zh": "未在本机检测到已安装的 MCP 宿主配置文件。\n\n"
+              "请复制配置 JSON，手动粘贴到你使用的 AI 工具的 MCP 设置中。",
+    },
+    "msg_agent_server_started":    {
+        "en": "MCP server is listening.\n\nURL:   {url}\nToken: {token}\n\n"
+              "Connection details are also written to:\n{path}",
+        "zh": "MCP 服务已启动。\n\n地址：{url}\n令牌：{token}\n\n"
+              "连接信息已同时写入：\n{path}",
+    },
+    "msg_agent_server_failed":     {
+        "en": "Failed to start the MCP server.",
+        "zh": "MCP 服务启动失败。",
+    },
 
     "action_undo":          {"en": "Undo",              "zh": "撤销"},
     "action_redo":          {"en": "Redo",              "zh": "重做"},

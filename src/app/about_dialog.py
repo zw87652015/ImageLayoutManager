@@ -121,8 +121,9 @@ class _UpdateChecker(QObject):
 class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        from src.version import APP_VERSION
+        from src.version import APP_VERSION, APP_COPYRIGHT
         self._app_version = APP_VERSION
+        self._app_copyright = APP_COPYRIGHT
         self._checker: _UpdateChecker | None = None
 
         self.setWindowTitle(tr("about_title"))
@@ -193,7 +194,18 @@ class AboutDialog(QDialog):
         info_row(tr("about_license"),    "Apache-2.0")
 
         root.addLayout(info_layout)
-        root.addSpacing(20)
+        root.addSpacing(16)
+
+        # ── Copyright / attribution line ──────────────
+        # Matches the LegalCopyright string embedded in the .exe and the
+        # AppCopyright field in the Inno Setup installer so users see the
+        # same attribution everywhere.
+        copyright_lbl = QLabel(self._app_copyright)
+        copyright_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        copyright_lbl.setWordWrap(True)
+        copyright_lbl.setStyleSheet("color: #888888; font-size: 11px;")
+        root.addWidget(copyright_lbl)
+        root.addSpacing(12)
 
         # ── Update status area ────────────────────────
         self._update_label = QLabel(tr("about_click_check"))

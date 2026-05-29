@@ -340,6 +340,11 @@ class MainWindow(QMainWindow):
         self.undo_stack = None
         self.scene = None
 
+        # Agent integration: lazily created on first Tools → Enable MCP Server
+        # toggle. ``None`` means the server has never been started in this
+        # session. See src/agent/server.py.
+        self._agent_server_controller = None
+
         # Hot reload: watch source image files for external edits (Illustrator,
         # MATLAB, etc.) and refresh the canvas automatically when they change.
         self._image_watcher = QFileSystemWatcher(self)
@@ -460,6 +465,7 @@ class MainWindow(QMainWindow):
         self._edit_menu   = self.menuBar().addMenu(tr("menu_edit"))
         self._layout_menu_ref = None  # set below
         self._view_menu   = self.menuBar().addMenu(tr("menu_view"))
+        self._tools_menu  = self.menuBar().addMenu(tr("menu_tools"))
         self._help_menu   = self.menuBar().addMenu(tr("menu_help"))
         # local aliases for building
         file_menu   = self._file_menu
@@ -513,6 +519,16 @@ class MainWindow(QMainWindow):
         self._act_font_zoom_reset.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self._act_font_zoom_reset.triggered.connect(self._reset_font_scale)
         self._view_menu.addAction(self._act_font_zoom_reset)
+
+        # ── Tools menu (agent integration) ──
+        self._act_enable_agent_server = QAction(tr("action_enable_agent_server"), self)
+        self._act_enable_agent_server.setCheckable(True)
+        self._act_enable_agent_server.toggled.connect(self._on_toggle_agent_server)
+        self._tools_menu.addAction(self._act_enable_agent_server)
+
+        self._act_mcp_guide = QAction(tr("action_mcp_setup_guide"), self)
+        self._act_mcp_guide.triggered.connect(self._on_show_mcp_guide)
+        self._tools_menu.addAction(self._act_mcp_guide)
 
         self._about_action = QAction(tr("action_about"), self)
         self._about_action.setMenuRole(QAction.MenuRole.NoRole)
@@ -1372,7 +1388,18 @@ class MainWindow(QMainWindow):
         self._edit_menu.setTitle(tr("menu_edit"))
         self._layout_menu_ref.setTitle(tr("menu_layout"))
         self._view_menu.setTitle(tr("menu_view"))
+        if hasattr(self, "_tools_menu"):
+            self._tools_menu.setTitle(tr("menu_tools"))
         self._help_menu.setTitle(tr("menu_help"))
+        if hasattr(self, "_act_enable_agent_server"):
+            running = (self._agent_server_controller is not None
+                       and self._agent_server_controller.is_running())
+            self._act_enable_agent_server.setText(
+                tr("action_disable_agent_server") if running
+                else tr("action_enable_agent_server")
+            )
+        if hasattr(self, "_act_mcp_guide"):
+            self._act_mcp_guide.setText(tr("action_mcp_setup_guide"))
 
         self._act_new.setText(tr("action_new"))
         self._act_open.setText(tr("action_open"))
@@ -3793,6 +3820,89 @@ class MainWindow(QMainWindow):
         dlg = HelpDialog(self)
         dlg.exec()
 
+    # ── Agent integration ────────────────────────────────────────────────
+
+    def get_agent_tool_context(self):
+        """Build a :class:`src.agent.tools.ToolContext` for the active tab.
+
+        Called by :class:`AgentServerController` on the GUI thread before
+        every tool dispatch, so the context always points at whatever tab
+        the user has currently focused.
+        """
+        from src.agent.tools import ToolContext
+        return ToolContext(
+            project=self.project,
+            undo_stack=self.undo_stack,
+            main_window=self,
+            project_path=self._current_project_path,
+            on_changed=self._refresh_and_update,
+        )
+
+    def toggle_agent_server(self, enable: bool) -> None:
+        """Programmatic toggle — used by the ``--agent-server`` launch flag."""
+        if enable and not self._act_enable_agent_server.isChecked():
+            self._act_enable_agent_server.setChecked(True)
+        elif not enable and self._act_enable_agent_server.isChecked():
+            self._act_enable_agent_server.setChecked(False)
+
+    def _on_toggle_agent_server(self, checked: bool) -> None:
+        if self._agent_server_controller is None:
+            from src.agent.server import AgentServerController
+            self._agent_server_controller = AgentServerController(self)
+            self._agent_server_controller.status_changed.connect(
+                self._on_agent_server_status
+            )
+
+        if checked:
+            try:
+                port, token = self._agent_server_controller.start()
+            except Exception as e:
+                QMessageBox.warning(
+                    self, tr("menu_tools"),
+                    f"{tr('msg_agent_server_failed')}\n\n{e}",
+                )
+                # Roll back the menu state without firing this slot again.
+                self._act_enable_agent_server.blockSignals(True)
+                self._act_enable_agent_server.setChecked(False)
+                self._act_enable_agent_server.blockSignals(False)
+                return
+            # Show the discovery info so the user can hand it to their agent host.
+            from src.agent.server import _discovery_path
+            QMessageBox.information(
+                self, tr("menu_tools"),
+                tr("msg_agent_server_started").format(
+                    url=f"ws://127.0.0.1:{port}",
+                    token=token,
+                    path=_discovery_path(),
+                ),
+            )
+            self._act_enable_agent_server.setText(tr("action_disable_agent_server"))
+        else:
+            self._agent_server_controller.stop()
+            self._act_enable_agent_server.setText(tr("action_enable_agent_server"))
+
+    def _on_show_mcp_guide(self) -> None:
+        from src.app.mcp_guide_dialog import MCPGuideDialog
+        dlg = MCPGuideDialog(self)
+        dlg.show()
+
+    def _on_agent_server_status(self, running: bool, info: str) -> None:
+        """Forward agent server status to the status bar."""
+        if running:
+            self.statusBar().showMessage(f"Agent server: {info}", 6000)
+        else:
+            if info:
+                # info is an error message in the not-running case
+                self.statusBar().showMessage(f"Agent server: {info}", 6000)
+                # Roll the toggle back if it was on.
+                if self._act_enable_agent_server.isChecked():
+                    self._act_enable_agent_server.blockSignals(True)
+                    self._act_enable_agent_server.setChecked(False)
+                    self._act_enable_agent_server.blockSignals(False)
+                    self._act_enable_agent_server.setText(
+                        tr("action_enable_agent_server")
+                    )
+
     def closeEvent(self, event):
         # Check every tab for unsaved changes
         for i, tab in enumerate(self._tabs):
@@ -3807,6 +3917,13 @@ class MainWindow(QMainWindow):
                     if not self._on_save_project():
                         event.ignore()
                         return
+        # Shut down the agent server before tearing down anything else, so
+        # any in-flight tool call has a chance to complete cleanly.
+        if self._agent_server_controller is not None:
+            try:
+                self._agent_server_controller.stop()
+            except Exception:
+                pass
         try:
             get_image_proxy().shutdown()
         except Exception:
