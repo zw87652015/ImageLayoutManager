@@ -6,6 +6,9 @@
 
 ImageLayoutManager 是一款基于 PyQt6 的桌面应用，专为学术写作场景设计，帮助研究者快速排列多面板图，保证统一的间距、对齐、标签与导出质量，满足期刊投稿要求。
 
+<img width="2024" height="1318" alt="image" src="https://github.com/user-attachments/assets/e1011d89-c515-44f5-97bb-e3fb123fe96a" />
+
+
 ## 功能亮点
 
 - **多面板图组装**
