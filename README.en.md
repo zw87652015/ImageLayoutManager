@@ -8,6 +8,9 @@ Academic Image Layout Manager.
 
 ImageLayoutManager is a PyQt6 desktop tool for producing consistent, publication-ready multi-panel figures with repeatable spacing, alignment, labels, and export.
 
+<img width="2024" height="1318" alt="image" src="https://github.com/user-attachments/assets/33d3f481-5525-4da1-9084-401e297dfc7c" />
+
+
 ## What you can do with it
 
 - **Assemble multi-panel figures**
