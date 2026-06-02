@@ -44,6 +44,10 @@ Pre-built binaries are attached to each [GitHub Release](../../releases).
 | `ImageLayoutManager_version.exe` | Windows | Portable single-file build — no installation needed, but takes 5-10 s to open on every launch while it self-extracts. |
 | `ImageLayoutManager_version.zip` | macOS | App bundle — unzip and move to Applications. |
 
+Windows builds embed version, publisher, and Apache-2.0 copyright metadata in the installer, GUI executable, and CLI executable. Current public Windows binaries may still be unsigned; this is common for small open-source projects, but Windows SmartScreen may show an "Unknown publisher" or security warning. Prefer downloads from the official GitHub Releases page and verify checksums when provided.
+
+Before upgrading an installed Windows build, close ImageLayoutManager and any AI host using MCP (Claude Desktop, Claude Code, Cursor, Windsurf, Cline, etc.). Those hosts can keep `imagelayout-cli.exe mcp` running in the background, which locks files under `_internal\PyQt6\` and can make the installer fail with "DeleteFile failed; code 5: Access is denied".
+
 ## Getting started
 
 ### Prerequisites
@@ -122,7 +126,7 @@ imagelayout-cli.exe inspect figure_4.figpack --json
 imagelayout-cli.exe mcp
 ```
 
-For setup instructions, see [`docs/mcp_setup.md`](docs/mcp_setup.md). After upgrading, restart both ImageLayoutManager and your AI host so the GUI server and `imagelayout-cli.exe mcp` load the same tool list.
+For setup instructions, see [`docs/mcp_setup.md`](docs/mcp_setup.md). After upgrading, restart both ImageLayoutManager and your AI host so the GUI server and `imagelayout-cli.exe mcp` load the same tool list. If the installer reports a locked `.pyd` file, fully quit the AI host or stop any remaining `imagelayout-cli.exe` process, then run the installer again.
 
 ### Access
 

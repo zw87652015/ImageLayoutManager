@@ -39,6 +39,10 @@ ImageLayoutManager 是一款基于 PyQt6 的桌面应用，专为学术写作场
 | `ImageLayoutManager_版本_Windows.exe` | Windows | 免安装单文件版 — 无需安装，但每次启动需 5–10 秒自解压。 |
 | `ImageLayoutManager_版本_MacOS.zip` | macOS | App Bundle — 解压后拖入"应用程序"文件夹即可。 |
 
+Windows 构建会在安装包、GUI 可执行文件和 CLI 可执行文件中写入版本号、发布者和 Apache-2.0 版权信息。当前公开 Windows 二进制文件可能仍未进行代码签名；这对小型开源项目较常见，但 Windows SmartScreen 可能显示“未知发布者”或安全提示。建议仅从官方 GitHub Releases 页面下载，并在提供校验和时进行核对。
+
+升级已安装的 Windows 版本前，请先关闭 ImageLayoutManager 以及正在使用 MCP 的 AI 工具（Claude Desktop、Claude Code、Cursor、Windsurf、Cline 等）。这些工具可能在后台保留 `imagelayout-cli.exe mcp` 进程，从而锁定 `_internal\PyQt6\` 下的文件，导致安装器报错“DeleteFile 失败；错误代码 5：拒绝访问”。
+
 ## 快速开始
 
 ### 环境要求
@@ -117,7 +121,7 @@ imagelayout-cli.exe inspect figure_4.figpack --json
 imagelayout-cli.exe mcp
 ```
 
-MCP 配置方法见 [`docs/mcp_setup_zh.md`](docs/mcp_setup_zh.md)。更新后请同时重启 ImageLayoutManager 和 AI 工具，确保 GUI 服务与 `imagelayout-cli.exe mcp` 加载同一套工具列表。
+MCP 配置方法见 [`docs/mcp_setup_zh.md`](docs/mcp_setup_zh.md)。更新后请同时重启 ImageLayoutManager 和 AI 工具，确保 GUI 服务与 `imagelayout-cli.exe mcp` 加载同一套工具列表。如果安装器提示 `.pyd` 文件被锁定，请完全退出 AI 工具或结束残留的 `imagelayout-cli.exe` 进程后再重新安装。
 
 ### 访问方式
 
