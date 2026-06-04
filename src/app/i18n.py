@@ -349,6 +349,11 @@ _T: dict[str, dict[str, str]] = {
     "prefs_theme_light":            {"en": "Light",                  "zh": "浅色"},
     "prefs_theme_dark":             {"en": "Dark",                   "zh": "深色"},
     "prefs_undo_limit":             {"en": "Max undo steps:",        "zh": "最大撤销步数:"},
+    "prefs_mcp_autostart":          {"en": "Auto-start MCP Server on launch", "zh": "启动时自动开启 MCP 服务"},
+    "prefs_mcp_autostart_tip":      {
+        "en": "Enable the MCP server every time the app starts, so AI hosts can connect without you clicking the menu first.",
+        "zh": "每次启动时自动开启 MCP 服务，AI 助手无需手动点击菜单即可连接。",
+    },
 
     # Files & Editing tab
     "prefs_default_save_format":    {"en": "Default save format:",   "zh": "默认保存格式:"},

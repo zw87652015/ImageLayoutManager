@@ -9,6 +9,15 @@ ImageLayoutManager 是一款基于 PyQt6 的桌面应用，专为学术写作场
 <img width="2024" height="1318" alt="image" src="https://github.com/user-attachments/assets/e1011d89-c515-44f5-97bb-e3fb123fe96a" />
 
 
+## AI 驱动的图版排版
+
+将 Claude Desktop、Claude Code、Cursor、Windsurf 或其他兼容 MCP 的 AI 助手接入 ILM，让 AI 根据一个图片文件夹直接帮你排出整张图版。
+
+![MCP 工作流](docs/MCP-screenshot.png)
+
+详细配置见 [docs/mcp_setup_zh.md](docs/mcp_setup_zh.md)。软件内：**工具 → MCP 配置指南…** 提供主流 AI 工具的"一键注册"功能。
+
+
 ## 功能亮点
 
 - **多面板图组装**

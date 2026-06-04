@@ -302,6 +302,12 @@ class MCPGuideDialog(QDialog):
             Qt.TextInteractionFlag.TextSelectableByMouse
             | Qt.TextInteractionFlag.LinksAccessibleByMouse
         )
+        # Qt builds QLabel's right-click "Copy / Select All" menu through
+        # a private platform-style path that ignores our QSS-styled QMenu,
+        # producing a dark-on-dark popup in light mode.  Suppress it; the
+        # bottom-row buttons cover the useful copy actions and Ctrl+C
+        # still works on any selected text.
+        lbl.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         scroll.setWidget(lbl)
         root.addWidget(scroll)
 

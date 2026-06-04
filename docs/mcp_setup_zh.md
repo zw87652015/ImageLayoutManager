@@ -1,5 +1,7 @@
 # MCP 配置指南
 
+![MCP 工作流](MCP-screenshot.png)
+
 将兼容 MCP 的 AI 助手（Claude Desktop、Claude Code、Cursor、Windsurf、Cline 等）接入正在运行的 ImageLayoutManager，让 AI 代替你创建、排版、标注和导出多面板学术图。
 
 ---

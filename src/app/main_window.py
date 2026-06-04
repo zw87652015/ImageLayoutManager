@@ -3769,9 +3769,10 @@ class MainWindow(QMainWindow):
     def _on_export_jpg(self):
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, "Export JPG", default_dir, "JPEG Files (*.jpg *.jpeg)")
-        if path:
-            ImageExporter.export(self.project, path, "JPG")
-            QMessageBox.information(self, "Export", f"Exported to {path}")
+        if not path:
+            return
+        ImageExporter.export(self.project, path, "JPG")
+        QMessageBox.information(self, "Export", f"Exported to {path}")
 
     def _on_export_svg(self):
         from src.export.svg_exporter import SvgExporter

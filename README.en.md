@@ -11,6 +11,15 @@ ImageLayoutManager is a PyQt6 desktop tool for producing consistent, publication
 <img width="2024" height="1318" alt="image" src="https://github.com/user-attachments/assets/33d3f481-5525-4da1-9084-401e297dfc7c" />
 
 
+## AI-driven figure composition
+
+Connect Claude Desktop, Claude Code, Cursor, Windsurf, or any other MCP host to ILM and let the AI compose your figure from a folder of images.
+
+![MCP workflow](docs/MCP-screenshot.png)
+
+See [docs/mcp_setup.md](docs/mcp_setup.md) for setup. Inside the app: **Tools → MCP Setup Guide…** has a one-click "Auto Register…" for the major hosts.
+
+
 ## What you can do with it
 
 - **Assemble multi-panel figures**

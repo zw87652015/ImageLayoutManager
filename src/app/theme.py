@@ -423,6 +423,27 @@ _QSS_TEMPLATE = """
         image: url(__CHECK_ON__);
     }
 
+    /* ── Radio buttons ────────────────────────────────────────────── */
+    QRadioButton { spacing: 6px; color: %(text)s; }
+    QRadioButton::indicator {
+        width: 14px; height: 14px;
+        border: 1.5px solid %(border_strong)s;
+        border-radius: 8px;
+        background-color: %(surface)s;
+    }
+    QRadioButton::indicator:hover { border-color: %(accent)s; }
+    QRadioButton::indicator:checked {
+        border: 1.5px solid %(accent)s;
+        background-color: qradialgradient(
+            cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+            stop:0 %(accent)s, stop:0.45 %(accent)s,
+            stop:0.55 %(surface)s, stop:1 %(surface)s);
+    }
+    QRadioButton::indicator:disabled {
+        border-color: %(border)s;
+        background-color: %(surface_subtle)s;
+    }
+
     /* ── Status bar ───────────────────────────────────────────────── */
     QStatusBar {
         background: %(panel)s;

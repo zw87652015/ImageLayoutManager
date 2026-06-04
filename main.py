@@ -76,6 +76,15 @@ def main():
         if os.path.isfile(cli_path):
             window.open_file_from_cli(cli_path)
 
+    # Honour the persisted "Auto-start MCP Server" preference unless the
+    # caller already forced it on via --agent-server.
+    if not enable_agent_server:
+        autostart = _settings.value("mcp_autostart", False)
+        if isinstance(autostart, str):
+            autostart = autostart.lower() not in ("false", "0", "no", "")
+        if autostart:
+            enable_agent_server = True
+
     if enable_agent_server:
         window.toggle_agent_server(True)
 

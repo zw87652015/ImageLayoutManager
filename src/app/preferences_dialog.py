@@ -138,6 +138,12 @@ class PreferencesDialog(QDialog):
         self._undo_spin.setValue(int(self._settings.value("max_history", 200)))
         form.addRow(tr("prefs_undo_limit"), self._undo_spin)
 
+        # MCP auto-start
+        self._mcp_autostart_chk = QCheckBox(tr("prefs_mcp_autostart"))
+        self._mcp_autostart_chk.setToolTip(tr("prefs_mcp_autostart_tip"))
+        self._mcp_autostart_chk.setChecked(get_pref("mcp_autostart", False))
+        form.addRow("", self._mcp_autostart_chk)
+
         return w
 
     def _build_files(self) -> QWidget:
@@ -314,6 +320,7 @@ class PreferencesDialog(QDialog):
         s.setValue("language", self._lang_combo.currentData())
         s.setValue("theme", self._theme_combo.currentData())
         s.setValue("max_history", self._undo_spin.value())
+        s.setValue("mcp_autostart", self._mcp_autostart_chk.isChecked())
 
         # Files
         fmt = "figpack" if self._fmt_figpack.isChecked() else "figlayout"

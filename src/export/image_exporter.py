@@ -18,7 +18,7 @@ class ImageExporter:
                rendering_intent: int = 1):
         """
         Export project to a raster image.
-        
+
         Args:
             project: The project to export
             output_path: Output file path
@@ -140,7 +140,7 @@ class ImageExporter:
                 rendering_intent=rendering_intent,
             )
         elif format_upper in ("JPG", "JPEG"):
-            image.save(output_path, "JPEG", quality=95)
+            image.save(output_path, "JPEG", quality=100)
         elif format_upper == "PNG":
             image.save(output_path, "PNG")
         else:

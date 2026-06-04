@@ -1,5 +1,7 @@
 # MCP Setup Guide
 
+![MCP workflow](MCP-screenshot.png)
+
 Connect any MCP-compatible AI host (Claude Desktop, Claude Code, Cursor,
 Windsurf, Cline, etc.) to a running ImageLayoutManager so the AI can
 build and edit multi-panel figures on your behalf.
