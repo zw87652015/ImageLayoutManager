@@ -2,6 +2,8 @@
 *.pdf
 
 *.png
+# Doc screenshots (README, MCP guide, etc.) should still be committed.
+!docs/*.png
 
 *.jpeg
 *.tif
