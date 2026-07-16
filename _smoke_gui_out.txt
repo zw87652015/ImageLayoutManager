@@ -1,0 +1,168 @@
+﻿conda.exe : 
+所在位置 D:\anaconda3\shell\condabin\Conda.psm1:153 字符: 17
++ ...             & $Env:CONDA_EXE $Env:_CE_M $Env:_CE_CONDA $Command @Othe ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+# >>>>>>>>>>>>>>>>>>>>>> ERROR REPORT <<<<<<<<<<<<<<<<<<<<<<
+
+    Traceback (most recent call last):
+      File "D:\anaconda3\Lib\site-packages\conda\exception_handler.py", line 18, in __call__
+        return func(*args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^
+      File "D:\anaconda3\Lib\site-packages\conda\cli\main.py", line 61, in main_subshell
+        exit_code = do_call(args, parser)
+                    ^^^^^^^^^^^^^^^^^^^^^
+      File "D:\anaconda3\Lib\site-packages\conda\cli\conda_argparse.py", line 205, in do_call
+        result = getattr(module, func_name)(args, parser)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      File "D:\anaconda3\Lib\site-packages\conda\cli\main_run.py", line 118, in execute
+        print(response.stdout, file=sys.stdout)
+    UnicodeEncodeError: 'gbk' codec can't encode character '\ufffd' in position 113: illegal multibyte sequence
+
+`$ D:\anaconda3\Scripts\conda-script.py run -n threeD python _smoke_gui.py`
+
+  environment variables:
+     BUNDLED_DEBUGPY_PATH=c:\Users\zw876\.windsurf\extensions\ms-
+                          python.debugpy-2026.6.0-win32-x64\bundled\libs\debugpy
+                 CIO_TEST=<not set>
+    CONDA_ALLOW_SOFTLINKS=false
+        CONDA_DEFAULT_ENV=base
+                CONDA_EXE=D:\anaconda3\Scripts\conda.exe
+             CONDA_PREFIX=D:\anaconda3
+    CONDA_PROMPT_MODIFIER=(base)
+         CONDA_PYTHON_EXE=D:\anaconda3\python.exe
+               CONDA_ROOT=D:\anaconda3
+              CONDA_SHLVL=1
+                CUDA_PATH=D:\Program Files\NVIDIA CUDA
+           CURL_CA_BUNDLE=<not set>
+     GENICAM_GENTL32_PATH=D:\Program Files\HuarayTech\MV Viewer\Runtime\Win32;
+     GENICAM_GENTL64_PATH=D:\Program Files\HuarayTech\MV Viewer\Runtime\x64;
+                 HOMEPATH=\Users\zw876
+               LD_PRELOAD=<not set>
+                NIIVIPATH=C:\Program Files (x86)\IVI Foundation\IVI\
+          NVTOOLSEXT_PATH=C:\Program Files\NVIDIA Corporation\NvToolsExt\
+                     PATH=D:\anaconda3;D:\anaconda3\Library\mingw-
+                          w64\bin;D:\anaconda3\Library\usr\bin;D:\anaconda3\Library\bin;D:\anaco
+                          nda3\Scripts;D:\anaconda3\bin;D:\anaconda3\condabin;D:\Program
+                          Files\Windsurf;D:\Meta Horizon\Support\oculus-runtime;D:\Program
+                          Files\HuarayTech\MV Viewer\Runtime\x64;D:\Program Files\HuarayTech\MV
+                          Viewer\Runtime\Win32;C:\Program Files\Common
+                          Files\Oracle\Java\javapath;C:\Program Files (x86)\NVIDIA
+                          Corporation\PhysX\Common;C:\Program Files\NVIDIA GPU Computing
+                          Toolkit\CUDA\v10.2\bin;C:\Program Files\NVIDIA GPU Computing
+                          Toolkit\CUDA\v10.2\libnvvp;E:\Program Files (x86)\VMware\VMware Workst
+                          ation\bin;C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\W
+                          indows\System32\WindowsPowerShell\v1.0;C:\Windows\System32\OpenSSH;C:\
+                          Program Files\Bandizip;C:\Program Files\Pandoc;C:\Program
+                          Files\Microsoft SQL Server\120\Tools\Binn;C:\Program Files\Microsoft
+                          SQL Server\Client SDK\ODBC\110\Tools\Binn;C:\Program Files\Microsoft
+                          SQL Server\Client SDK\ODBC\170\Tools\Binn;C:\Program Files
+                          (x86)\Microsoft SQL Server\150\Tools\Binn;C:\Program Files\Microsoft
+                          SQL Server\150\Tools\Binn;C:\Program Files\Microsoft SQL
+                          Server\150\DTS\Binn;C:\Program Files (x86)\Windows Kits\8.1\Windows
+                          Performance Toolkit;C:\Program Files\dotnet;C:\Program Files\Microsoft
+                          SQL Server\140\Tools\Binn;E:\Program
+                          Files\COMSOL\COMSOL61\Multiphysics\bin\win64;C:\Program Files
+                          (x86)\IVI Foundation\IVI\Bin;C:\Program Files\IVI
+                          Foundation\IVI\Bin;C:\Program Files (x86)\IVI
+                          Foundation\VISA\WinNT\Bin;C:\Program Files\IVI
+                          Foundation\VISA\Win64\Bin;C:\Program Files (x86)\IVI
+                          Foundation\VISA\WinNT\Bin;C:\Program Files (x86)\Windows
+                          Kits\10\Windows Performance Toolkit;D:\Program
+                          Files\Git\cmd;D:\Program Files\PuTTY;D:\mingw64\bin;D:\Program Files\J
+                          ava\jdk-
+                          21\bin;C:\Users\zw876\AppData\Local\Packages\PythonSoftwareFoundation.
+                          Python.3.11_qbz5n2kfra8p0\LocalCache\local-
+                          packages\Python311\Scripts\fuck.exe;D:\Program
+                          Files\CMake\bin;D:\Program Files\NVIDIA CUDA\libnvvp;D:\Program
+                          Files\NVIDIA CUDA\bin;E:\Documents\Codes\Matlab\CellToolbox\USB3Vision
+                          Cam\MVSDK\Runtime\x64;D:\anaconda3\Scripts;E:\Documents\Codes\Poppler-
+                          24.08.0-0\Library\bin;C:\Program Files (x86)\ZeroTier\One;C:\Program F
+                          iles\WireGuard;C:\WINDOWS\system32;C:\WINDOWS;C:\WINDOWS\System32\Wbem
+                          ;C:\WINDOWS\System32\WindowsPowerShell\v1.0;C:\WINDOWS\System32\OpenSS
+                          H;C:\ProgramData\chocolatey\bin;C:\Program Files\NVIDIA
+                          Corporation\NVIDIA App\NvDLISR;C:\Users\zw876\.local\bin;C:\Users\zw87
+                          6\AppData\Local\Microsoft\WindowsApps;D:\Program Files\Microsoft VS
+                          Code\bin;D:\Program Files\JetBrains\PyCharm Community Edition
+                          2023.2\bin;E:\Program Files\COMSOL\COMSOL61\Multiphysics\bin\win64;C:\
+                          ProgramData\zw876\GitHubDesktop\bin;C:\Users\zw876\AppData\Local\GitHu
+                          bDesktop\bin;C:\Users\zw876\.cache\lm-
+                          studio\bin;C:\Users\zw876\AppData\Roaming\Programs\Zero
+                          Install;C:\Users\zw876\AppData\Local\Muse Hub\lib;D:\Program
+                          Files\Windsurf\bin;D:\mingw64\bin;D:\Program Files\Java\jdk-
+                          21\bin;C:\Users\zw876\AppData\Local\Packages\PythonSoftwareFoundation.
+                          Python.3.11_qbz5n2kfra8p0\LocalCache\local-
+                          packages\Python311\Scripts\fuck.exe;D:\Program
+                          Files\CMake\bin;D:\Program Files\NVIDIA CUDA\libnvvp;D:\Program
+                          Files\NVIDIA CUDA\bin;E:\Documents\Codes\Matlab\CellToolbox\USB3Vision
+                          Cam\MVSDK\Runtime\x64;D:\Ollama;D:\anaconda3\Scripts;E:\Documents\Code
+                          s\Poppler-24.08.0-
+                          0\Library\bin;C:\Users\zw876\AppData\Local\Microsoft\WindowsApps;D:\te
+                          xlive\2025\bin\windows;C:\Users\zw876\AppData\Local\Python\bin;D:\Down
+                          loads\Antigravity\bin;C:\Users\zw876\AppData\Local\Programs\Antigravit
+                          y IDE\bin;C:\Users\zw876\.dotnet\tools;c:\Users\zw876\.windsurf\extens
+                          ions\ms-
+                          python.debugpy-2026.6.0-win32-x64\bundled\scripts\noConfigScripts
+             PSMODULEPATH=E:\Documents\OneDrive - Wuchang Experimental High
+                          School\Documents\WindowsPowerShell\Modules;C:\Program Files\WindowsPow
+                          erShell\Modules;C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules;C:\
+                          Program Files (x86)\Microsoft SQL Server\150\Tools\PowerShell\Modules\
+            PYTHONSTARTUP=c:\Users\zw876\AppData\Roaming\Windsurf\User\workspaceStorage\71f4fd70
+                          1a4d43d0ff96035d818f706e\ms-python.python\pythonrc.py
+        PYTHON_BASIC_REPL=1
+       REQUESTS_CA_BUNDLE=<not set>
+            SSL_CERT_FILE=D:\anaconda3\Library\ssl\cacert.pem
+               VXIPNPPATH=C:\Program Files (x86)\IVI Foundation\VISA\
+
+     active environment : base
+    active env location : D:\anaconda3
+If submitted, this report will be used by core maintainers to improve
+future releases of conda.
+            shell level : 1
+       user config file : C:\Users\zw876\.condarc
+ populated config files : D:\anaconda3\.condarc
+                          C:\Users\zw876\.condarc
+          conda version : 24.11.3
+    conda-build version : 24.9.0
+         python version : 3.12.3.final.0
+                 solver : libmamba (default)
+       virtual packages : __archspec=1=x86_64_v4
+                          __conda=24.11.3=0
+                          __cuda=13.2=0
+                          __win=0=0
+       base environment : D:\anaconda3  (writable)
+      conda av data dir : D:\anaconda3\etc\conda
+  conda av metadata url : None
+           channel URLs : https://repo.anaconda.com/pkgs/main/win-64
+                          https://repo.anaconda.com/pkgs/main/noarch
+                          https://repo.anaconda.com/pkgs/r/win-64
+                          https://repo.anaconda.com/pkgs/r/noarch
+                          https://repo.anaconda.com/pkgs/msys2/win-64
+                          https://repo.anaconda.com/pkgs/msys2/noarch
+          package cache : D:\anaconda3\pkgs
+                          C:\Users\zw876\.conda\pkgs
+                          C:\Users\zw876\AppData\Local\conda\conda\pkgs
+       envs directories : D:\anaconda3\envs
+                          C:\Users\zw876\.conda\envs
+                          C:\Users\zw876\AppData\Local\conda\conda\envs
+               platform : win-64
+             user-agent : conda/24.11.3 requests/2.32.3 CPython/3.12.3 Windows/11 Windows/10.0.26200 solver/libmamba conda-libmamba-solver/24.9.0 libma
+mbapy/1.5.8
+          administrator : False
+             netrc file : None
+           offline mode : False
+
+
+An unexpected error has occurred. Conda has prepared the above report.
+If you suspect this error is being caused by a malfunctioning plugin,
+consider using the --no-plugins option to turn off plugins.
+
+Example: conda --no-plugins install <package>
+
+Alternatively, you can set the CONDA_NO_PLUGINS environment variable on
+the command line to run the command without plugins enabled.
+
+Example: CONDA_NO_PLUGINS=true conda install <package>
+

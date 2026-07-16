@@ -553,6 +553,8 @@ def main() -> int:
 
         [Files]
         Source: "{dist_dir}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs
+        Source: "{project_root / 'LICENSE'}"; DestDir: "{{app}}"; Flags: ignoreversion
+        Source: "{project_root / 'NOTICE'}"; DestDir: "{{app}}"; Flags: ignoreversion
 
         [Icons]
         Name: "{{group}}\\ImageLayoutManager"; Filename: "{{app}}\\ImageLayoutManager.exe"

@@ -37,8 +37,16 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QSurfaceFormat
 from src.app.main_window import MainWindow
 from src.app.theme import build_palette, apply_font_scale, LIGHT
+from src.utils import crash_recovery
 
 def main():
+    # File logging + crash guard must exist before any Qt code runs so
+    # even import-time/startup failures leave a trace. The excepthook is
+    # re-armed with a rescue callback once the window exists.
+    logger = crash_recovery.setup_logging()
+    crash_recovery.install_excepthook()
+    from src.version import APP_VERSION
+    logger.info("ImageLayoutManager %s starting (pid %d)", APP_VERSION, os.getpid())
     # ``--agent-server`` enables the JSON-RPC server at launch. We strip it
     # from ``argv`` *before* handing off to ``QApplication`` so Qt's own
     # argument parser doesn't choke on it, and before the positional-file
@@ -69,6 +77,11 @@ def main():
 
     window = MainWindow()
 
+    # Re-arm the crash hook with a rescue callback: on an unhandled
+    # exception, every dirty tab is snapshotted to the recovery dir
+    # before the crash dialog is shown.
+    crash_recovery.install_excepthook(window.rescue_save_all)
+
     # Open a file passed as a command-line argument (double-click in Explorer).
     # Windows Explorer calls: ImageLayoutManager.exe "C:\path\to\file.figpack"
     if len(sys.argv) > 1:
@@ -89,6 +102,11 @@ def main():
         window.toggle_agent_server(True)
 
     window.show()
+
+    # Offer to restore autosave snapshots left behind by a crashed
+    # session. Deferred one event-loop turn so the window paints first.
+    from PyQt6.QtCore import QTimer
+    QTimer.singleShot(0, window.offer_recovery)
 
     sys.exit(app.exec())
 

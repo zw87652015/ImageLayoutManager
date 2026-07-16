@@ -2,6 +2,7 @@ import os
 import sys
 import re
 import plistlib
+import shutil
 from pathlib import Path
 
 
@@ -207,6 +208,15 @@ def main() -> int:
             
             with open(plist_path, 'wb') as f:
                 plistlib.dump(pl, f)
+
+        # Ship license texts inside the bundle (required for the bundled
+        # GPLv3 (PyQt6) / AGPL-3.0 (PyMuPDF) components — see NOTICE).
+        resources_dir = dist_app / "Contents" / "Resources"
+        resources_dir.mkdir(parents=True, exist_ok=True)
+        for legal_name in ("LICENSE", "NOTICE"):
+            legal_src = project_root / legal_name
+            if legal_src.exists():
+                shutil.copy2(legal_src, resources_dir / legal_name)
 
         print(f"\nBuild OK: {dist_app}")
         print("To ad-hoc sign (required to run on macOS 10.15+):")

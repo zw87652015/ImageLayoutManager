@@ -179,4 +179,6 @@ SVG 文件同样支持，在 PDF 与 SVG 导出时以矢量方式渲染。
 
 ## 许可证
 
-Apache-2.0 许可证，详见 `LICENSE`。
+源代码采用 Apache-2.0 许可证，详见 `LICENSE`。
+
+**关于预编译二进制文件的说明：**官方二进制文件捆绑了 PyQt6（GPL v3）与 PyMuPDF（AGPL-3.0）。作为组合作品，分发的二进制文件除 Apache-2.0 外还受 GPL v3 / AGPL-3.0 条款约束。如果你再分发这些二进制文件，或自行构建并分发包含上述组件的版本，必须遵守相应许可证，或分别向 Riverbank Computing（PyQt6）和 Artifex Software（PyMuPDF）购买商业许可。完整第三方组件清单见 `NOTICE`。

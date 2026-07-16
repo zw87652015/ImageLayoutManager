@@ -1,5 +1,6 @@
 import os
 import math
+import uuid
 from typing import Optional, Tuple, List, Dict
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtWidgets import (
@@ -55,6 +56,7 @@ from src.utils.figpack import (
     register_pre_delete_hook,
 )
 from src.utils.presence_lock import PresenceLock, PresenceLockError
+from src.utils.crash_recovery import SnapshotStore
 
 def _files_equal(a: str, b: str) -> bool:
     """Cheap byte-equality check used when disambiguating sidecar
@@ -196,6 +198,9 @@ class ProjectTabState:
         # existing one (visible symptom: insert-row, swap-cells etc.
         # firing twice on a single click).
         self.signals_connected: bool = False
+        # Stable key for this tab's autosave/rescue snapshot file in the
+        # recovery directory (see src/utils/crash_recovery.py).
+        self.autosave_key: str = uuid.uuid4().hex
 
 
 class _BundleOpenWorker(QThread):
@@ -353,6 +358,22 @@ class MainWindow(QMainWindow):
         self._hot_reload_timer.setSingleShot(True)
         self._hot_reload_timer.setInterval(200)  # debounce bursts of save events
         self._hot_reload_timer.timeout.connect(self._apply_hot_reload)
+
+        # Autosave: periodic recovery snapshots of dirty tabs. Interval is
+        # configurable via settings (seconds); 0 disables. Snapshots are
+        # dropped on clean save / tab close / normal exit, so anything left
+        # behind at the next launch means the session died — see
+        # offer_recovery().
+        self._snapshots = SnapshotStore()
+        try:
+            _autosave_s = int(self._settings.value("autosave_interval_s", 180))
+        except (TypeError, ValueError):
+            _autosave_s = 180
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(max(_autosave_s, 30) * 1000)
+        self._autosave_timer.timeout.connect(self._run_autosave)
+        if _autosave_s > 0:
+            self._autosave_timer.start()
         self._pending_reload_paths: set[str] = set()
         # Maps {abs_original_source_path -> [abs_cache_path, …]} for the
         # current project. Rebuilt by _sync_image_watcher; consulted by
@@ -1198,6 +1219,7 @@ class MainWindow(QMainWindow):
                 pass
             tab.bundle_workdir = None
         self._release_file_lock(tab)
+        self._snapshots.remove(tab.autosave_key)
         self._tabs.pop(idx)
 
         # Block QTabWidget.currentChanged during removeTab(): Qt picks a new
@@ -1801,6 +1823,109 @@ class MainWindow(QMainWindow):
         if clicked is discard_btn:
             return "discard"
         return "cancel"
+
+    # ------------------------------------------------------------------
+    # Autosave / crash rescue (src/utils/crash_recovery.py)
+    # ------------------------------------------------------------------
+
+    def _snapshot_tab(self, tab: ProjectTabState) -> Optional[str]:
+        """Write one recovery snapshot for *tab*; returns the path or None."""
+        try:
+            return self._snapshots.write(
+                tab.autosave_key, tab.project.to_dict(), tab.path)
+        except Exception:
+            # Serialisation must never take down the app from a timer.
+            import logging
+            logging.getLogger("imagelayout").exception("Autosave failed")
+            return None
+
+    def _run_autosave(self):
+        """Timer slot: snapshot dirty tabs, drop snapshots of clean ones."""
+        for tab in self._tabs:
+            if tab.undo_stack.isClean():
+                self._snapshots.remove(tab.autosave_key)
+            else:
+                self._snapshot_tab(tab)
+
+    def rescue_save_all(self) -> List[str]:
+        """Crash-hook callback: immediately snapshot every dirty tab."""
+        rescued: List[str] = []
+        for tab in self._tabs:
+            if not tab.undo_stack.isClean():
+                path = self._snapshot_tab(tab)
+                if path:
+                    rescued.append(path)
+        return rescued
+
+    def offer_recovery(self):
+        """Offer to restore snapshots left behind by a dead session.
+
+        Called once shortly after launch (see main.py). Snapshots whose
+        writing PID is still alive belong to another running instance
+        and are skipped by SnapshotStore.pending().
+        """
+        pending = self._snapshots.pending()
+        if not pending:
+            return
+        ret = QMessageBox.question(
+            self, tr("msg_recovery_title"),
+            tr("msg_recovery_body").format(count=len(pending)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            for path, _payload in pending:
+                SnapshotStore.discard(path)
+            return
+        from src.model.migrations import migrate_project_data
+        from src.utils.crash_recovery import remap_bundle_paths
+        for path, payload in pending:
+            try:
+                data = migrate_project_data(payload.get("project") or {})
+                original = payload.get("original_path")
+
+                # Figpack tabs: the snapshot's image paths point into the
+                # dead session's extraction workdir, which the startup
+                # orphan sweep has likely already reaped. Re-extract the
+                # bundle into a fresh workdir and remap the asset paths,
+                # then restore the snapshot ON TOP of it so unsaved
+                # layout edits survive.
+                bundle_wd = None
+                if (original and original.lower().endswith(".figpack")
+                        and os.path.isfile(original)):
+                    try:
+                        cache_root = (self._settings.value(
+                            "figpack_cache_root", "").strip() or None)
+                        bundle_wd, _ur = open_bundle(
+                            original, cache_root=cache_root)
+                        remap_bundle_paths(data, original, bundle_wd.path)
+                    except Exception:
+                        # Bundle unreadable (moved, locked elsewhere,
+                        # corrupt) — fall back to a plain restore; any
+                        # dead cache paths will show as missing images.
+                        bundle_wd = None
+
+                if original:
+                    data["name"] = os.path.splitext(
+                        os.path.basename(original))[0] + " (recovered)"
+                else:
+                    data["name"] = "Recovered"
+                project = Project.from_dict(data)
+                if bundle_wd is not None:
+                    tab = self._create_tab(project, original,
+                                           bundle_workdir=bundle_wd)
+                    tab.bundle_stat = self._stat_bundle(original)
+                else:
+                    tab = self._create_tab(project, path=None)
+                # A clean undo stack would silently discard the restored
+                # work on close — mark the stack dirty so the usual
+                # unsaved-changes prompt fires until the user saves.
+                tab.undo_stack.resetClean()
+                SnapshotStore.discard(path)
+            except Exception as e:
+                QMessageBox.warning(
+                    self, tr("msg_recovery_title"),
+                    tr("msg_recovery_failed").format(error=e))
 
     def _maybe_save(self) -> bool:
         """Check active tab for unsaved changes; returns True if safe to proceed."""
@@ -3939,6 +4064,9 @@ class MainWindow(QMainWindow):
                     pass
                 tab.bundle_workdir = None
             self._release_file_lock(tab)
+        # Normal exit — recovery snapshots are only for dead sessions.
+        for tab in self._tabs:
+            self._snapshots.remove(tab.autosave_key)
         super().closeEvent(event)
 
     def _on_new_project(self):
@@ -4357,6 +4485,10 @@ class MainWindow(QMainWindow):
             self.setWindowModified(False)
             self._update_window_title()
             self._remember_recent(path)
+            # Work is on disk — the recovery snapshot is now stale.
+            if 0 <= self._active_tab_idx < len(self._tabs):
+                self._snapshots.remove(
+                    self._tabs[self._active_tab_idx].autosave_key)
             return True
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to save project: {e}")

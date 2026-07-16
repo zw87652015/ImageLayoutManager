@@ -184,4 +184,6 @@ If you find this project useful and would like to support its development, you c
 
 ## License
 
-Apache-2.0 license. See `LICENSE`.
+The source code is licensed under Apache-2.0. See `LICENSE`.
+
+**Note on pre-built binaries:** the official binaries bundle PyQt6 (GPL v3) and PyMuPDF (AGPL-3.0). As a combined work, the distributed binaries are governed by GPL v3 / AGPL-3.0 terms in addition to Apache-2.0. If you redistribute the binaries — or ship your own build that includes these components — you must comply with those licenses, or obtain commercial licenses from Riverbank Computing (PyQt6) and Artifex Software (PyMuPDF). See `NOTICE` for the full third-party list.

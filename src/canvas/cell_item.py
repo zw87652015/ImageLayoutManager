@@ -1692,29 +1692,36 @@ class CellItem(QGraphicsRectItem):
     def _draw_placeholder_icon(self, painter: QPainter, rect: QRectF):
         # Scale elements based on cell size for proper display at all dimensions
         min_dimension = min(rect.width(), rect.height())
-        
-        # Scale the + mark size (20% of smaller dimension, clamped between 10 and 40)
-        s = max(10, min(40, min_dimension * 0.2))
-        
+
+        # Half-arm of the "+" mark. Cap by the cell so the mark can never
+        # bleed outside; the natural size is 20% of the smaller dimension,
+        # never bigger than 40% of half the cell, capped at 40px.
+        s = min(40.0, min_dimension * 0.2, min_dimension * 0.4)
+        if s < 2:
+            # Cell is too small to show anything meaningful — skip the icon
+            # entirely rather than overflowing.
+            return
+
         # Scale line width (proportional to mark size, clamped between 1 and 4)
         line_width = max(1, min(4, s / 10))
-        
+
         fg = QColor(self._placeholder_fg)
         painter.setPen(QPen(fg, line_width))
         c = rect.center()
         painter.drawLine(int(c.x() - s), int(c.y()), int(c.x() + s), int(c.y()))
         painter.drawLine(int(c.x()), int(c.y() - s), int(c.x()), int(c.y() + s))
 
-        # Draw text "Drop Image Here" with dynamic font size
+        # "Drop Image Here" only when there is room below the "+" for it.
+        # Need enough cell height for the mark plus a readable font + padding.
+        if min_dimension < 60:
+            return
+
         painter.setPen(QPen(fg))
         font = painter.font()
-        
-        # Calculate font size based on cell dimensions (8% of smaller dimension, clamped between 8 and 16)
         font_size = max(8, min(16, int(min_dimension * 0.08)))
         font.setPointSize(font_size)
         painter.setFont(font)
-        
-        # Position text with padding from bottom
+
         text_rect = rect.adjusted(5, 0, -5, -s * 1.5)
         from src.app.i18n import tr
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignBottom, tr("placeholder_drop_image"))

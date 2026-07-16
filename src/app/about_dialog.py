@@ -191,7 +191,7 @@ class AboutDialog(QDialog):
                               f'style="color:#4A90E2;">@{GITHUB_OWNER}</a>')
         info_row(tr("about_website"),    "luojiajiang.uk", link=WEBSITE_URL)
         info_row(tr("about_repository"), "GitHub", link=GITHUB_URL)
-        info_row(tr("about_license"),    "Apache-2.0")
+        info_row(tr("about_license"),    "Apache-2.0 (source) · GPLv3/AGPLv3 deps, see NOTICE")
 
         root.addLayout(info_layout)
         root.addSpacing(16)

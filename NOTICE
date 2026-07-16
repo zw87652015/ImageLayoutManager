@@ -18,14 +18,28 @@ limitations under the License.
 This product bundles third-party components governed by their own
 licenses. Most are dynamically imported Python packages installed from
 PyPI/conda; redistributable copies appear inside the PyInstaller
-``_internal/`` directory of installed builds. Notable runtime
-dependencies include:
+``_internal/`` directory of installed builds. Runtime dependencies:
 
   - PyQt6                 (GPL v3 / commercial)
+  - PyMuPDF (fitz)        (AGPL-3.0 / commercial, Artifex Software)
+  - Pillow                (MIT-CMU / HPND)
   - matplotlib            (Matplotlib License, BSD-style)
   - numpy                 (BSD-3-Clause)
   - websockets            (BSD-3-Clause)
-  - reportlab / pypdf etc. (project-specific licenses)
+  - mcp (Python SDK)      (MIT)
+
+IMPORTANT — licensing of distributed binaries:
+
+The ImageLayoutManager *source code* in this repository is licensed
+under Apache-2.0. However, the official pre-built binaries bundle
+PyQt6 (GPL v3) and PyMuPDF (AGPL-3.0). As a combined work, each
+distributed binary is therefore governed by the terms of the
+GNU Affero General Public License v3.0 in addition to Apache-2.0.
+If you redistribute the binaries, or build and distribute your own
+binaries including these components, you must comply with the
+GPL v3 / AGPL-3.0 (source availability, license preservation), or
+obtain commercial licenses from Riverbank Computing (PyQt6) and
+Artifex Software (PyMuPDF) respectively.
 
 End users running the official binaries should consult each package's
 own license file for the full text.

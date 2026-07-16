@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────
 # Application Version  (update this before release)
 # ──────────────────────────────────────────────
-APP_VERSION = "3.3.2"
+APP_VERSION = "3.3.3"
 
 # Single source of truth for attribution metadata. These strings end up in:
 #   - Windows VS_VERSIONINFO embedded in ImageLayoutManager.exe / imagelayout-cli.exe

@@ -41,6 +41,45 @@ _T: dict[str, dict[str, str]] = {
         "zh": "MCP 服务启动失败。",
     },
 
+    # ── Crash guard / autosave recovery ─────────────────────────────
+    "msg_crash_title": {"en": "Unexpected Error", "zh": "程序发生异常"},
+    "msg_crash_body": {
+        "en": "An internal error occurred:\n\n{error}\n\n"
+              "The application will try to keep running. Please save your "
+              "work and restart soon.\n\nDetails were written to:\n{log}",
+        "zh": "程序内部发生错误：\n\n{error}\n\n"
+              "应用将尝试继续运行。请尽快保存工作并重启程序。\n\n"
+              "详细信息已写入日志：\n{log}",
+    },
+    "msg_crash_rescued": {
+        "en": "{count} unsaved project(s) were rescued to the recovery "
+              "folder and will be offered for restore on next launch.",
+        "zh": "已将 {count} 个未保存的项目抢救到恢复目录，"
+              "下次启动时可选择恢复。",
+    },
+    "msg_recovery_title": {"en": "Restore Unsaved Work", "zh": "恢复未保存的工作"},
+    "msg_recovery_body": {
+        "en": "A previous session ended unexpectedly and left {count} "
+              "unsaved project(s).\n\nRestore them now? Choosing No "
+              "discards the recovery snapshots.",
+        "zh": "上次会话意外结束，留下 {count} 个未保存的项目。\n\n"
+              "现在恢复吗？选择“否”将丢弃这些恢复快照。",
+    },
+    "msg_recovery_failed": {
+        "en": "Failed to restore a recovery snapshot:\n{error}",
+        "zh": "恢复快照失败：\n{error}",
+    },
+    "prefs_autosave_interval": {
+        "en": "Autosave interval",
+        "zh": "自动保存间隔",
+    },
+    "prefs_autosave_interval_tip": {
+        "en": "How often unsaved work is snapshotted to the recovery "
+              "folder. Set to 0 to disable autosave.",
+        "zh": "未保存的工作定期快照到恢复目录的频率。设为 0 关闭自动保存。",
+    },
+    "prefs_autosave_off": {"en": "off", "zh": "关闭"},
+
     "action_undo":          {"en": "Undo",              "zh": "撤销"},
     "action_redo":          {"en": "Redo",              "zh": "重做"},
     "action_new":           {"en": "New",               "zh": "新建"},

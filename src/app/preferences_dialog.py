@@ -138,6 +138,16 @@ class PreferencesDialog(QDialog):
         self._undo_spin.setValue(int(self._settings.value("max_history", 200)))
         form.addRow(tr("prefs_undo_limit"), self._undo_spin)
 
+        # Autosave interval (recovery snapshots); 0 disables
+        self._autosave_spin = QSpinBox()
+        self._autosave_spin.setRange(0, 3600)
+        self._autosave_spin.setSingleStep(30)
+        self._autosave_spin.setSuffix(" s")
+        self._autosave_spin.setSpecialValueText("0 s (" + tr("prefs_autosave_off") + ")")
+        self._autosave_spin.setToolTip(tr("prefs_autosave_interval_tip"))
+        self._autosave_spin.setValue(get_pref("autosave_interval_s", 180))
+        form.addRow(tr("prefs_autosave_interval"), self._autosave_spin)
+
         # MCP auto-start
         self._mcp_autostart_chk = QCheckBox(tr("prefs_mcp_autostart"))
         self._mcp_autostart_chk.setToolTip(tr("prefs_mcp_autostart_tip"))
@@ -320,6 +330,7 @@ class PreferencesDialog(QDialog):
         s.setValue("language", self._lang_combo.currentData())
         s.setValue("theme", self._theme_combo.currentData())
         s.setValue("max_history", self._undo_spin.value())
+        s.setValue("autosave_interval_s", self._autosave_spin.value())
         s.setValue("mcp_autostart", self._mcp_autostart_chk.isChecked())
 
         # Files
@@ -373,6 +384,16 @@ class PreferencesDialog(QDialog):
         limit = int(self._settings.value("max_history", 200))
         for tab in mw._tabs:
             tab.undo_stack.setUndoLimit(limit)
+
+        # Autosave interval (0 disables the timer)
+        autosave_s = get_pref("autosave_interval_s", 180)
+        if hasattr(mw, "_autosave_timer"):
+            if autosave_s > 0:
+                mw._autosave_timer.setInterval(max(autosave_s, 30) * 1000)
+                if not mw._autosave_timer.isActive():
+                    mw._autosave_timer.start()
+            else:
+                mw._autosave_timer.stop()
 
         # Hot-reload enabled/disabled
         hot_reload = get_pref("hot_reload_enabled", True)

@@ -121,9 +121,8 @@ def _is_alive(host: str, pid_str: str) -> bool:
         pid = int(pid_str)
     except ValueError:
         return False
-    try:
-        # os.kill(pid, 0) raises OSError if the process doesn't exist.
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    # Note: os.kill(pid, 0) is NOT a liveness probe on Windows — it sends
+    # CTRL_C_EVENT to the target's console group. pid_alive() uses
+    # OpenProcess on win32 and signal 0 elsewhere.
+    from src.utils.crash_recovery import pid_alive
+    return pid_alive(pid)
