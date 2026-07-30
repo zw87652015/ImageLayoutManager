@@ -73,7 +73,6 @@ class ImageExporter:
             painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
         
         try:
-            label_row_above = getattr(project, 'label_placement', 'in_cell') in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
             label_rects = getattr(layout_result, 'label_rects', {})
 
             # 1. Draw Images and Scale Bars (sorted by z_index for freeform overlap support)
@@ -111,16 +110,17 @@ class ImageExporter:
 
                 ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
 
-            # 1b. Draw Label Cells (label rows above picture rows)
-            if label_row_above:
-                ImageExporter._draw_label_cells(painter, project, layout_result, scale)
-                        
+            # 1b. Draw Label Cells (labels living in their own reserved strip)
+            ImageExporter._draw_label_cells(painter, project, layout_result, scale)
+
+            # 1c. Draw Group Label bands (spans, column headers, row titles)
+            ImageExporter._draw_group_labels(painter, project, layout_result, scale)
+
             # 2. Draw Text Items
             for text_item in project.text_items:
                 # Skip numbering labels rendered by label cells
                 if (
-                    label_row_above
-                    and text_item.scope == 'cell'
+                    text_item.scope == 'cell'
                     and getattr(text_item, 'subtype', None) != 'corner'
                     and text_item.parent_id in label_rects
                 ):
@@ -153,9 +153,6 @@ class ImageExporter:
 
         Extracted so raster export, in-memory render, and SVG export can share it.
         """
-        label_row_above = getattr(project, 'label_placement', 'in_cell') in (
-            'label_row_above', 'label_row_below', 'label_col_left', 'label_col_right'
-        )
         label_rects = getattr(layout_result, 'label_rects', {})
 
         sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
@@ -184,13 +181,12 @@ class ImageExporter:
                     ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
             ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
 
-        if label_row_above:
-            ImageExporter._draw_label_cells(painter, project, layout_result, scale)
+        ImageExporter._draw_label_cells(painter, project, layout_result, scale)
+        ImageExporter._draw_group_labels(painter, project, layout_result, scale)
 
         for text_item in project.text_items:
             if (
-                label_row_above
-                and text_item.scope == 'cell'
+                text_item.scope == 'cell'
                 and getattr(text_item, 'subtype', None) != 'corner'
                 and text_item.parent_id in label_rects
             ):
@@ -781,43 +777,40 @@ class ImageExporter:
 
     @staticmethod
     def _draw_label_cells(painter: QPainter, project, layout_result, scale: float):
-        """Draw label cells (label rows above picture rows) with centered text.
-        
-        Uses the same QGraphicsTextItem rendering approach as _draw_text to
-        ensure font size matches the canvas exactly.
+        """Draw cell labels that live in their own reserved strip.
+
+        Each label is styled from its own TextItem fields rather than the
+        project defaults, so panel letters and panel titles can share a
+        figure. Uses the same QGraphicsTextItem approach as _draw_text so
+        font size matches the canvas exactly.
         """
         label_rects = getattr(layout_result, 'label_rects', {})
         if not label_rects:
             return
 
-        # Build numbering text map from TextItems
-        numbering_texts = {}
-        for t in project.text_items:
-            if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
-                numbering_texts[t.parent_id] = t.text
-
-        # Use same base_pt / text_scale approach as _draw_text and TextGraphicsItem
         base_pt = 24
-        font_size_pt = project.label_font_size
-        text_scale = font_size_pt / base_pt
-
-        font = QFont(project.label_font_family, base_pt)
-        if project.label_font_weight == "bold":
-            font.setBold(True)
-
         align = getattr(project, 'label_align', 'center')
         ox_mm = getattr(project, 'label_offset_x', 0.0)
         oy_mm = getattr(project, 'label_offset_y', 0.0)
 
-        for cell_id, (lx, ly, lw, lh) in label_rects.items():
-            text = numbering_texts.get(cell_id, "")
-            if not text:
+        for t in project.text_items:
+            if t.scope != 'cell' or getattr(t, 'subtype', None) == 'corner':
                 continue
+            if not t.parent_id or t.parent_id not in label_rects:
+                continue
+            if not t.text:
+                continue
+            lx, ly, lw, lh = label_rects[t.parent_id]
+
+            text_scale = t.font_size_pt / base_pt
+            font = QFont(t.font_family, base_pt)
+            if t.font_weight == "bold":
+                font.setBold(True)
 
             temp_item = QGraphicsTextItem()
-            temp_item.setPlainText(text)
+            temp_item.setPlainText(t.text)
             temp_item.setFont(font)
-            temp_item.setDefaultTextColor(QColor(project.label_color))
+            temp_item.setDefaultTextColor(QColor(t.color))
 
             base_rect = temp_item.boundingRect()
             tw_mm = base_rect.width() * text_scale
@@ -834,12 +827,37 @@ class ImageExporter:
                 x_mm = cell_x_mm + (lw - tw_mm) / 2.0
 
             render_scale = text_scale * scale
+            rotation = getattr(t, 'rotation', 0.0) or 0.0
             painter.save()
-            painter.translate(x_mm * scale, y_mm * scale)
+            if rotation:
+                # Rotate about the text's centre so alignment still holds.
+                painter.translate((x_mm + tw_mm / 2.0) * scale,
+                                  (y_mm + th_mm / 2.0) * scale)
+                painter.rotate(rotation)
+                painter.translate(-(tw_mm / 2.0) * scale, -(th_mm / 2.0) * scale)
+            else:
+                painter.translate(x_mm * scale, y_mm * scale)
             painter.scale(render_scale, render_scale)
             option = QStyleOptionGraphicsItem()
             temp_item.paint(painter, option, None)
             painter.restore()
+
+    @staticmethod
+    def _draw_group_labels(painter: QPainter, project, layout_result, scale: float):
+        """Draw group-label bands (spans, column headers, rotated row titles).
+
+        Delegates to the shared renderer so canvas and export agree.
+        """
+        bands = getattr(layout_result, 'group_label_rects', {}) or {}
+        if not bands:
+            return
+        from src.utils import group_label_render
+        for group_label in getattr(project, 'group_labels', []) or []:
+            band = bands.get(group_label.id)
+            if not band:
+                continue
+            x, y, w, h = band
+            group_label_render.draw(painter, group_label, QRectF(x, y, w, h), scale)
 
     @staticmethod
     def _draw_scale_bar(painter: QPainter, obj, content_rect: QRectF, scale: float, fit_mode_override=None):

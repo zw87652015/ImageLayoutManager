@@ -365,20 +365,12 @@ class PreferencesDialog(QDialog):
             set_language(new_lang)
             mw.retranslate_ui()
 
-        # Theme
+        # Theme — go through MainWindow._apply_theme so palette, stylesheet,
+        # canvas scenes, layers panel, inspector and icons ALL update. The
+        # previous hand-rolled subset left the canvas on the old theme.
         new_theme = self._settings.value("theme", LIGHT)
-        from src.app.theme import build_palette, get_stylesheet
-        from PyQt6.QtWidgets import QApplication
-        app = QApplication.instance()
-        if app:
-            app.setPalette(build_palette(new_theme))
-            app.setStyleSheet(get_stylesheet(new_theme))
-        if hasattr(mw, '_current_theme') and mw._current_theme != new_theme:
-            mw._current_theme = new_theme
-            if hasattr(mw, '_refresh_toolbar_icons'):
-                mw._refresh_toolbar_icons()
-            if hasattr(mw, '_theme_segmented'):
-                mw._theme_segmented.set_theme(new_theme)
+        if hasattr(mw, '_apply_theme'):
+            mw._apply_theme(new_theme)
 
         # Undo limit
         limit = int(self._settings.value("max_history", 200))

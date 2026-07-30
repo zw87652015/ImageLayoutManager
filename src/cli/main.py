@@ -268,6 +268,7 @@ def _cmd_unpack(args: argparse.Namespace) -> int:
 def _cmd_inspect(args: argparse.Namespace) -> int:
     project, workdir = _load_project(args.input)
     try:
+        group_labels = getattr(project, "group_labels", []) or []
         if args.json:
             payload = {
                 "name": project.name,
@@ -277,6 +278,10 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
                 "rows": len(project.rows),
                 "cells_total": len(project.get_all_leaf_cells()),
                 "text_items": len(project.text_items),
+                "group_labels": [g.to_dict() for g in group_labels],
+                "label_scheme": project.label_scheme,
+                "label_scheme_sub": getattr(project, "label_scheme_sub", ""),
+                "label_placement": project.label_placement,
                 "size_groups": len(getattr(project, "size_groups", []) or []),
                 "export_region":
                     project.export_region.to_dict()
@@ -294,6 +299,15 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
             print(f"rows        : {len(project.rows)}")
             print(f"cells       : {len(leaves)} ({with_image} with image)")
             print(f"text items  : {len(project.text_items)}")
+            print(f"labels      : scheme {project.label_scheme} / "
+                  f"{getattr(project, 'label_scheme_sub', '') or 'flat'} "
+                  f"@ {project.label_placement}")
+            if group_labels:
+                print(f"group labels: {len(group_labels)}")
+                for g in group_labels:
+                    target = (f"row {g.row_index}" if g.row_index is not None
+                              else f"{len(g.cell_ids)} cells")
+                    print(f"              - {g.text!r} ({g.side}, {target})")
             sgroups = getattr(project, "size_groups", []) or []
             if sgroups:
                 print(f"size groups : {len(sgroups)}")

@@ -214,7 +214,26 @@ class AboutDialog(QDialog):
         self._update_label.setOpenExternalLinks(True)
         self._update_label.setStyleSheet("color: #888888; font-size: 12px; min-height: 20px;")
         root.addWidget(self._update_label)
-        root.addSpacing(16)
+        root.addSpacing(10)
+
+        # ── Changelog (hidden until requested) ────────
+        self._changelog_btn = QPushButton("▸  " + tr("about_changelog"))
+        self._changelog_btn.setFlat(True)
+        self._changelog_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._changelog_btn.setStyleSheet(
+            "color: #4A90E2; font-size: 12px; border: none; padding: 2px;")
+        self._changelog_btn.clicked.connect(self._toggle_changelog)
+        root.addWidget(self._changelog_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        from PyQt6.QtWidgets import QTextBrowser
+        from src.app.changelog import render_changelog_html
+        self._changelog_view = QTextBrowser()
+        self._changelog_view.setHtml(render_changelog_html())
+        self._changelog_view.setStyleSheet("font-size: 12px;")
+        self._changelog_view.setMinimumHeight(180)
+        self._changelog_view.setVisible(False)
+        root.addWidget(self._changelog_view)
+        root.addSpacing(10)
 
         # ── Buttons ───────────────────────────────────
         btn_row = QHBoxLayout()
@@ -242,6 +261,13 @@ class AboutDialog(QDialog):
         btn_row.addWidget(close_btn)
 
         root.addLayout(btn_row)
+
+    def _toggle_changelog(self):
+        show = not self._changelog_view.isVisible()
+        self._changelog_view.setVisible(show)
+        arrow = "▾" if show else "▸"
+        self._changelog_btn.setText(f"{arrow}  " + tr("about_changelog"))
+        self.adjustSize()
 
     def _on_check_updates(self):
         from PyQt6.QtWidgets import QApplication

@@ -25,6 +25,7 @@ from PyQt6.QtSvg import QSvgRenderer
 from src.utils.svg_text_utils import get_svg_text_elements, get_svg_override_bytes_for_cell
 from src.model.data_model import SvgTextGroup, SvgTextMember
 from src.app.i18n import tr
+from src.app.wheel_guard import install_wheel_guard
 
 
 class SvgTextInspectorWindow(QDialog):
@@ -286,6 +287,8 @@ class SvgTextInspectorWindow(QDialog):
         del_btn.clicked.connect(_on_delete)
         h.addWidget(del_btn)
 
+        # Scrolling the group list must never retune a font size.
+        install_wheel_guard(row, self._groups_scroll)
         return row
 
     # ──────────────────────────────────────────────────────────────────

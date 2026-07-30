@@ -11,14 +11,17 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from src.app.i18n import tr
 
-# Human-friendly rendering-intent labels mapped to Pillow's ImageCms enum ints.
-# We keep the enum values numeric so we don't import Pillow at UI-construction time.
+
+# Human-friendly rendering-intent labels (i18n keys) mapped to Pillow's
+# ImageCms enum ints. We keep the enum values numeric so we don't import
+# Pillow at UI-construction time.
 _INTENTS: List[Tuple[str, int]] = [
-    ("Relative Colorimetric (default)", 1),
-    ("Perceptual (photos, smooth gradation)", 0),
-    ("Saturation (charts, solid colours)", 2),
-    ("Absolute Colorimetric (proofing)", 3),
+    ("cmyk_intent_relative", 1),
+    ("cmyk_intent_perceptual", 0),
+    ("cmyk_intent_saturation", 2),
+    ("cmyk_intent_absolute", 3),
 ]
 
 
@@ -83,7 +86,7 @@ class CmykIccDialog(QDialog):
     def __init__(self, parent=None, current_path: Optional[str] = None,
                  current_intent: int = 1):
         super().__init__(parent)
-        self.setWindowTitle("CMYK Colour Management")
+        self.setWindowTitle(tr("cmyk_title"))
         self.setMinimumWidth(520)
 
         self._selected_path: Optional[str] = None
@@ -91,11 +94,7 @@ class CmykIccDialog(QDialog):
 
         layout = QVBoxLayout(self)
 
-        intro = QLabel(
-            "Choose the CMYK ICC profile and rendering intent for this "
-            "TIFF export.\n"
-            "The profile will be embedded in the output file."
-        )
+        intro = QLabel(tr("cmyk_intro"))
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -107,37 +106,37 @@ class CmykIccDialog(QDialog):
         self._profile_paths: List[Optional[str]] = []
         if not profiles:
             # Visible notice instead of a silent empty list.
-            self.profile_combo.addItem("(no CMYK profile found on this system)")
+            self.profile_combo.addItem(tr("cmyk_no_profile"))
             self._profile_paths.append("__none__")
         for path in profiles:
             self.profile_combo.addItem(_describe_profile(path))
             self._profile_paths.append(path)
-        self.profile_combo.addItem("Custom file…")
+        self.profile_combo.addItem(tr("cmyk_custom"))
         self._profile_paths.append(None)  # marker for custom
-        self.profile_combo.addItem("No profile (naive conversion, not recommended)")
+        self.profile_combo.addItem(tr("cmyk_none"))
         self._profile_paths.append("__none__")
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
-        form.addRow("ICC Profile:", self.profile_combo)
+        form.addRow(tr("cmyk_profile_lbl"), self.profile_combo)
 
         # Custom path (shown only when Custom file… selected)
         path_row = QHBoxLayout()
         self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("Path to .icc / .icm file")
-        self.browse_btn = QPushButton("Browse…")
+        self.path_edit.setPlaceholderText(tr("cmyk_path_ph"))
+        self.browse_btn = QPushButton(tr("cmyk_browse"))
         self.browse_btn.clicked.connect(self._browse)
         path_row.addWidget(self.path_edit, 1)
         path_row.addWidget(self.browse_btn)
-        self.path_row_label = QLabel("Custom Path:")
+        self.path_row_label = QLabel(tr("cmyk_custom_path"))
         form.addRow(self.path_row_label, path_row)
 
         # Rendering intent
         self.intent_combo = QComboBox()
-        for text, _val in _INTENTS:
-            self.intent_combo.addItem(text)
-        form.addRow("Rendering Intent:", self.intent_combo)
+        for key, _val in _INTENTS:
+            self.intent_combo.addItem(tr(key))
+        form.addRow(tr("cmyk_intent_lbl"), self.intent_combo)
 
         # Remember-checkbox
-        self.remember = QCheckBox("Remember this profile for future exports")
+        self.remember = QCheckBox(tr("cmyk_remember"))
         self.remember.setChecked(True)
         layout.addLayout(form)
         layout.addWidget(self.remember)
@@ -181,18 +180,16 @@ class CmykIccDialog(QDialog):
         self.path_row_label.setVisible(is_custom)
         # Description
         if marker is None:
-            self.desc_label.setText("Provide a path to any CMYK ICC profile.")
+            self.desc_label.setText(tr("cmyk_desc_custom"))
         elif marker == "__none__":
-            self.desc_label.setText(
-                "Output will be converted with Pillow's built-in CMYK conversion. "
-                "Colours will not be colour-accurate for print."
-            )
+            self.desc_label.setText(tr("cmyk_desc_none"))
         else:
-            self.desc_label.setText(f"Using {os.path.basename(marker)}")
+            self.desc_label.setText(
+                tr("cmyk_desc_using").format(name=os.path.basename(marker)))
 
     def _browse(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose ICC Profile", os.path.dirname(self.path_edit.text() or ""),
+            self, tr("cmyk_choose_title"), os.path.dirname(self.path_edit.text() or ""),
             "ICC Profiles (*.icc *.icm);;All Files (*)",
         )
         if path:
@@ -205,19 +202,14 @@ class CmykIccDialog(QDialog):
             candidate = self.path_edit.text().strip()
             if not candidate or not os.path.isfile(candidate):
                 QMessageBox.warning(
-                    self, "Invalid Profile",
-                    "Please pick a valid .icc / .icm file, or choose another option.",
+                    self, tr("cmyk_invalid_title"), tr("cmyk_invalid_body"),
                 )
                 return
             cs = _profile_color_space(candidate)
             if cs and cs != "CMYK":
                 QMessageBox.warning(
-                    self, "Not a CMYK Profile",
-                    f"The selected profile is a {cs} profile, not CMYK.\n\n"
-                    "CMYK ICC profiles have names like 'Coated FOGRA39', "
-                    "'US Web Coated SWOP', or 'Japan Color 2001 Coated'. "
-                    "You can download free ones from https://www.color.org/ or "
-                    "https://www.eci.org/.",
+                    self, tr("cmyk_not_cmyk_title"),
+                    tr("cmyk_not_cmyk_body").format(cs=cs),
                 )
                 return
             self._selected_path = candidate

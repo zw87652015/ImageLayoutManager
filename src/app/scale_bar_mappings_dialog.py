@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from src.app.scale_bar_mappings import load_mappings, save_mappings
+from src.app.i18n import tr
 
 
 class ScaleBarMappingsDialog(QDialog):
@@ -25,7 +26,7 @@ class ScaleBarMappingsDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Manage Scale Bar Mappings")
+        self.setWindowTitle(tr("sbm_title"))
         self.setMinimumWidth(480)
         self.setMinimumHeight(360)
 
@@ -57,31 +58,31 @@ class ScaleBarMappingsDialog(QDialog):
         btn_col.setAlignment(Qt.AlignmentFlag.AlignTop)
         top.addLayout(btn_col)
 
-        self._btn_add = QPushButton("Add")
+        self._btn_add = QPushButton(tr("sbm_add"))
         self._btn_add.clicked.connect(self._add_mapping)
         btn_col.addWidget(self._btn_add)
 
-        self._btn_delete = QPushButton("Delete")
+        self._btn_delete = QPushButton(tr("btn_delete"))
         self._btn_delete.clicked.connect(self._delete_mapping)
         btn_col.addWidget(self._btn_delete)
 
-        self._btn_up = QPushButton("Move Up")
+        self._btn_up = QPushButton(tr("sbm_move_up"))
         self._btn_up.clicked.connect(self._move_up)
         btn_col.addWidget(self._btn_up)
 
-        self._btn_down = QPushButton("Move Down")
+        self._btn_down = QPushButton(tr("sbm_move_down"))
         self._btn_down.clicked.connect(self._move_down)
         btn_col.addWidget(self._btn_down)
 
         # Middle: edit form for the selected mapping
-        edit_box = QGroupBox("Selected Mapping")
+        edit_box = QGroupBox(tr("sbm_selected"))
         edit_form = QFormLayout(edit_box)
         root.addWidget(edit_box)
 
         self._name_edit = QLineEdit()
-        self._name_edit.setPlaceholderText("e.g.  10× objective")
+        self._name_edit.setPlaceholderText(tr("sbm_name_ph"))
         self._name_edit.textChanged.connect(self._on_form_changed)
-        edit_form.addRow("Name:", self._name_edit)
+        edit_form.addRow(tr("sbm_name"), self._name_edit)
 
         self._val_spin = QDoubleSpinBox()
         self._val_spin.setDecimals(6)
@@ -112,12 +113,9 @@ class ScaleBarMappingsDialog(QDialog):
 
         val_widget = QWidget()
         val_widget.setLayout(val_layout)
-        edit_form.addRow("Length per pixel:", val_widget)
+        edit_form.addRow(tr("sbm_len_per_px"), val_widget)
 
-        hint = QLabel(
-            "Tip: measure a known feature in pixels and divide its physical size (µm) "
-            "by that pixel count to obtain this value."
-        )
+        hint = QLabel(tr("sbm_hint"))
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
         edit_form.addRow(hint)
@@ -186,7 +184,7 @@ class ScaleBarMappingsDialog(QDialog):
         self._list.item(row).setText(self._item_label(self._mappings[row]))
 
     def _add_mapping(self):
-        new = {"name": "New Mapping", "um_per_px": 0.1301, "unit": "µm"}
+        new = {"name": tr("sbm_new"), "um_per_px": 0.1301, "unit": "µm"}
         self._mappings.append(new)
         self._list.addItem(self._item_label(new))
         self._list.setCurrentRow(len(self._mappings) - 1)
@@ -199,8 +197,8 @@ class ScaleBarMappingsDialog(QDialog):
             return
         name = self._mappings[row]["name"]
         reply = QMessageBox.question(
-            self, "Delete Mapping",
-            f"Delete the mapping \"{name}\"?",
+            self, tr("sbm_del_title"),
+            tr("sbm_del_body").format(name=name),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
@@ -231,7 +229,7 @@ class ScaleBarMappingsDialog(QDialog):
         # Validate: all names must be non-empty
         for m in self._mappings:
             if not m["name"].strip():
-                QMessageBox.warning(self, "Invalid Mapping", "All mappings must have a non-empty name.")
+                QMessageBox.warning(self, tr("sbm_invalid_title"), tr("sbm_invalid_body"))
                 return
         save_mappings(self._mappings)
         self.accept()

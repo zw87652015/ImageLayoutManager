@@ -569,6 +569,20 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "bg_enabled": {"type": "boolean"},
             "bg_color": {"type": "string"},
             "bg_padding_mm": {"type": "number", "minimum": 0},
+            "placement": {
+                "type": ["string", "null"],
+                "enum": ["in_cell", "label_row_above", "label_row_below",
+                         "label_col_left", "label_col_right", None],
+                "description": "Per-label placement override; null inherits the project default.",
+            },
+            "label_tier": {
+                "type": "string", "enum": ["panel", "title"],
+                "description": "Style tier: bold panel letters vs descriptive captions.",
+            },
+            "style_locked": {
+                "type": "boolean",
+                "description": "Skip this label in global style syncs (labels_set_style).",
+            },
         }, required=("text_id",)),
     },
     {
@@ -576,9 +590,12 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "description": (
             "Restyle EVERY existing cell label in one shot, AND update the "
             "project-level defaults so future auto-labels inherit the same "
-            "look. Best tool for 'make labels smaller / change label font'."
+            "look. Best tool for 'make labels smaller / change label font'. "
+            "Pass `tier` to restyle only panel letters or only titles; "
+            "style-locked labels are always skipped."
         ),
         "input_schema": _obj({
+            "tier": {"type": "string", "enum": ["panel", "title"]},
             "font_family": {"type": "string"},
             "font_size_pt": {"type": "integer", "minimum": 1},
             "font_weight": {"type": "string", "enum": ["normal", "bold"]},
@@ -593,11 +610,28 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "description": (
             "Set project-level label defaults that NEW auto-labels inherit. "
             "Does NOT restyle existing labels — use `labels_set_style` for "
-            "that. Useful before a fresh `auto_label_cells` call."
+            "that. Useful before a fresh `auto_label_cells` call. "
+            "`scheme_sub` enables hierarchical numbering (e.g. A → A-i, A-ii); "
+            "`title_tier=true` applies the font fields to the title tier."
         ),
         "input_schema": _obj({
             "scheme": {"type": "string",
-                       "enum": ["a", "A", "(a)", "(A)"]},
+                       "enum": ["a", "A", "(a)", "(A)", "1", "(1)",
+                                "i", "I", "(i)", "(I)"]},
+            "scheme_sub": {
+                "type": "string",
+                "enum": ["", "a", "A", "(a)", "(A)", "1", "(1)",
+                         "i", "I", "(i)", "(I)"],
+                "description": "Sub-panel numbering scheme; '' keeps flat numbering.",
+            },
+            "sub_prefix": {
+                "type": "boolean",
+                "description": "Prefix sub-panel labels with the parent label (A-i vs i).",
+            },
+            "title_tier": {
+                "type": "boolean",
+                "description": "Apply font fields to the title tier instead of the panel tier.",
+            },
             "placement": {"type": "string"},
             "font_family": {"type": "string"},
             "font_size_pt": {"type": "integer", "minimum": 1},
@@ -683,21 +717,118 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "input_schema": _obj({}),
     },
 
+    # ── group labels (spanning bands / row titles) ───────────────────
+    {
+        "name": "group_label_add",
+        "description": (
+            "Create a GroupLabel band that reserves layout space outside "
+            "the artwork. Pass `cell_ids` (top-level cells) for a column "
+            "header spanning those cells, or `row_index` for a whole-row "
+            "title. `side` places the band; left/right bands auto-rotate "
+            "the text so row titles read vertically. Add a `bracket_style` "
+            "('line'/'bracket'/'brace') for grouping rules."
+        ),
+        "input_schema": _obj({
+            "text": {"type": "string"},
+            "cell_ids": {"type": "array", "items": {"type": "string"},
+                         "minItems": 1},
+            "row_index": {"type": "integer", "minimum": 0},
+            "side": {"type": "string",
+                     "enum": ["top", "bottom", "left", "right"],
+                     "default": "top"},
+            "align": {"type": "string",
+                      "enum": ["left", "center", "right"]},
+            "thickness_mm": {"type": "number", "minimum": 0,
+                             "description": "Band thickness in mm; 0 = auto from font size."},
+            "gap_mm": {"type": "number", "minimum": 0},
+            "level": {"type": "integer", "minimum": 0, "maximum": 5,
+                      "description": "Stack level for multiple bands on the same side."},
+            "rotation": {"type": ["number", "null"],
+                         "description": "Text rotation in degrees; null = auto (90° on side bands)."},
+            "font_family": {"type": "string"},
+            "font_size_pt": {"type": "integer", "minimum": 1},
+            "font_weight": {"type": "string", "enum": ["normal", "bold"]},
+            "color": {"type": "string"},
+            "bracket_style": {"type": "string",
+                              "enum": ["none", "line", "bracket", "brace"]},
+            "bracket_width_pt": {"type": "number", "exclusiveMinimum": 0},
+            "bracket_tick_mm": {"type": "number", "minimum": 0},
+            "bracket_gap_mm": {"type": "number", "minimum": 0},
+            "bracket_color": {"type": "string"},
+        }, required=("text",)),
+    },
+    {
+        "name": "group_label_remove",
+        "description": (
+            "Delete a GroupLabel band; its reserved space collapses and "
+            "the artwork reflows."
+        ),
+        "input_schema": _obj({
+            "group_label_id": {"type": "string"},
+        }, required=("group_label_id",)),
+    },
+    {
+        "name": "group_label_set",
+        "description": (
+            "Update properties of one GroupLabel (text, side, geometry, "
+            "font, bracket). Pass `cell_ids` or `row_index` to re-target "
+            "the span. Find ids via `project_describe`."
+        ),
+        "input_schema": _obj({
+            "group_label_id": {"type": "string"},
+            "text": {"type": "string"},
+            "cell_ids": {"type": "array", "items": {"type": "string"},
+                         "minItems": 1},
+            "row_index": {"type": "integer", "minimum": 0},
+            "side": {"type": "string",
+                     "enum": ["top", "bottom", "left", "right"]},
+            "align": {"type": "string",
+                      "enum": ["left", "center", "right"]},
+            "thickness_mm": {"type": "number", "minimum": 0},
+            "gap_mm": {"type": "number", "minimum": 0},
+            "level": {"type": "integer", "minimum": 0, "maximum": 5},
+            "rotation": {"type": ["number", "null"]},
+            "font_family": {"type": "string"},
+            "font_size_pt": {"type": "integer", "minimum": 1},
+            "font_weight": {"type": "string", "enum": ["normal", "bold"]},
+            "color": {"type": "string"},
+            "bracket_style": {"type": "string",
+                              "enum": ["none", "line", "bracket", "brace"]},
+            "bracket_width_pt": {"type": "number", "exclusiveMinimum": 0},
+            "bracket_tick_mm": {"type": "number", "minimum": 0},
+            "bracket_gap_mm": {"type": "number", "minimum": 0},
+            "bracket_color": {"type": "string"},
+        }, required=("group_label_id",)),
+    },
+
     # ── labels & best-fit ────────────────────────────────────────────
     {
         "name": "auto_label_cells",
         "description": (
-            "Generate sequential labels — (a), (b), (c)… — for every leaf "
-            "cell in reading order. `scheme` picks the alphabet; "
+            "Generate labels — (a), (b), (c)… — for every panel cell in "
+            "reading order. `scheme` picks the alphabet; "
             "`placement='in_cell'` overlays labels on each image (default), "
             "`placement='row_above'` adds a dedicated label row above each "
-            "picture row (pick this when overlays would obscure content)."
+            "picture row (pick this when overlays would obscure content). "
+            "`sub_scheme` switches to hierarchical numbering for split "
+            "panels (A → A-i, A-ii…); `sub_prefix` controls whether "
+            "children carry the parent label as a prefix."
         ),
         "input_schema": _obj({
-            "scheme": {"type": "string", "enum": ["a", "A", "(a)", "(A)"]},
+            "scheme": {"type": "string",
+                       "enum": ["a", "A", "(a)", "(A)", "1", "(1)",
+                                "i", "I", "(i)", "(I)"]},
             "placement": {"type": "string",
                           "enum": ["in_cell", "row_above"],
                           "default": "in_cell"},
+            "sub_scheme": {
+                "type": "string",
+                "enum": ["", "a", "A", "(a)", "(A)", "1", "(1)",
+                         "i", "I", "(i)", "(I)"],
+                "description": "Sub-panel scheme for hierarchical numbering; '' = flat.",
+            },
+            "sub_prefix": {"type": "boolean",
+                           "description": "Prefix sub labels with the parent label."},
         }),
     },
     {

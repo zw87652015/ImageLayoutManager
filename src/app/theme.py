@@ -1,4 +1,4 @@
-"""Design tokens + stylesheet for Academic Figure Layout.
+"""Design tokens + stylesheet for Image Layout Manager.
 
 All visual values live in ``_TOKENS_LIGHT`` / ``_TOKENS_DARK``. The QSS
 template below consumes those tokens via ``%(name)s`` substitution, so
@@ -314,29 +314,45 @@ _QSS_TEMPLATE = """
     QToolButton[primary="true"]:checked { background: %(accent_press)s; border-color: %(accent_press)s; }
     QToolButton[primary="true"]::menu-indicator { image: none; width: 0; }
 
-    /* Theme segmented control (sun/moon pill on the right of the toolbar).
-       Matches .segmented / .seg-btn in the redesign mockups. */
-    QFrame#themeSegmented {
-        background: %(panel_alt)s;
-        border: 1px solid %(border)s;
-        border-radius: %(radius_button)s;
+    /* Startup welcome page — compact "high-DPI" density; element sizes
+       follow importance: modest title, small actions, tiny hints. */
+    QWidget#welcomePage { background: %(panel)s; }
+    QLabel#welcomeTitle { font-size: 13pt; font-weight: 600; color: %(text)s; }
+    QLabel#welcomeHeader {
+        font-size: 10px; font-weight: 600; color: %(text_tert)s;
     }
-    QFrame#themeSegmented QToolButton[segmentedButton="true"] {
-        background: transparent;
+    QLabel#welcomeRecent { font-size: 11px; color: %(text)s; }
+    QPushButton#welcomePrimary {
+        background: %(accent)s;
+        color: %(on_accent)s;
+        border: 1px solid %(accent)s;
+        border-radius: %(radius_button)s;
+        padding: 5px 14px;
+        font-size: 12px;
+        font-weight: 600;
+        min-width: 180px;
+    }
+    QPushButton#welcomePrimary:hover { background: %(accent_hover)s; }
+    QPushButton#welcomeGhost {
         color: %(text_sec)s;
         border: none;
-        border-radius: 3px;
-        padding: 2px 10px;
-        font-size: %(font_md)s;
+        padding: 5px 14px;
+        font-size: 12px;
     }
-    QFrame#themeSegmented QToolButton[segmentedButton="true"]:hover {
-        color: %(text)s;
-        background: %(hover)s;
+    QPushButton#welcomeGhost:hover { color: %(text)s; }
+    QPushButton#welcomeCorner {
+        color: %(text_sec)s;
+        border: none;
+        padding: 2px 6px;
+        font-size: 11px;
     }
-    QFrame#themeSegmented QToolButton[segmentedButton="true"]:checked {
-        background: %(surface)s;
-        color: %(accent)s;
-        font-weight: 600;
+    QPushButton#welcomeCorner:hover { color: %(accent)s; }
+
+    /* MCP status indicator in the status bar */
+    QToolButton#mcpStatus {
+        border: none;
+        padding: 0 8px;
+        color: %(text_sec)s;
     }
 
     /* ── Tabs ─────────────────────────────────────────────────────── */
@@ -512,6 +528,27 @@ def get_tokens(theme: str) -> dict:
     placeholder dash colour, layer-panel thumbnails, custom delegates).
     """
     return dict(_TOKENS_DARK if theme == DARK else _TOKENS_LIGHT)
+
+
+def token_color(value, fallback: str = "#000000") -> QColor:
+    """Parse a design-token colour into a QColor.
+
+    Handles "#hex" via QColor directly, plus CSS-style "rgba(r, g, b, a)"
+    with a float alpha in 0–1 — QColor's string parser rejects that form,
+    and painting with the invalid result renders as opaque black.
+    """
+    s = str(value).strip()
+    if s.startswith("rgba") and s.endswith(")"):
+        try:
+            parts = [p.strip() for p in s[s.index("(") + 1:-1].split(",")]
+            r, g, b = (int(float(p)) for p in parts[:3])
+            a = float(parts[3]) if len(parts) > 3 else 1.0
+            alpha = int(round(a * 255)) if a <= 1.0 else int(a)
+            return QColor(r, g, b, alpha)
+        except (ValueError, IndexError):
+            pass
+    color = QColor(s)
+    return color if color.isValid() else QColor(fallback)
 
 
 def build_palette(theme: str) -> QPalette:

@@ -3,6 +3,9 @@
 # ──────────────────────────────────────────────
 APP_VERSION = "3.3.3"
 
+# Display name shown inside the app (window title, About, Help).
+APP_NAME = "Image Layout Manager"
+
 # Single source of truth for attribution metadata. These strings end up in:
 #   - Windows VS_VERSIONINFO embedded in ImageLayoutManager.exe / imagelayout-cli.exe
 #   - Inno Setup AppPublisher / AppCopyright fields shown in Apps & Features

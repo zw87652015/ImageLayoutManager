@@ -33,3 +33,5 @@ plan.md
 /.claude
 /.pytest_cache
 /.vscode
+.DS_Store
+_smoke_gui_out.txt

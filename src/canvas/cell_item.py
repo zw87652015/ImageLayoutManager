@@ -423,9 +423,12 @@ class CellItem(QGraphicsRectItem):
         # Label cell mode
         self.is_label_cell = False
         self.label_text = ""
+        self.label_text_item_id = None   # TextItem whose letter this strip paints
+        self._label_drag_start = None    # scene pos of a press on the strip
         self.label_font_family = "Arial"
         self.label_font_size = 12
         self.label_font_weight = "bold"
+        self.label_rotation = 0.0
         self.label_color = "#000000"
         self.label_align = "center"  # "left", "center", "right"
         self.label_offset_x = 0.0  # mm
@@ -721,6 +724,17 @@ class CellItem(QGraphicsRectItem):
             event.accept()
             return
 
+        if self.is_label_cell:
+            scene = self.scene()
+            if (self._label_drag_start is not None and scene is not None
+                    and hasattr(scene, 'label_drag_finish')
+                    and scene.label_drag_active()):
+                scene.label_drag_finish(event.scenePos())
+                event.accept()
+            else:
+                super().mouseReleaseEvent(event)
+            self._label_drag_start = None
+            return
         was_moved = self._freeform and self._drag_start_pos is not None
         self._drag_start_pos = None
         super().mouseReleaseEvent(event)
@@ -743,6 +757,9 @@ class CellItem(QGraphicsRectItem):
             event.accept()
             return
         if self.is_label_cell:
+            if (event.button() == Qt.MouseButton.LeftButton
+                    and not bool(getattr(self.scene(), 'preview_mode', False))):
+                self._label_drag_start = event.scenePos()
             super().mousePressEvent(event)
             return
 
@@ -860,6 +877,17 @@ class CellItem(QGraphicsRectItem):
             event.accept()
             return
         if self.is_label_cell:
+            scene = self.scene()
+            if (self._label_drag_start is not None and scene is not None
+                    and hasattr(scene, 'label_drag_move')):
+                if not scene.label_drag_active():
+                    dist = (event.scenePos() - self._label_drag_start).manhattanLength()
+                    if dist > 1.5:
+                        scene.label_drag_start(self)
+                if scene.label_drag_active():
+                    scene.label_drag_move(event.scenePos())
+                    event.accept()
+                    return
             event.ignore()
             return
 
@@ -1544,6 +1572,12 @@ class CellItem(QGraphicsRectItem):
                 h_align = Qt.AlignmentFlag.AlignLeft
             elif self.label_align == "right":
                 h_align = Qt.AlignmentFlag.AlignRight
+            if self.label_rotation:
+                # Rotate around the strip's centre so alignment still holds.
+                centre = dev_text_rect.center()
+                painter.translate(centre)
+                painter.rotate(self.label_rotation)
+                painter.translate(-centre)
             painter.drawText(dev_text_rect, h_align | Qt.AlignmentFlag.AlignVCenter, self.label_text)
             painter.restore()
             

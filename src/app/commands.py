@@ -137,17 +137,34 @@ class DividerDragCommand(QUndoCommand):
 
     For 'row' dividers: records old/new height_ratio for two adjacent rows.
     For 'col' dividers: records old/new column_ratios list for one row.
+    For 'subcell' dividers: records old/new split_ratios of the parent cell.
     """
 
     def __init__(self, project, div, update_callback=None):
         kind = div.kind
-        label = "Resize Row" if kind == 'row' else "Resize Column"
+        label = {'row': "Resize Row", 'col': "Resize Column",
+                 'subcell': "Resize Sub-Cells"}.get(kind, "Resize")
         super().__init__(label)
         self.project = project
         self.kind = kind
         self.update_callback = update_callback
 
-        if kind == 'row':
+        if kind == 'subcell':
+            self.parent_cell_id = div.parent_cell_id
+            parent = project.find_cell_by_id(div.parent_cell_id)
+            count = len(parent.children) if parent else max(div.sub_a, div.sub_b) + 1
+            cur_ratios = list(parent.split_ratios) if (parent and parent.split_ratios) else []
+            while len(cur_ratios) < count:
+                cur_ratios.append(1.0)
+            old_ratios = cur_ratios[:]
+            old_ratios[div.sub_a] = div.original_ratio_a
+            old_ratios[div.sub_b] = div.original_ratio_b
+            self.old_ratios = old_ratios
+            new_ratios = cur_ratios[:]
+            new_ratios[div.sub_a] = div.ratio_a
+            new_ratios[div.sub_b] = div.ratio_b
+            self.new_ratios = new_ratios
+        elif kind == 'row':
             self.row_a_idx = div.row_a
             self.row_b_idx = div.row_b
             # original_ratio_* captured at drag-start before any live updates
@@ -175,7 +192,11 @@ class DividerDragCommand(QUndoCommand):
             self.new_ratios = new_ratios
 
     def redo(self):
-        if self.kind == 'row':
+        if self.kind == 'subcell':
+            parent = self.project.find_cell_by_id(self.parent_cell_id)
+            if parent:
+                parent.split_ratios = self.new_ratios[:]
+        elif self.kind == 'row':
             row_a = next((r for r in self.project.rows if r.index == self.row_a_idx), None)
             row_b = next((r for r in self.project.rows if r.index == self.row_b_idx), None)
             if row_a:
@@ -190,7 +211,11 @@ class DividerDragCommand(QUndoCommand):
             self.update_callback()
 
     def undo(self):
-        if self.kind == 'row':
+        if self.kind == 'subcell':
+            parent = self.project.find_cell_by_id(self.parent_cell_id)
+            if parent:
+                parent.split_ratios = self.old_ratios[:]
+        elif self.kind == 'row':
             row_a = next((r for r in self.project.rows if r.index == self.row_a_idx), None)
             row_b = next((r for r in self.project.rows if r.index == self.row_b_idx), None)
             if row_a:
@@ -1270,56 +1295,56 @@ class ChangeSubCellRatioCommand(QUndoCommand):
 
 
 class ChangeLabelSchemeCommand(QUndoCommand):
-    """Change the label scheme and re-apply it to all existing numbering labels."""
-    def __init__(self, project, new_scheme: str, update_callback=None):
+    """Change the label scheme(s) and re-apply them to existing numbering labels.
+
+    Numbering is delegated to ``auto_label.compute_label_texts`` so a scheme
+    change produces exactly what re-running auto-label would, including
+    hierarchical sub-schemes.
+    """
+    def __init__(self, project, new_scheme: str, new_sub_scheme=None,
+                 update_callback=None):
         super().__init__("Change Label Scheme")
         self.project = project
         self.old_scheme = project.label_scheme
         self.new_scheme = new_scheme
+        self.old_sub_scheme = getattr(project, 'label_scheme_sub', "")
+        self.new_sub_scheme = (self.old_sub_scheme if new_sub_scheme is None
+                               else new_sub_scheme)
         self.update_callback = update_callback
 
         self.old_texts = {
             t.id: t.text for t in project.text_items
             if t.scope == "cell" and t.subtype != "corner"
         }
-        self.new_texts = self._compute_texts(new_scheme)
+        self.new_texts = self._compute_texts()
 
-    def _compute_texts(self, scheme: str) -> dict:
-        sorted_cells = sorted(
-            self.project.get_all_leaf_cells(),
-            key=lambda c: (c.row_index, c.col_index)
+    def _compute_texts(self) -> dict:
+        """Map text-item id -> new text, only for cells that already have one."""
+        from src.utils.auto_label import compute_label_texts
+        by_cell = compute_label_texts(
+            self.project, self.new_scheme, self.new_sub_scheme
         )
-        start_char = 'A' if 'A' in scheme else 'a'
-        use_parens = '(' in scheme
-        label_by_cell = {
-            t.parent_id: t for t in self.project.text_items
-            if t.scope == "cell" and t.subtype != "corner"
+        return {
+            t.id: by_cell[t.parent_id]
+            for t in self.project.text_items
+            if (t.scope == "cell" and t.subtype != "corner"
+                and t.parent_id in by_cell)
         }
-        result = {}
-        for i, cell in enumerate(sorted_cells):
-            if cell.id in label_by_cell:
-                char_code = ord(start_char) + i
-                label_text = chr(char_code)
-                if use_parens:
-                    label_text = f"({label_text})"
-                result[label_by_cell[cell.id].id] = label_text
-        return result
+
+    def _apply(self, scheme, sub_scheme, texts):
+        self.project.label_scheme = scheme
+        self.project.label_scheme_sub = sub_scheme
+        for t in self.project.text_items:
+            if t.id in texts:
+                t.text = texts[t.id]
+        if self.update_callback:
+            self.update_callback()
 
     def redo(self):
-        self.project.label_scheme = self.new_scheme
-        for t in self.project.text_items:
-            if t.id in self.new_texts:
-                t.text = self.new_texts[t.id]
-        if self.update_callback:
-            self.update_callback()
+        self._apply(self.new_scheme, self.new_sub_scheme, self.new_texts)
 
     def undo(self):
-        self.project.label_scheme = self.old_scheme
-        for t in self.project.text_items:
-            if t.id in self.old_texts:
-                t.text = self.old_texts[t.id]
-        if self.update_callback:
-            self.update_callback()
+        self._apply(self.old_scheme, self.old_sub_scheme, self.old_texts)
 
 
 class AutoLabelCommand(QUndoCommand):
@@ -1417,6 +1442,81 @@ class AutoLabelOutCellCommand(QUndoCommand):
         self.project.label_placement = self.old_label_placement
         if self.update_callback:
             self.update_callback()
+
+
+class AddGroupLabelCommand(QUndoCommand):
+    """Insert a GroupLabel (spanning / row-title label) into the project."""
+    def __init__(self, project, group_label, update_callback=None):
+        super().__init__("Add Group Label")
+        self.project = project
+        self.group_label = group_label
+        self.update_callback = update_callback
+
+    def redo(self):
+        if self.group_label not in self.project.group_labels:
+            self.project.group_labels.append(self.group_label)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.project.remove_group_label(self.group_label.id)
+        if self.update_callback:
+            self.update_callback()
+
+
+class DeleteGroupLabelCommand(QUndoCommand):
+    """Remove a GroupLabel, remembering its position for a faithful undo."""
+    def __init__(self, project, group_label_id: str, update_callback=None):
+        super().__init__("Delete Group Label")
+        self.project = project
+        self.group_label_id = group_label_id
+        self.update_callback = update_callback
+        self.group_label = project.find_group_label(group_label_id)
+        self.index = (project.group_labels.index(self.group_label)
+                      if self.group_label in project.group_labels else 0)
+
+    def redo(self):
+        self.project.remove_group_label(self.group_label_id)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        if self.group_label is not None:
+            self.project.group_labels.insert(self.index, self.group_label)
+        if self.update_callback:
+            self.update_callback()
+
+
+class GroupLabelPropertyChangeCommand(QUndoCommand):
+    """Change fields on one GroupLabel, storing only the touched keys."""
+    def __init__(self, project, group_label_id: str, changes: dict,
+                 update_callback=None, description="Edit Group Label"):
+        super().__init__(description)
+        self.project = project
+        self.group_label_id = group_label_id
+        self.changes = dict(changes)
+        self.update_callback = update_callback
+        group_label = project.find_group_label(group_label_id)
+        self.old_values = (
+            {k: copy.copy(getattr(group_label, k)) for k in self.changes
+             if hasattr(group_label, k)}
+            if group_label else {}
+        )
+
+    def _apply(self, values: dict):
+        group_label = self.project.find_group_label(self.group_label_id)
+        if group_label is None:
+            return
+        for key, value in values.items():
+            setattr(group_label, key, value)
+        if self.update_callback:
+            self.update_callback()
+
+    def redo(self):
+        self._apply(self.changes)
+
+    def undo(self):
+        self._apply(self.old_values)
 
 
 class AutoLayoutCommand(QUndoCommand):

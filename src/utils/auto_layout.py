@@ -148,17 +148,16 @@ class AutoLayout:
                  - project.margin_right_mm)
         gap = project.gap_mm
 
-        # Determine which cells have a label strip reserved above them
-        _label_row_above = getattr(project, "label_placement", "in_cell") == "label_row_above"
-        _label_row_h = 0.0
-        _labeled_cell_ids: set = set()
-        if _label_row_above:
-            from src.model.layout_engine import LayoutEngine
-            _custom_h = getattr(project, 'label_row_height', 0.0)
-            _label_row_h = _custom_h if _custom_h > 0 else LayoutEngine._label_row_height_mm(project)
-            for t in project.text_items:
-                if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
-                    _labeled_cell_ids.add(t.parent_id)
+        # Per-cell label strips, resolved the same way the layout engine does
+        # so the height estimate matches the real geometry.
+        from src.model.layout_engine import LayoutEngine
+        _placements, _strip_sizes = LayoutEngine.resolve_label_placements(project)
+
+        def _strip_overhead(cell_id: str) -> float:
+            """Vertical space a cell's own label strip costs, gap included."""
+            if _placements.get(cell_id) not in ("label_row_above", "label_row_below"):
+                return 0.0
+            return _strip_sizes.get(cell_id, 0.0) + gap
 
         def _optimise_and_composite(cell, parent_w: float):
             """Return (w, total_h, img_h) for *cell* at width *parent_w*.
@@ -182,8 +181,7 @@ class AutoLayout:
                 a = aspect_ratios.get(cell.id)
                 if a and a > 0:
                     img_h = parent_w / a
-                    label_overhead = (_label_row_h + gap) if (_label_row_above and cell.id in _labeled_cell_ids) else 0.0
-                    return (parent_w, img_h + label_overhead, img_h)
+                    return (parent_w, img_h + _strip_overhead(cell.id), img_h)
                 return None
 
             children = cell.children
@@ -225,8 +223,7 @@ class AutoLayout:
                     H = available / sum(valid_img_aspects)
                     # Label overhead for a horizontal split is uniform across all siblings
                     # and is handled by the engine; img_h = H for this container
-                    label_overhead = (_label_row_h + gap) if (_label_row_above and cell.id in _labeled_cell_ids) else 0.0
-                    composite_size = (parent_w, H + label_overhead, H)
+                    composite_size = (parent_w, H + _strip_overhead(cell.id), H)
                 else:
                     composite_size = None
 
@@ -260,8 +257,7 @@ class AutoLayout:
 
                 if has_valid:
                     natural_h = total_h_sum + (n - 1) * gap + fixed_h_total
-                    label_overhead = (_label_row_h + gap) if (_label_row_above and cell.id in _labeled_cell_ids) else 0.0
-                    composite_size = (parent_w, natural_h + label_overhead, natural_h)
+                    composite_size = (parent_w, natural_h + _strip_overhead(cell.id), natural_h)
                 else:
                     composite_size = None
             else:
@@ -382,26 +378,34 @@ class AutoLayout:
         if num_rows > 1:
             total_natural_height += (num_rows - 1) * gap_mm
 
-        # Account for label rows if label_placement is 'label_row_above'
-        label_row_above = getattr(project, "label_placement", "in_cell") == "label_row_above"
-        if label_row_above:
-            from src.model.layout_engine import LayoutEngine
-            custom_h = getattr(project, 'label_row_height', 0.0)
-            label_row_h = custom_h if custom_h > 0 else LayoutEngine._label_row_height_mm(project)
+        # Account for reserved bands: per-row cell-label strips plus any
+        # top/bottom group-label bands, mirroring LayoutEngine's budget.
+        from src.model.layout_engine import LayoutEngine
+        placements, strip_sizes = LayoutEngine.resolve_label_placements(project)
+        strips_above: dict = {}
+        strips_below: dict = {}
+        for c in project.cells:
+            placement = placements.get(c.id)
+            if placement == "label_row_above":
+                bucket = strips_above
+            elif placement == "label_row_below":
+                bucket = strips_below
+            else:
+                continue
+            size = strip_sizes.get(c.id, 0.0)
+            bucket[c.row_index] = max(bucket.get(c.row_index, 0.0), size)
+        for bucket in (strips_above, strips_below):
+            for size in bucket.values():
+                total_natural_height += size + gap_mm
 
-            # Find which row indices have numbering labels
-            labeled_cell_ids = set()
-            for t in project.text_items:
-                if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner' and t.parent_id:
-                    labeled_cell_ids.add(t.parent_id)
-            rows_with_labels = set()
-            for c in project.cells:
-                if c.id in labeled_cell_ids:
-                    rows_with_labels.add(c.row_index)
-
-            num_label_rows = len(rows_with_labels)
-            if num_label_rows > 0:
-                total_natural_height += num_label_rows * (label_row_h + gap_mm)
+        bands_top, bands_bottom, _left, _right = LayoutEngine._collect_group_bands(project)
+        for bucket in (bands_top, bands_bottom):
+            for labels in bucket.values():
+                for group_label in labels:
+                    total_natural_height += (
+                        LayoutEngine.group_label_thickness_mm(group_label)
+                        + group_label.gap_mm
+                    )
 
         # Add margins
         optimal_page_height = total_natural_height + project.margin_top_mm + project.margin_bottom_mm

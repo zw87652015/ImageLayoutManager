@@ -61,7 +61,8 @@ def main():
 
     # AA_UseHighDpiPixmaps was removed in PyQt6 (enabled by default)
     app = QApplication(sys.argv)
-    app.setApplicationName("Academic Figure Layout")
+    from src.version import APP_NAME
+    app.setApplicationName(APP_NAME)
 
     # Restore persisted font scale before building any widgets so the
     # initial layout uses the user's preferred size.
@@ -101,7 +102,10 @@ def main():
     if enable_agent_server:
         window.toggle_agent_server(True)
 
-    window.show()
+    # While the welcome launcher window is up, the main window stays
+    # hidden; _dismiss_welcome() reveals it (e.g. after a CLI file open).
+    if window.welcome_window is None:
+        window.show()
 
     # Offer to restore autosave snapshots left behind by a crashed
     # session. Deferred one event-loop turn so the window paints first.

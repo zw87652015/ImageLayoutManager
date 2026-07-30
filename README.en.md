@@ -176,12 +176,6 @@ SVG files are also supported and render as vector graphics in PDF and SVG export
 
 **DPI** controls output pixel dimensions for raster exports and the internal rendering resolution for PDF. It does not affect physical layout size.
 
-## Support
-
-If you find this project useful and would like to support its development, you can buy me a coffee via Alipay:
-
-<img src="assets/Alipay.jpg" alt="Alipay QR code" width="200"/>
-
 ## License
 
 The source code is licensed under Apache-2.0. See `LICENSE`.

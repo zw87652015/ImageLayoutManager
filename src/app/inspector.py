@@ -11,6 +11,7 @@ import math
 from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
+from src.app.wheel_guard import install_wheel_guard
 
 
 # Sentinel for "mixed values across a multi-selection". Inspector helpers
@@ -262,6 +263,7 @@ class CollapsibleSection(QWidget):
         outer.addWidget(sep)
 
         self._collapsed = False
+        self._anim: Optional[QPropertyAnimation] = None
         self._header.mousePressEvent = lambda e: self._toggle()
 
     def set_title(self, title: str) -> None:
@@ -270,11 +272,27 @@ class CollapsibleSection(QWidget):
     def _toggle(self) -> None:
         self.set_collapsed(not self._collapsed)
 
+    def _stop_anim(self) -> None:
+        """Cancel the in-flight height animation without running its
+        finished handler — a new toggle supersedes it, so its deferred
+        setVisible/setMaximumHeight must NOT clobber the newer state."""
+        anim = self._anim
+        self._anim = None
+        if anim is None:
+            return
+        try:
+            anim.finished.disconnect()
+            anim.stop()
+        except RuntimeError:
+            pass  # already deleted
+        anim.deleteLater()
+
     def set_collapsed(self, collapsed: bool, animate: bool = True) -> None:
         if self._collapsed == collapsed:
             return
         self._collapsed = collapsed
         self._chevron.setText("▸" if collapsed else "▾")
+        self._stop_anim()
 
         if not animate:
             self._body.setVisible(not collapsed)
@@ -282,26 +300,30 @@ class CollapsibleSection(QWidget):
             return
 
         if collapsed:
-            start_h = self._body.height()
-            self._body.setMaximumHeight(start_h)
-            anim = QPropertyAnimation(self._body, b"maximumHeight", self)
-            anim.setDuration(180)
-            anim.setStartValue(start_h)
-            anim.setEndValue(0)
-            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-            anim.finished.connect(lambda: self._body.setVisible(False))
-            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            end_h, on_done = 0, lambda: self._body.setVisible(False)
         else:
             self._body.setVisible(True)
-            self._body.setMaximumHeight(0)
-            target_h = self._body.sizeHint().height()
-            anim = QPropertyAnimation(self._body, b"maximumHeight", self)
-            anim.setDuration(180)
-            anim.setStartValue(0)
-            anim.setEndValue(target_h)
-            anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
-            anim.finished.connect(lambda: self._body.setMaximumHeight(16777215))
-            anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            end_h = self._body.sizeHint().height()
+            on_done = lambda: self._body.setMaximumHeight(16777215)
+        # Reverse smoothly from wherever a previous animation left off:
+        # height() already reflects the shrunken maxHeight mid-flight.
+        start_h = self._body.height()
+        self._body.setMaximumHeight(start_h)
+
+        anim = QPropertyAnimation(self._body, b"maximumHeight", self)
+        anim.setDuration(180)
+        anim.setStartValue(start_h)
+        anim.setEndValue(end_h)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        def _finished(anim=anim, on_done=on_done):
+            if self._anim is anim:
+                self._anim = None
+            on_done()
+
+        anim.finished.connect(_finished)
+        self._anim = anim
+        anim.start()
 
 
 class Inspector(QWidget):
@@ -321,6 +343,11 @@ class Inspector(QWidget):
     size_group_pinned_changed = pyqtSignal(str, float, float)      # (group_id, w_mm, h_mm) — 0 = auto
     size_group_rename_requested = pyqtSignal(str, str)             # (group_id, new_name)
     size_group_delete_requested = pyqtSignal(str)                  # group_id
+    # Selected numbering-label item (placement override / tier / style lock)
+    label_item_property_changed = pyqtSignal(str, dict)            # (text_item_id, changes)
+    # Group Label (spanning / row-title label) signals
+    group_label_property_changed = pyqtSignal(str, dict)           # (group_label_id, changes)
+    group_label_delete_requested = pyqtSignal(str)                 # group_label_id
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -333,6 +360,7 @@ class Inspector(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         outer.addWidget(scroll)
+        self._scroll = scroll
 
         self._lbl_registry: list[tuple[str, QLabel]] = []
 
@@ -467,6 +495,61 @@ class Inspector(QWidget):
         )
         self.project_layout.addRow(self._fl("lbl_label_placement"), self.label_placement_combo)
 
+        # Label Hierarchy (multi-level numbering for split panels)
+        self._sec_label_hierarchy = QLabel(tr("sec_label_hierarchy"))
+        self.project_layout.addRow(self._sec_label_hierarchy)
+
+        self.label_sub_scheme_combo = QComboBox()
+        self._label_sub_scheme_options = [("opt_scheme_none", "")] + [
+            (None, s) for s in self._numbering_schemes()
+        ]
+        for key, val in self._label_sub_scheme_options:
+            self.label_sub_scheme_combo.addItem(tr(key) if key else val)
+        self.label_sub_scheme_combo.currentIndexChanged.connect(
+            lambda i: self.project_property_changed.emit(
+                {"label_scheme_sub": self._label_sub_scheme_options[i][1]}
+            )
+        )
+        self.project_layout.addRow(self._fl("lbl_sub_scheme"), self.label_sub_scheme_combo)
+
+        self.label_sub_prefix_chk = QCheckBox(tr("chk_sub_prefix"))
+        self.label_sub_prefix_chk.toggled.connect(
+            lambda v: self.project_property_changed.emit({"label_sub_prefix_parent": v})
+        )
+        self.project_layout.addRow("", self.label_sub_prefix_chk)
+
+        # Panel Title Defaults (title tier: descriptive captions)
+        self._sec_title_tier = QLabel(tr("sec_title_tier"))
+        self.project_layout.addRow(self._sec_title_tier)
+
+        self.title_label_font = QFontComboBox()
+        self.title_label_font.setFontFilters(QFontComboBox.FontFilter.ScalableFonts)
+        self.title_label_font.currentTextChanged.connect(
+            lambda t: self.project_property_changed.emit({"title_label_font_family": t})
+        )
+        self.project_layout.addRow(self._fl("lbl_font"), self.title_label_font)
+
+        self.title_label_size = QSpinBox()
+        self.title_label_size.setRange(1, 72)
+        self.title_label_size.setValue(10)
+        self.title_label_size.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"title_label_font_size": v})
+        )
+        self.project_layout.addRow(self._fl("lbl_size"), self.title_label_size)
+
+        self.title_label_bold = QCheckBox(tr("chk_bold"))
+        self.title_label_bold.toggled.connect(
+            lambda v: self.project_property_changed.emit(
+                {"title_label_font_weight": "bold" if v else "normal"}
+            )
+        )
+        self.project_layout.addRow("", self.title_label_bold)
+
+        self.title_label_color = ColorPickerWidget()
+        self.title_label_color.colorChanged.connect(
+            lambda c: self.project_property_changed.emit({"title_label_color": c})
+        )
+        self.project_layout.addRow(self._fl("lbl_color"), self.title_label_color)
 
         # Gap between cells
         self._sec_layout = QLabel("<b>Layout</b>")
@@ -703,8 +786,15 @@ class Inspector(QWidget):
         self.scale_bar_layout.addRow(self._fl("lbl_thickness"), self.scale_bar_thickness)
         
         self.scale_bar_position = QComboBox()
-        self.scale_bar_position.addItems(["bottom_left", "bottom_center", "bottom_right"])
-        self.scale_bar_position.currentTextChanged.connect(self._emit_scale_bar)
+        # (i18n_key, stored value) — display translates, data stays stable
+        self._scale_bar_position_options = [
+            ("pos_bottom_left",   "bottom_left"),
+            ("pos_bottom_center", "bottom_center"),
+            ("pos_bottom_right",  "bottom_right"),
+        ]
+        self.scale_bar_position.addItems(
+            [tr(k) for k, _ in self._scale_bar_position_options])
+        self.scale_bar_position.currentIndexChanged.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self._fl("lbl_position"), self.scale_bar_position)
         
         self.scale_bar_offset_x = QDoubleSpinBox()
@@ -759,7 +849,7 @@ class Inspector(QWidget):
         self.label_cell_layout.addRow(self._fl("lbl_text"), self.label_text_edit)
 
         self.label_scheme = QComboBox()
-        self.label_scheme.addItems(["(a)", "(A)", "a", "A"])
+        self.label_scheme.addItems(self._numbering_schemes())
         self.label_scheme.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_scheme": t})
         )
@@ -844,6 +934,216 @@ class Inspector(QWidget):
 
         self.layout.addWidget(self.label_cell_group)
         self.label_cell_group.hide()
+
+        # --- Selected Label Item Group (per-label overrides) ---
+        # Shared by the label_cell and text views so a numbering label keeps
+        # the same editing surface no matter where it sits.
+        self.label_item_group = CollapsibleSection(tr("grp_label_item"))
+        self.label_item_layout = self.label_item_group._form
+        self._label_item_id = None
+
+        self.label_item_placement_combo = QComboBox()
+        self._label_item_placement_options = [
+            ("opt_placement_inherit", None),
+            ("placement_in_cell",     "in_cell"),
+            ("placement_row_above",   "label_row_above"),
+            ("placement_row_below",   "label_row_below"),
+            ("placement_col_left",    "label_col_left"),
+            ("placement_col_right",   "label_col_right"),
+        ]
+        for key, _val in self._label_item_placement_options:
+            self.label_item_placement_combo.addItem(tr(key))
+        self.label_item_placement_combo.currentIndexChanged.connect(
+            lambda i: self._emit_label_item_change(
+                {"placement": self._label_item_placement_options[i][1]}
+            )
+        )
+        self.label_item_layout.addRow(self._fl("lbl_label_placement"), self.label_item_placement_combo)
+
+        self.label_item_tier_combo = QComboBox()
+        self._label_item_tier_options = [
+            ("opt_tier_panel", "panel"),
+            ("opt_tier_title", "title"),
+        ]
+        for key, _val in self._label_item_tier_options:
+            self.label_item_tier_combo.addItem(tr(key))
+        self.label_item_tier_combo.currentIndexChanged.connect(
+            lambda i: self._emit_label_item_change(
+                {"label_tier": self._label_item_tier_options[i][1]}
+            )
+        )
+        self.label_item_layout.addRow(self._fl("lbl_tier"), self.label_item_tier_combo)
+
+        self.label_item_lock_chk = QCheckBox(tr("chk_style_lock"))
+        self.label_item_lock_chk.setToolTip(tr("tip_style_lock"))
+        self.label_item_lock_chk.toggled.connect(
+            lambda v: self._emit_label_item_change({"style_locked": v})
+        )
+        self.label_item_layout.addRow("", self.label_item_lock_chk)
+
+        self.label_item_rotate_btn = QPushButton(tr("btn_rotate_label"))
+        self.label_item_rotate_btn.clicked.connect(self._on_label_item_rotate)
+        self.label_item_layout.addRow("", self.label_item_rotate_btn)
+
+        self.layout.addWidget(self.label_item_group)
+        self.label_item_group.hide()
+
+        # --- Group Label Editor Group (spanning / row-title labels) ---
+        self.group_label_group = CollapsibleSection(tr("grp_group_label"))
+        self.group_label_layout = self.group_label_group._form
+        self._group_label_id = None
+
+        self.gl_text_edit = QLineEdit()
+        self.gl_text_edit.setPlaceholderText(tr("placeholder_group_label"))
+        self.gl_text_edit.editingFinished.connect(
+            lambda: self._emit_group_label_change({"text": self.gl_text_edit.text()})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_text"), self.gl_text_edit)
+
+        self.gl_side_combo = QComboBox()
+        self._gl_side_options = [
+            ("placement_row_above", "top"),
+            ("placement_row_below", "bottom"),
+            ("placement_col_left",  "left"),
+            ("placement_col_right", "right"),
+        ]
+        for key, _val in self._gl_side_options:
+            self.gl_side_combo.addItem(tr(key))
+        self.gl_side_combo.currentIndexChanged.connect(
+            lambda i: self._emit_group_label_change({"side": self._gl_side_options[i][1]})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_side"), self.gl_side_combo)
+
+        self.gl_align_combo = QComboBox()
+        self.gl_align_combo.addItems([tr("opt_align_left"), tr("opt_align_center"), tr("opt_align_right")])
+        self.gl_align_combo.currentIndexChanged.connect(
+            lambda i: self._emit_group_label_change(
+                {"align": ["left", "center", "right"][i]}
+            )
+        )
+        self.group_label_layout.addRow(self._fl("lbl_align"), self.gl_align_combo)
+
+        self.gl_thickness_spin = QDoubleSpinBox()
+        self.gl_thickness_spin.setRange(0.0, 60.0)
+        self.gl_thickness_spin.setSingleStep(0.5)
+        self.gl_thickness_spin.setDecimals(1)
+        self.gl_thickness_spin.setSuffix(" mm")
+        self.gl_thickness_spin.setSpecialValueText(tr("special_auto"))
+        self.gl_thickness_spin.valueChanged.connect(
+            lambda v: self._emit_group_label_change({"thickness_mm": v})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_thickness"), self.gl_thickness_spin)
+
+        self.gl_gap_spin = QDoubleSpinBox()
+        self.gl_gap_spin.setRange(0.0, 20.0)
+        self.gl_gap_spin.setSingleStep(0.25)
+        self.gl_gap_spin.setDecimals(2)
+        self.gl_gap_spin.setSuffix(" mm")
+        self.gl_gap_spin.valueChanged.connect(
+            lambda v: self._emit_group_label_change({"gap_mm": v})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_gap"), self.gl_gap_spin)
+
+        self.gl_level_spin = QSpinBox()
+        self.gl_level_spin.setRange(0, 5)
+        self.gl_level_spin.valueChanged.connect(
+            lambda v: self._emit_group_label_change({"level": v})
+        )
+        self.gl_level_label = self._fl("lbl_level")
+        self.group_label_layout.addRow(self.gl_level_label, self.gl_level_spin)
+
+        self.gl_rotation_spin = QDoubleSpinBox()
+        self.gl_rotation_spin.setRange(-1.0, 360.0)
+        self.gl_rotation_spin.setSingleStep(90.0)
+        self.gl_rotation_spin.setDecimals(1)
+        self.gl_rotation_spin.setSpecialValueText(tr("special_auto"))
+        self.gl_rotation_spin.setSuffix(" °")
+        self.gl_rotation_spin.valueChanged.connect(
+            lambda v: self._emit_group_label_change(
+                {"rotation": None if v < 0 else v}
+            )
+        )
+        self.group_label_layout.addRow(self._fl("lbl_rotation"), self.gl_rotation_spin)
+
+        self.gl_font_combo = QFontComboBox()
+        self.gl_font_combo.setFontFilters(QFontComboBox.FontFilter.ScalableFonts)
+        self.gl_font_combo.currentTextChanged.connect(
+            lambda t: self._emit_group_label_change({"font_family": t})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_font"), self.gl_font_combo)
+
+        self.gl_size_spin = QSpinBox()
+        self.gl_size_spin.setRange(1, 72)
+        self.gl_size_spin.valueChanged.connect(
+            lambda v: self._emit_group_label_change({"font_size_pt": v})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_size"), self.gl_size_spin)
+
+        self.gl_bold_chk = QCheckBox(tr("chk_bold"))
+        self.gl_bold_chk.toggled.connect(
+            lambda v: self._emit_group_label_change(
+                {"font_weight": "bold" if v else "normal"}
+            )
+        )
+        self.group_label_layout.addRow("", self.gl_bold_chk)
+
+        self.gl_color = ColorPickerWidget()
+        self.gl_color.colorChanged.connect(
+            lambda c: self._emit_group_label_change({"color": c})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_color"), self.gl_color)
+
+        self._sec_gl_bracket = QLabel(tr("sec_bracket"))
+        self.group_label_layout.addRow(self._sec_gl_bracket)
+
+        self.gl_bracket_combo = QComboBox()
+        self._gl_bracket_options = [
+            ("bracket_none",    "none"),
+            ("bracket_line",    "line"),
+            ("bracket_bracket", "bracket"),
+            ("bracket_brace",   "brace"),
+        ]
+        for key, _val in self._gl_bracket_options:
+            self.gl_bracket_combo.addItem(tr(key))
+        self.gl_bracket_combo.currentIndexChanged.connect(
+            lambda i: self._emit_group_label_change(
+                {"bracket_style": self._gl_bracket_options[i][1]}
+            )
+        )
+        self.group_label_layout.addRow(self._fl("lbl_bracket_style"), self.gl_bracket_combo)
+
+        self.gl_bracket_width_spin = QDoubleSpinBox()
+        self.gl_bracket_width_spin.setRange(0.25, 10.0)
+        self.gl_bracket_width_spin.setSingleStep(0.25)
+        self.gl_bracket_width_spin.setDecimals(2)
+        self.gl_bracket_width_spin.setSuffix(" pt")
+        self.gl_bracket_width_spin.valueChanged.connect(
+            lambda v: self._emit_group_label_change({"bracket_width_pt": v})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_line_width"), self.gl_bracket_width_spin)
+
+        self.gl_bracket_tick_spin = QDoubleSpinBox()
+        self.gl_bracket_tick_spin.setRange(0.0, 10.0)
+        self.gl_bracket_tick_spin.setSingleStep(0.25)
+        self.gl_bracket_tick_spin.setDecimals(2)
+        self.gl_bracket_tick_spin.setSuffix(" mm")
+        self.gl_bracket_tick_spin.valueChanged.connect(
+            lambda v: self._emit_group_label_change({"bracket_tick_mm": v})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_tick"), self.gl_bracket_tick_spin)
+
+        self.gl_bracket_color = ColorPickerWidget()
+        self.gl_bracket_color.colorChanged.connect(
+            lambda c: self._emit_group_label_change({"bracket_color": c})
+        )
+        self.group_label_layout.addRow(self._fl("lbl_color"), self.gl_bracket_color)
+
+        self.gl_delete_btn = QPushButton(tr("btn_delete"))
+        self.gl_delete_btn.clicked.connect(self._on_group_label_delete)
+        self.group_label_layout.addRow("", self.gl_delete_btn)
+
+        self.layout.addWidget(self.group_label_group)
+        self.group_label_group.hide()
 
         # --- Row Properties Group ---
         self.row_group = CollapsibleSection("Row Settings")
@@ -941,9 +1241,11 @@ class Inspector(QWidget):
         self.pip_layout.addRow(self.pip_border_enabled)
 
         self.pip_border_style = QComboBox()
+        self._pip_border_style_values = ["solid", "dashed"]
         self.pip_border_style.addItems([tr("opt_border_solid"), tr("opt_border_dashed")])
-        self.pip_border_style.currentTextChanged.connect(
-            lambda t: self.pip_property_changed.emit({"border_style": t})
+        self.pip_border_style.currentIndexChanged.connect(
+            lambda i: self.pip_property_changed.emit(
+                {"border_style": self._pip_border_style_values[max(0, i)]})
         )
         self.pip_layout.addRow(self._fl("lbl_border_style"), self.pip_border_style)
 
@@ -1016,8 +1318,8 @@ class Inspector(QWidget):
         self.text_color.colorChanged.connect(self._on_text_color_changed)
         color_row.addWidget(self.text_color)
         
-        self.apply_color_btn = QPushButton("Apply to All")
-        self.apply_color_btn.setToolTip("Apply this color to all labels in the same group")
+        self.apply_color_btn = QPushButton(tr("btn_apply_all"))
+        self.apply_color_btn.setToolTip(tr("tip_apply_all"))
         self.apply_color_btn.clicked.connect(self._on_apply_color_to_group)
         color_row.addWidget(self.apply_color_btn)
         
@@ -1106,7 +1408,7 @@ class Inspector(QWidget):
 
         # Scheme selector — only shown for in-cell numbering labels (not corner labels)
         self._incell_scheme = QComboBox()
-        self._incell_scheme.addItems(["(a)", "(A)", "a", "A"])
+        self._incell_scheme.addItems(self._numbering_schemes())
         self._incell_scheme.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_scheme": t})
         )
@@ -1138,6 +1440,9 @@ class Inspector(QWidget):
         for section in self.findChildren(CollapsibleSection):
             section.set_collapsed(True, animate=False)
 
+        # Scrolling the panel must never edit the value under the cursor.
+        self._wheel_guard = install_wheel_guard(self, self._scroll)
+
     def _fl(self, key: str) -> QLabel:
         """Create a form-row QLabel, register it for retranslation, and return it."""
         lbl = QLabel(tr(key))
@@ -1157,10 +1462,15 @@ class Inspector(QWidget):
         self._sec_grid.setText(tr("sec_grid"))
         self._sec_corner.setText(tr("sec_corner_labels"))
         self._sec_label_placement.setText(tr("sec_label_placement"))
+        self._sec_label_hierarchy.setText(tr("sec_label_hierarchy"))
+        self._sec_title_tier.setText(tr("sec_title_tier"))
+        self._sec_gl_bracket.setText(tr("sec_bracket"))
         self._sec_layout.setText(tr("sec_layout"))
         self.freeform_section_label.setText(tr("sec_freeform"))
         self._sec_grid_override.setText(tr("sec_grid_override"))
         self._sec_padding.setText(tr("sec_padding"))
+        self.label_item_group.set_title(tr("grp_label_item"))
+        self.group_label_group.set_title(tr("grp_group_label"))
         self.scale_bar_group.set_title(tr("grp_scale_bar"))
         self.svg_normalize_group.set_title(tr("grp_svg_normalize"))
         self.svg_normalize_chk.setText(tr("chk_svg_normalize"))
@@ -1192,8 +1502,15 @@ class Inspector(QWidget):
         _retranslate_combo(self.row_alignment,      [tr("opt_row_left"),     tr("opt_row_center"),    tr("opt_row_right")])
         _retranslate_combo(self.label_align,        [tr("opt_align_left"),   tr("opt_align_center"),  tr("opt_align_right")])
         _retranslate_combo(self.label_placement_combo, [tr(key) for key, _ in self._label_placement_options])
+        _retranslate_combo(self.label_item_placement_combo, [tr(key) for key, _ in self._label_item_placement_options])
+        _retranslate_combo(self.label_item_tier_combo, [tr(key) for key, _ in self._label_item_tier_options])
+        _retranslate_combo(self.label_sub_scheme_combo, [tr(k) if k else v for k, v in self._label_sub_scheme_options])
+        _retranslate_combo(self.gl_side_combo, [tr(key) for key, _ in self._gl_side_options])
+        _retranslate_combo(self.gl_bracket_combo, [tr(key) for key, _ in self._gl_bracket_options])
+        _retranslate_combo(self.gl_align_combo, [tr("opt_align_left"), tr("opt_align_center"), tr("opt_align_right")])
         _retranslate_combo(self.page_preset,        [tr(k) for k in self._page_preset_options])
         _retranslate_combo(self.pip_border_style,   [tr("opt_border_solid"), tr("opt_border_dashed")])
+        _retranslate_combo(self.scale_bar_position, [tr(k) for k, _ in self._scale_bar_position_options])
         
         self.scale_bar_custom_text.setPlaceholderText(tr("placeholder_scale_bar_text"))
         self.label_text_edit.setPlaceholderText(tr("placeholder_label_text"))
@@ -1205,6 +1522,23 @@ class Inspector(QWidget):
         self.corner_label_color.retranslate_ui()
         self.scale_bar_color.retranslate_ui()
         self.label_color.retranslate_ui()
+        self.title_label_color.retranslate_ui()
+        self.gl_color.retranslate_ui()
+        self.gl_bracket_color.retranslate_ui()
+
+        self.label_item_lock_chk.setText(tr("chk_style_lock"))
+        self.label_item_rotate_btn.setText(tr("btn_rotate_label"))
+        self.apply_color_btn.setText(tr("btn_apply_all"))
+        self.apply_color_btn.setToolTip(tr("tip_apply_all"))
+        self.label_sub_prefix_chk.setText(tr("chk_sub_prefix"))
+        self.title_label_bold.setText(tr("chk_bold"))
+        self.gl_bold_chk.setText(tr("chk_bold"))
+        self.gl_delete_btn.setText(tr("btn_delete"))
+        self.gl_level_label.setToolTip(tr("tip_lbl_level"))
+        self.gl_level_spin.setToolTip(tr("tip_lbl_level"))
+        self.gl_text_edit.setPlaceholderText(tr("placeholder_group_label"))
+        self.gl_thickness_spin.setSpecialValueText(tr("special_auto"))
+        self.gl_rotation_spin.setSpecialValueText(tr("special_auto"))
 
         # Re-translate the two sentinel items in the size-group combo
         # (group names are user data and stay unchanged).
@@ -1517,7 +1851,8 @@ class Inspector(QWidget):
             "scale_bar_color": color_hex,
             "scale_bar_show_text": self.scale_bar_show_text.isChecked(),
             "scale_bar_thickness_mm": self.scale_bar_thickness.value(),
-            "scale_bar_position": self.scale_bar_position.currentText(),
+            "scale_bar_position": self._scale_bar_position_options[
+                max(0, self.scale_bar_position.currentIndex())][1],
             "scale_bar_offset_x": self.scale_bar_offset_x.value(),
             "scale_bar_offset_y": self.scale_bar_offset_y.value(),
             "scale_bar_custom_text": custom_text if custom_text else None,
@@ -1652,6 +1987,82 @@ class Inspector(QWidget):
         if self._current_label_text_id:
             self.label_text_changed.emit(self._current_label_text_id, self.label_text_edit.text())
 
+    # --- Label item (per-label overrides) helpers ---
+
+    @staticmethod
+    def _numbering_schemes() -> list:
+        from src.utils.label_numbering import SCHEMES
+        return list(SCHEMES)
+
+    def _emit_label_item_change(self, changes: dict):
+        if self._label_item_id:
+            self.label_item_property_changed.emit(self._label_item_id, dict(changes))
+
+    def _on_label_item_rotate(self):
+        """Cycle the selected label's rotation by 90°."""
+        new_rotation = (getattr(self, "_label_item_rotation", 0.0) + 90.0) % 360.0
+        self._emit_label_item_change({"rotation": new_rotation})
+
+    def _populate_label_item_group(self, text_item_id, data: dict):
+        """Fill the per-label group from a text-item dict and show it."""
+        self.blockSignals(True)
+        self._label_item_id = text_item_id
+        self._label_item_rotation = float(data.get("rotation", 0.0) or 0.0)
+        placement = data.get("placement", None)
+        idx = next(
+            (i for i, (_k, v) in enumerate(self._label_item_placement_options)
+             if v == placement),
+            0,
+        )
+        self.label_item_placement_combo.setCurrentIndex(idx)
+        tier = data.get("label_tier", "panel")
+        self.label_item_tier_combo.setCurrentIndex(1 if tier == "title" else 0)
+        self.label_item_lock_chk.setChecked(bool(data.get("style_locked", False)))
+        self.blockSignals(False)
+        self.label_item_group.show()
+
+    # --- Group label helpers ---
+
+    def _emit_group_label_change(self, changes: dict):
+        if self._group_label_id:
+            self.group_label_property_changed.emit(self._group_label_id, dict(changes))
+
+    def _on_group_label_delete(self):
+        if self._group_label_id:
+            self.group_label_delete_requested.emit(self._group_label_id)
+
+    def _populate_group_label_group(self, data: dict):
+        """Fill the group-label editor from a GroupLabel dict and show it."""
+        self.blockSignals(True)
+        self._group_label_id = data.get("id")
+        self.gl_text_edit.setText(data.get("text", ""))
+        side = data.get("side", "top")
+        self.gl_side_combo.setCurrentIndex(
+            next((i for i, (_k, v) in enumerate(self._gl_side_options) if v == side), 0)
+        )
+        align_map = {"left": 0, "center": 1, "right": 2}
+        self.gl_align_combo.setCurrentIndex(align_map.get(data.get("align", "center"), 1))
+        self.gl_thickness_spin.setValue(float(data.get("thickness_mm", 0.0)))
+        self.gl_gap_spin.setValue(float(data.get("gap_mm", 1.0)))
+        self.gl_level_spin.setValue(int(data.get("level", 0)))
+        rotation = data.get("rotation")
+        self.gl_rotation_spin.setValue(-1.0 if rotation is None else float(rotation))
+        self.gl_font_combo.setCurrentText(data.get("font_family", "Arial"))
+        self.gl_size_spin.setValue(int(data.get("font_size_pt", 12)))
+        self.gl_bold_chk.setChecked(data.get("font_weight", "bold") == "bold")
+        self.gl_color.set_color(data.get("color", "#000000"))
+        bracket = data.get("bracket_style", "none")
+        self.gl_bracket_combo.setCurrentIndex(
+            next((i for i, (_k, v) in enumerate(self._gl_bracket_options) if v == bracket), 0)
+        )
+        self.gl_bracket_width_spin.setValue(float(data.get("bracket_width_pt", 1.0)))
+        self.gl_bracket_tick_spin.setValue(float(data.get("bracket_tick_mm", 1.5)))
+        self.gl_bracket_color.set_color(data.get("bracket_color", "#000000"))
+        self.blockSignals(False)
+        # Startup collapses every section; selecting a band must reveal it.
+        self.group_label_group.set_collapsed(False, animate=False)
+        self.group_label_group.show()
+
     def set_selection(self, item_type, data=None, row_data=None, project_data=None):
         """
         item_type: 'cell' | 'label_cell' | 'text' | 'pip' | 'multi_cell' | None
@@ -1664,6 +2075,8 @@ class Inspector(QWidget):
             self.project_group.hide()
             self.text_group.hide()
             self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.group_label_group.hide()
             self.row_group.hide()
             self.subcell_group.hide()
             self.pip_group.hide()
@@ -1703,6 +2116,8 @@ class Inspector(QWidget):
             self.cell_group.hide()
             self.text_group.hide()
             self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.group_label_group.hide()
             self.row_group.hide()
             self.subcell_group.hide()
             self.pip_group.hide()
@@ -1726,6 +2141,7 @@ class Inspector(QWidget):
             self.subcell_group.hide()
             self.scale_bar_group.hide()
             self.svg_normalize_group.hide()
+            self.group_label_group.hide()
             self.label_cell_group.show()
 
             if data:
@@ -1746,6 +2162,27 @@ class Inspector(QWidget):
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
                 self.label_col_width_spin.setValue(data.get("label_col_width", 0.0))
                 self.blockSignals(False)
+
+                if data.get("text_item_id"):
+                    self._populate_label_item_group(data["text_item_id"], data)
+                else:
+                    self.label_item_group.hide()
+            return
+
+        if item_type == 'group_label':
+            self.no_selection_label.hide()
+            self.project_group.hide()
+            self.cell_group.hide()
+            self.text_group.hide()
+            self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.row_group.hide()
+            self.subcell_group.hide()
+            self.pip_group.hide()
+            self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()
+            if data:
+                self._populate_group_label_group(data)
             return
 
         if item_type == 'cell':
@@ -1754,6 +2191,8 @@ class Inspector(QWidget):
             self.text_group.hide()
             self.pip_group.hide()
             self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.group_label_group.hide()
             self.cell_group.show()
             self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
 
@@ -1855,6 +2294,7 @@ class Inspector(QWidget):
             self.subcell_group.hide()
             self.scale_bar_group.hide()
             self.svg_normalize_group.hide()
+            self.group_label_group.hide()
             self.text_group.show()
             
             self.blockSignals(True)
@@ -1915,6 +2355,14 @@ class Inspector(QWidget):
             self.text_bg_color.set_color(data.get("bg_color", "#FFFFFF"))
             self.text_bg_padding.setValue(float(data.get("bg_padding_mm", 0.6)))
 
+            # Per-label overrides only make sense for cell-scoped numbering
+            # labels; corner labels and floating text have neither.
+            if (is_cell_scoped and self._current_text_subtype != "corner"
+                    and data.get("id")):
+                self._populate_label_item_group(data["id"], data)
+            else:
+                self.label_item_group.hide()
+
             self.blockSignals(False)
             
         elif item_type == 'pip':
@@ -1925,6 +2373,8 @@ class Inspector(QWidget):
             self.subcell_group.hide()
             self.text_group.hide()
             self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.group_label_group.hide()
             self.svg_normalize_group.hide()
             self.pip_group.show()
 
@@ -1934,7 +2384,10 @@ class Inspector(QWidget):
             self.pip_w.setValue(float(data.get("w", 0.25)) * 100.0)
             self.pip_h.setValue(float(data.get("h", 0.25)) * 100.0)
             self.pip_border_enabled.setChecked(data.get("border_enabled", True))
-            self.pip_border_style.setCurrentText(data.get("border_style", "solid"))
+            _style = data.get("border_style", "solid")
+            self.pip_border_style.setCurrentIndex(
+                self._pip_border_style_values.index(_style)
+                if _style in self._pip_border_style_values else 0)
             self.pip_border_width.setValue(float(data.get("border_width_pt", 1.5)))
             self.pip_border_color.set_color(data.get("border_color", "#FFFFFF"))
             self.pip_content_padding.setValue(float(data.get("content_padding_pt", 0.0)))
@@ -1952,6 +2405,8 @@ class Inspector(QWidget):
             self.subcell_group.hide()
             self.text_group.hide()
             self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.group_label_group.hide()
             self.pip_group.hide()
             self.scale_bar_group.hide()
             self.svg_normalize_group.hide()
@@ -1996,6 +2451,28 @@ class Inspector(QWidget):
                 self.label_col_width_spin.setValue(
                     float(effective_project_data.get("label_col_width", 10.0))
                 )
+
+                # Label hierarchy
+                sub_scheme_val = effective_project_data.get("label_scheme_sub", "")
+                sub_idx = next(
+                    (i for i, (_k, v) in enumerate(self._label_sub_scheme_options)
+                     if v == sub_scheme_val),
+                    0,
+                )
+                self.label_sub_scheme_combo.setCurrentIndex(sub_idx)
+                self.label_sub_prefix_chk.setChecked(
+                    bool(effective_project_data.get("label_sub_prefix_parent", False))
+                )
+
+                # Panel title defaults
+                self.title_label_font.setCurrentText(
+                    effective_project_data.get("title_label_font_family", "Arial"))
+                self.title_label_size.setValue(
+                    int(effective_project_data.get("title_label_font_size", 10)))
+                self.title_label_bold.setChecked(
+                    effective_project_data.get("title_label_font_weight", "normal") == "bold")
+                self.title_label_color.set_color(
+                    effective_project_data.get("title_label_color", "#000000"))
 
                 self.blockSignals(False)
             else:
@@ -2042,7 +2519,10 @@ class Inspector(QWidget):
         self.scale_bar_custom_text.setText(data.get("scale_bar_custom_text", "") or "")
         self.scale_bar_text_size.setValue(data.get("scale_bar_text_size_mm", 2.0))
         self.scale_bar_thickness.setValue(data.get("scale_bar_thickness_mm", 0.5))
-        self.scale_bar_position.setCurrentText(data.get("scale_bar_position", "bottom_right"))
+        _pos = data.get("scale_bar_position", "bottom_right")
+        _pos_values = [v for _, v in self._scale_bar_position_options]
+        self.scale_bar_position.setCurrentIndex(
+            _pos_values.index(_pos) if _pos in _pos_values else 2)
         self.scale_bar_offset_x.setValue(data.get("scale_bar_offset_x", 2.0))
         self.scale_bar_offset_y.setValue(data.get("scale_bar_offset_y", 2.0))
         

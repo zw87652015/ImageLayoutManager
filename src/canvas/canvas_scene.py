@@ -1,6 +1,8 @@
-from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent
-from PyQt6.QtGui import QColor, QPen, QBrush, QPainter, QPainterPath
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF
+import copy
+
+from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent, QGraphicsSimpleTextItem
+from PyQt6.QtGui import QColor, QFont, QPen, QBrush, QPainter, QPainterPath
+from PyQt6.QtCore import Qt, QEasingCurve, QPointF, pyqtSignal, QRectF, QVariantAnimation
 
 from src.model.data_model import Project, Cell
 from src.canvas.cell_item import CellItem
@@ -40,12 +42,17 @@ class CanvasScene(QGraphicsScene):
     pip_origin_changed = pyqtSignal(str, str, object, object)    # cell_id, pip_id, old_crop tuple, new_crop tuple
     pip_removed = pyqtSignal(str, str)  # cell_id, pip_id
     pip_context_menu = pyqtSignal(str, str, object)  # cell_id, pip_id, screen_pos (QPointF)
+    group_label_double_clicked = pyqtSignal(str)  # group_label_id
+    group_label_side_dropped = pyqtSignal(str, str)  # group_label_id, new side
+    group_label_level_dropped = pyqtSignal(str, int)  # group_label_id, new level
+    label_placement_dropped = pyqtSignal(str, str)  # text_item_id, new placement
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.project = None
         self.cell_items = {} # id -> CellItem
         self.label_cell_items = {} # "label_{cell_id}" -> CellItem (label-only cells)
+        self.group_label_items = {} # group_label_id -> GroupLabelItem
         self.text_items = {} # id -> TextGraphicsItem
         self._add_buttons = [] # list of AddButtonItem
         self._cell_data_cache = {}  # cell_id -> fingerprint tuple for change detection
@@ -72,6 +79,20 @@ class CanvasScene(QGraphicsScene):
         self._snap_line_items = []
         self._divider_items = []  # list of DividerItem
         self._drag_target_cell = None  # CellItem currently under an external file drag
+        # Group-label re-side / restack drag: dict of hint items + state
+        self._gl_drag_hints = None
+        # Strip-label placement drag state (owned here; label cells forward events)
+        self._label_drag = None
+        # Post-drop tracer: ghost letter tweening to its final spot
+        self._label_tracer = None
+        # Hover reflow preview: which speculative placement is shown, if any
+        self._label_preview_active = None
+        self._label_real_project = None
+        # True while applying/restoring the preview (suppresses drag cancel)
+        self._label_preview_transitioning = False
+        # Split-depth cue: dashed outline of a selected subcell's parent
+        self._parent_hint = None
+        self.selectionChanged.connect(self._update_parent_hint)
 
         # Export region: view/editable model proxy. The item is created on-demand
         # when project.export_region is set or when user enters "defining" mode.
@@ -169,6 +190,7 @@ class CanvasScene(QGraphicsScene):
         # explicitly invalidated so Qt calls their paint() again.
         for item in (list(self.cell_items.values())
                      + list(self.label_cell_items.values())
+                     + list(self.group_label_items.values())
                      + list(self.text_items.values())):
             item.update()
 
@@ -209,6 +231,11 @@ class CanvasScene(QGraphicsScene):
         )
         self.margin_item.setRect(m_rect)
             
+        # An in-flight label drag references live hint items; abort it first
+        # (except while we ARE the drag's hover preview re-layout).
+        if (self._label_preview_active is None
+                and not self._label_preview_transitioning):
+            self.label_drag_cancel()
         layout_result = LayoutEngine.calculate_layout(self.project)
         self._last_layout_result = layout_result
         
@@ -322,21 +349,18 @@ class CanvasScene(QGraphicsScene):
 
         # Sync Label Cell Items (out-of-cell label placements)
         label_rects = getattr(layout_result, 'label_rects', {})
-        placement = getattr(self.project, 'label_placement', 'in_cell')
-        label_row_above = placement in ('label_row_above', 'label_row_below', 'label_col_left', 'label_col_right')
 
-        # Build a map of cell_id -> numbering label text from existing TextItems
-        numbering_texts = {}
-        if label_row_above:
-            for t in self.project.text_items:
-                if t.scope == 'cell' and t.subtype != 'corner' and t.parent_id:
-                    numbering_texts[t.parent_id] = t.text
+        # Cell labels that live in their own strip. Styling follows each
+        # label's own fields so panel letters and titles can differ.
+        strip_labels = {}
+        for t in self.project.text_items:
+            if t.scope != 'cell' or t.subtype == 'corner' or not t.parent_id:
+                continue
+            if t.parent_id in label_rects:
+                strip_labels[t.parent_id] = t
 
         # Determine which label cell IDs should exist
-        expected_label_ids = set()
-        if label_row_above:
-            for cell_id in label_rects:
-                expected_label_ids.add(f"label_{cell_id}")
+        expected_label_ids = {f"label_{cell_id}" for cell_id in strip_labels}
 
         # Remove stale label cells
         stale = set(self.label_cell_items.keys()) - expected_label_ids
@@ -345,7 +369,8 @@ class CanvasScene(QGraphicsScene):
             del self.label_cell_items[lid]
 
         # Add/Update label cells
-        for cell_id, (lx, ly, lw, lh) in label_rects.items():
+        for cell_id, text_model in strip_labels.items():
+            lx, ly, lw, lh = label_rects[cell_id]
             lid = f"label_{cell_id}"
             if lid not in self.label_cell_items:
                 litem = CellItem(lid)
@@ -358,15 +383,19 @@ class CanvasScene(QGraphicsScene):
             litem = self.label_cell_items[lid]
             litem.setRect(0, 0, lw, lh)
             litem.setPos(lx, ly)
-            litem.label_text = numbering_texts.get(cell_id, "")
-            litem.label_font_family = self.project.label_font_family
-            litem.label_font_size = self.project.label_font_size
-            litem.label_font_weight = self.project.label_font_weight
-            litem.label_color = self.project.label_color
+            litem.label_text = text_model.text
+            litem.label_font_family = text_model.font_family
+            litem.label_font_size = text_model.font_size_pt
+            litem.label_font_weight = text_model.font_weight
+            litem.label_color = text_model.color
             litem.label_align = getattr(self.project, 'label_align', 'center')
             litem.label_offset_x = getattr(self.project, 'label_offset_x', 0.0)
             litem.label_offset_y = getattr(self.project, 'label_offset_y', 0.0)
+            litem.label_rotation = getattr(text_model, 'rotation', 0.0) or 0.0
+            litem.label_text_item_id = text_model.id
             litem.update()
+
+        self._sync_group_label_items(layout_result)
             
         # Sync Text Items
         existing_text_ids = set(self.text_items.keys())
@@ -403,11 +432,10 @@ class CanvasScene(QGraphicsScene):
             
             # Position logic: cell-scoped labels follow their parent cell
             if text_model.scope == "cell" and text_model.parent_id:
-                # In label_row_above mode, numbering labels are rendered by label cells directly
-                # so hide the TextItem to avoid duplicate rendering
+                # Labels living in their own strip are drawn by the label cell,
+                # so hide the TextItem to avoid rendering them twice.
                 if (
-                    label_row_above
-                    and text_model.subtype != 'corner'
+                    text_model.subtype != 'corner'
                     and text_model.parent_id in label_rects
                 ):
                     t_item.setVisible(False)
@@ -478,6 +506,9 @@ class CanvasScene(QGraphicsScene):
 
         # Sync export-region overlay
         self.refresh_export_region()
+
+        # Re-sync the split-depth cue (parent rect may have moved)
+        self._update_parent_hint()
 
     def get_snap_lines(self, ignore_cell_id: str = None, include_page_edges: bool = False):
         """Return lists of vertical (x) and horizontal (y) coordinates for snapping."""
@@ -833,6 +864,55 @@ class CanvasScene(QGraphicsScene):
 
                 x_cursor += gap
 
+        # --- Dividers between subcells of split containers (recursive) ---
+        # Their span covers only the children band, not the whole row — the
+        # shorter span plus lighter paint reads as the deeper nesting level.
+        def add_subcell_dividers(container):
+            children = container.children
+            if len(children) >= 2:
+                ratios = list(container.split_ratios) if container.split_ratios else []
+                while len(ratios) < len(children):
+                    ratios.append(1.0)
+                for i in range(len(children) - 1):
+                    ra = layout_result.cell_rects.get(children[i].id)
+                    rb = layout_result.cell_rects.get(children[i + 1].id)
+                    if not ra or not rb:
+                        continue
+                    div = DividerItem(
+                        kind='subcell',
+                        ratio_a=ratios[i], ratio_b=ratios[i + 1],
+                        parent_cell_id=container.id,
+                        sub_a=i, sub_b=i + 1,
+                        sub_a_id=children[i].id, sub_b_id=children[i + 1].id,
+                        orientation=container.split_direction,
+                    )
+                    if container.split_direction == 'horizontal':
+                        cx = (ra[0] + ra[2] + rb[0]) / 2
+                        top = min(ra[1], rb[1])
+                        bottom = max(ra[1] + ra[3], rb[1] + rb[3])
+                        # Inset: visibly shorter than row-level dividers.
+                        inset = min(2.0, (bottom - top) * 0.06)
+                        top += inset
+                        bottom -= inset
+                        div.setRect(0, 0, HIT_THICKNESS, bottom - top)
+                        div.setPos(cx - HIT_THICKNESS / 2, top)
+                    else:
+                        cy = (ra[1] + ra[3] + rb[1]) / 2
+                        left = min(ra[0], rb[0])
+                        right = max(ra[0] + ra[2], rb[0] + rb[2])
+                        inset = min(2.0, (right - left) * 0.06)
+                        left += inset
+                        right -= inset
+                        div.setRect(0, 0, right - left, HIT_THICKNESS)
+                        div.setPos(left, cy - HIT_THICKNESS / 2)
+                    self.addItem(div)
+                    self._divider_items.append(div)
+            for child in children:
+                add_subcell_dividers(child)
+
+        for top_cell in self.project.cells:
+            add_subcell_dividers(top_cell)
+
         if self.preview_mode:
             for div in self._divider_items:
                 div.setVisible(False)
@@ -847,6 +927,15 @@ class CanvasScene(QGraphicsScene):
             if row_a and row_b:
                 row_a.height_ratio = div.ratio_a
                 row_b.height_ratio = div.ratio_b
+        elif div.kind == 'subcell':
+            parent = self.project.find_cell_by_id(div.parent_cell_id)
+            if parent:
+                ratios = list(parent.split_ratios) if parent.split_ratios else []
+                while len(ratios) < len(parent.children):
+                    ratios.append(1.0)
+                ratios[div.sub_a] = div.ratio_a
+                ratios[div.sub_b] = div.ratio_b
+                parent.split_ratios = ratios
         else:
             row = next((r for r in self.project.rows if r.index == div.row_index), None)
             if row:
@@ -862,6 +951,44 @@ class CanvasScene(QGraphicsScene):
     def _divider_drag_finished(self, div: 'DividerItem'):
         """Emit signal so MainWindow can push an undoable command."""
         self.divider_drag_finished.emit(div)
+
+    # ------------------------------------------------------------------
+    # Split-depth cue: outline the parent container of a selected subcell
+    # ------------------------------------------------------------------
+
+    def _update_parent_hint(self):
+        """Dashed outline around a selected subcell's parent container.
+
+        Subcells look like row siblings but resize as one group; this
+        transient outline reveals the nesting exactly when it matters.
+        """
+        hint = self._parent_hint
+        rect = None
+        if self.project is not None:
+            selected = [it for it in self.selectedItems()
+                        if isinstance(it, CellItem)
+                        and not getattr(it, 'is_label_cell', False)]
+            if len(selected) == 1:
+                parent = self.project.find_parent_of(selected[0].cell_id)
+                if parent is not None and parent.split_direction != "none":
+                    last = getattr(self, '_last_layout_result', None)
+                    parent_rect = last.cell_rects.get(parent.id) if last else None
+                    if parent_rect is not None:
+                        rect = QRectF(*parent_rect)
+        if rect is None:
+            if hint is not None and hint.scene() is self:
+                self.removeItem(hint)
+            self._parent_hint = None
+            return
+        if hint is None or hint.scene() is not self:
+            pen = QPen(QColor("#007ACC"), 0.9, Qt.PenStyle.DashLine)
+            hint = self.addRect(rect, pen, QColor(0, 122, 204, 14))
+            hint.setZValue(550)
+            hint.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            self._parent_hint = hint
+        else:
+            hint.setRect(rect)
+        hint.setVisible(not self.preview_mode)
 
     # ------------------------------------------------------------------
     # Export region
@@ -938,6 +1065,415 @@ class CanvasScene(QGraphicsScene):
             self.insert_cell_requested.emit(row_index, col_index)
         elif action == "cell_right":
             self.insert_cell_requested.emit(row_index, col_index)
+
+    def _sync_group_label_items(self, layout_result):
+        """Mirror project.group_labels onto canvas items using layout bands.
+
+        Labels whose targets produced no band (e.g. every target cell was
+        deleted) are dropped rather than drawn at a stale position.
+        """
+        from src.canvas.group_label_item import GroupLabelItem
+
+        bands = getattr(layout_result, 'group_label_rects', {}) or {}
+        models = {g.id: g for g in getattr(self.project, 'group_labels', []) or []}
+        expected = set(bands) & set(models)
+
+        for stale_id in set(self.group_label_items) - expected:
+            self.removeItem(self.group_label_items[stale_id])
+            del self.group_label_items[stale_id]
+
+        for group_label_id in expected:
+            item = self.group_label_items.get(group_label_id)
+            if item is None:
+                item = GroupLabelItem(group_label_id)
+                item.double_clicked.connect(self.group_label_double_clicked.emit)
+                item.drag_started.connect(self._on_group_label_drag_started)
+                item.drag_moved.connect(self._on_group_label_drag_moved)
+                item.drag_finished.connect(self._on_group_label_drag_finished)
+                self.addItem(item)
+                self.group_label_items[group_label_id] = item
+            x, y, w, h = bands[group_label_id]
+            item.set_band(QRectF(x, y, w, h), models[group_label_id])
+
+    # ------------------------------------------------------------------
+    # Group-label drag-to-re-side: dashed drop-target hints
+    # ------------------------------------------------------------------
+
+    def _on_group_label_drag_started(self, group_label_id: str):
+        """Show dashed drop targets: opposite side plus same-side level slots."""
+        self._clear_group_label_drag_hints()
+        model = self.project.find_group_label(group_label_id)
+        item = self.group_label_items.get(group_label_id)
+        layout = getattr(self, '_last_layout_result', None)
+        if model is None or item is None or layout is None:
+            return
+        target_side = LayoutEngine.group_label_opposite_side(model.side)
+        rect = LayoutEngine.group_label_candidate_rect(
+            self.project, model, target_side, layout) if target_side else None
+        if rect is None:
+            return
+
+        accent = QColor("#4A90D9")
+        pen = QPen(accent, 0.4, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        # Ghost outline of the source band so the origin stays visible.
+        source = self.addRect(item.sceneBoundingRect(), pen)
+        target = self.addRect(
+            QRectF(*rect), pen, QBrush(QColor(accent.red(), accent.green(),
+                                              accent.blue(), 30)))
+        # Same-side restack slot: dragging the band away from the artwork
+        # past its resting slot raises its level, dragging inward lowers it.
+        level_hint = None
+        base = LayoutEngine.group_label_candidate_rect(
+            self.project, model, model.side, layout)
+        if base is not None:
+            level_hint = self.addRect(
+                QRectF(*base), pen, QBrush(QColor(accent.red(), accent.green(),
+                                                  accent.blue(), 60)))
+            level_hint.setVisible(False)
+        for hint in (source, target, level_hint):
+            if hint is None:
+                continue
+            hint.setZValue(60)
+            hint.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self._gl_drag_hints = {
+            'source': source, 'target': target, 'target_side': target_side,
+            'inside': False, 'level_hint': level_hint, 'base': base,
+            'step': LayoutEngine.group_label_thickness_mm(model) + model.gap_mm,
+            'side': model.side, 'current_level': model.level,
+            'hover_level': None,
+        }
+
+    def _level_slot_at(self, hints: dict, scene_pos) -> int:
+        """Quantize the cursor's outward distance into a stack level.
+
+        Slot L is centered at L*step + own/2 from the artwork edge, so the
+        resting band maps wholly to its own level and boundaries fall in
+        the middle of the gap between neighbouring slots.
+        """
+        bx, by, bw, bh = hints['base']
+        side = hints['side']
+        if side == 'top':
+            dist = (by + bh) - scene_pos.y()
+            own = bh
+        elif side == 'bottom':
+            dist = scene_pos.y() - by
+            own = bh
+        elif side == 'left':
+            dist = (bx + bw) - scene_pos.x()
+            own = bw
+        else:
+            dist = scene_pos.x() - bx
+            own = bw
+        step = hints['step']
+        if step <= 0:
+            return hints['current_level']
+        return max(0, min(5, int((dist - own / 2) / step + 0.5)))
+
+    def _on_group_label_drag_moved(self, group_label_id: str, scene_pos):
+        """Highlight the hot target: side flip rect, or a restack slot."""
+        hints = self._gl_drag_hints
+        if not hints or hints['source'].scene() is not self:
+            return
+        inside = hints['target'].rect().contains(scene_pos)
+        if inside != hints['inside']:
+            hints['inside'] = inside
+            accent = QColor("#4A90D9")
+            alpha = 90 if inside else 30
+            hints['target'].setBrush(QBrush(QColor(accent.red(), accent.green(),
+                                                   accent.blue(), alpha)))
+        level = None
+        if hints['level_hint'] is not None and not inside:
+            candidate = self._level_slot_at(hints, scene_pos)
+            if candidate != hints['current_level']:
+                level = candidate
+        if level != hints['hover_level']:
+            hints['hover_level'] = level
+            hint = hints['level_hint']
+            if hint is not None:
+                if level is None:
+                    hint.setVisible(False)
+                else:
+                    bx, by, bw, bh = hints['base']
+                    step = hints['step']
+                    side = hints['side']
+                    if side == 'top':
+                        by -= level * step
+                    elif side == 'bottom':
+                        by += level * step
+                    elif side == 'left':
+                        bx -= level * step
+                    else:
+                        bx += level * step
+                    hint.setRect(QRectF(bx, by, bw, bh))
+                    hint.setVisible(True)
+
+    def _on_group_label_drag_finished(self, group_label_id: str, scene_pos):
+        """Drop: flip side inside the target, else restack on a level slot."""
+        hints = self._gl_drag_hints
+        self._clear_group_label_drag_hints()
+        if not hints:
+            return
+        if hints['target'].rect().contains(scene_pos):
+            self.group_label_side_dropped.emit(group_label_id, hints['target_side'])
+        elif hints['hover_level'] is not None:
+            self.group_label_level_dropped.emit(group_label_id, hints['hover_level'])
+
+    def _clear_group_label_drag_hints(self):
+        if not self._gl_drag_hints:
+            return
+        for key in ('source', 'target', 'level_hint'):
+            hint = self._gl_drag_hints.get(key)
+            if hint is not None and hint.scene() is self:
+                self.removeItem(hint)
+        self._gl_drag_hints = None
+
+    # ------------------------------------------------------------------
+    # Strip-label drag: change placement (above/below/left/right/in-cell)
+    # ------------------------------------------------------------------
+
+    def label_drag_active(self) -> bool:
+        return self._label_drag is not None
+
+    # Placement a strip label can flip to, given where it currently lives.
+    _PLACEMENT_FLIPS = {
+        "label_row_above": "label_row_below",
+        "label_row_below": "label_row_above",
+        "label_col_left": "label_col_right",
+        "label_col_right": "label_col_left",
+    }
+
+    def label_drag_start(self, label_cell: CellItem):
+        """Begin a placement drag from a label strip: ghost + dashed targets.
+
+        Each target is computed from a SPECULATIVE layout (a deep-copied
+        project with the placement applied), so the dashed rect sits exactly
+        where the label will land after the reflow.  The flip placement's
+        preview is applied immediately: the layout "makes room" the moment
+        the label is picked up, so its drop target never overlaps other
+        cells or strips.  Hovering the in-cell target temporarily switches
+        the preview to that variant; dropping or cancelling restores the
+        real layout.
+        """
+        self.label_drag_cancel()
+        self._remove_label_tracer()
+        text_item_id = getattr(label_cell, 'label_text_item_id', None)
+        cell_id = label_cell.cell_id[len("label_"):]
+        text_model = next((t for t in getattr(self.project, 'text_items', [])
+                           if t.id == text_item_id), None)
+        current = (self.project.effective_label_placement(text_model)
+                   if text_model is not None else None)
+        flip = self._PLACEMENT_FLIPS.get(current or "")
+        if text_model is None or flip is None:
+            return
+
+        # Speculative layouts: placement -> (project copy, exact target rect).
+        specs = {}
+        for placement in (flip, "in_cell"):
+            spec_project = copy.deepcopy(self.project)
+            spec_item = next((t for t in spec_project.text_items
+                              if t.id == text_item_id), None)
+            if spec_item is None:
+                continue
+            spec_item.placement = placement
+            spec_layout = LayoutEngine.calculate_layout(spec_project)
+            rect = (spec_layout.cell_rects.get(cell_id) if placement == "in_cell"
+                    else spec_layout.label_rects.get(cell_id))
+            if rect is not None:
+                specs[placement] = (spec_project, rect)
+        if not specs:
+            return
+
+        # Ghost letter — mimics the strip's rendering (1pt = 1 scene unit).
+        ghost = QGraphicsSimpleTextItem(text_model.text)
+        font = QFont(text_model.font_family, text_model.font_size_pt)
+        font.setBold(text_model.font_weight == "bold")
+        ghost.setFont(font)
+        ghost.setBrush(QBrush(QColor(text_model.color)))
+        ghost.setZValue(70)
+        ghost.setOpacity(0.85)
+        ghost.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        strip_rect = label_cell.sceneBoundingRect()
+        origin = self._label_letter_point(
+            strip_rect, ghost, getattr(self.project, 'label_align', 'center'))
+        ghost.setPos(origin)
+        self.addItem(ghost)
+        press = getattr(label_cell, '_label_drag_start', None)
+        grab_offset = origin - press if press is not None else QPointF()
+
+        accent = QColor("#4A90D9")
+        pen = QPen(accent, 0.4, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        source = self.addRect(strip_rect, pen)
+        targets = []
+        for placement, (_spec_project, rect) in specs.items():
+            item = self.addRect(QRectF(*rect), pen,
+                                QBrush(QColor(accent.red(), accent.green(),
+                                              accent.blue(), 30)))
+            targets.append([item, placement, False])
+        for hint in [source] + [t[0] for t in targets]:
+            hint.setZValue(60)
+            hint.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+
+        self._label_drag = {
+            "text_item_id": text_item_id,
+            "cell_id": cell_id,
+            "ghost": ghost,
+            "source": source,
+            "targets": targets,
+            "origin": origin,
+            "grab_offset": grab_offset,
+            "specs": specs,
+            "default_preview": flip,
+        }
+        # Open the target space right away — without this the exact-position
+        # targets would be drawn over the unchanged layout and overlap it.
+        self._label_preview_apply(flip)
+
+    def label_drag_move(self, scene_pos: QPointF):
+        """Ghost follows the cursor; hovered target fills darker."""
+        drag = self._label_drag
+        if not drag or drag["ghost"].scene() is not self:
+            return
+        drag["ghost"].setPos(scene_pos + drag["grab_offset"])
+        accent = QColor("#4A90D9")
+        for target in drag["targets"]:
+            inside = target[0].rect().contains(scene_pos)
+            if inside != target[2]:
+                target[2] = inside
+                alpha = 90 if inside else 30
+                target[0].setBrush(QBrush(QColor(accent.red(), accent.green(),
+                                                 accent.blue(), alpha)))
+                # Live reflow preview: hovering a target shows the layout
+                # the drop would produce; hovering nothing returns to the
+                # drag's default (flip) preview, keeping targets aligned.
+                if inside:
+                    self._label_preview_apply(target[1])
+                else:
+                    self._label_preview_apply(drag["default_preview"])
+
+    def label_drag_finish(self, scene_pos: QPointF):
+        """Drop: emit the placement, then tween the ghost to its final spot."""
+        drag = self._label_drag
+        if not drag:
+            return
+        hit = next((t for t in drag["targets"] if t[0].rect().contains(scene_pos)),
+                   None)
+        ghost = drag["ghost"]
+        # Back to the real project before any command touches the model.
+        self._label_preview_restore()
+        if drag["source"].scene() is self:
+            self.removeItem(drag["source"])
+        for item, _placement, _h in drag["targets"]:
+            if item.scene() is self:
+                self.removeItem(item)
+        self._label_drag = None
+
+        if hit is not None:
+            placement = hit[1]
+            self.label_placement_dropped.emit(drag["text_item_id"], placement)
+            if placement == "in_cell":
+                # In-cell letters sit at their anchor (default: top-left
+                # inside) plus the project offsets — aim the tracer there.
+                rect = hit[0].rect()
+                destination = QPointF(
+                    rect.left() + getattr(self.project, 'label_offset_x', 0.0),
+                    rect.top() + getattr(self.project, 'label_offset_y', 0.0))
+            else:
+                destination = self._label_letter_point(
+                    hit[0].rect(), ghost,
+                    getattr(self.project, 'label_align', 'center'))
+        else:
+            destination = drag["origin"]
+        self._start_label_tracer(ghost, destination)
+
+    def label_drag_cancel(self):
+        """Abort any active drag without emitting (e.g. on refresh)."""
+        self._label_preview_restore()
+        drag = self._label_drag
+        if not drag:
+            return
+        for item in [drag["ghost"], drag["source"]] + [t[0] for t in drag["targets"]]:
+            if item.scene() is self:
+                self.removeItem(item)
+        self._label_drag = None
+
+    def _label_preview_apply(self, placement: str):
+        """Temporarily show the speculative layout for *placement*."""
+        if self._label_preview_active == placement:
+            return
+        self._label_preview_restore()
+        drag = self._label_drag
+        entry = drag["specs"].get(placement) if drag else None
+        if entry is None:
+            return
+        self._label_preview_active = placement
+        self._label_real_project = self.project
+        self.project = entry[0]
+        self.refresh_layout()
+        # The speculative layout renders the dragged label at its destination
+        # (strip letter or in-cell TextItem) — hide it, the ghost in transit
+        # already represents it.  The next refresh re-syncs from the model.
+        self._label_hide_dragged_letter()
+
+    def _label_hide_dragged_letter(self):
+        drag = self._label_drag
+        if not drag:
+            return
+        strip = self.label_cell_items.get(f"label_{drag['cell_id']}")
+        if strip is not None:
+            strip.label_text = ""
+            strip.update()
+        text_item = self.text_items.get(drag["text_item_id"])
+        if text_item is not None and text_item.isVisible():
+            text_item.setVisible(False)
+
+    def _label_preview_restore(self):
+        """Undo the hover preview: restore the real project and re-layout."""
+        if self._label_preview_active is None:
+            return
+        self._label_preview_active = None
+        self.project = self._label_real_project
+        self._label_real_project = None
+        # The drag must survive this re-layout (e.g. hover-leave mid-drag).
+        self._label_preview_transitioning = True
+        try:
+            self.refresh_layout()
+        finally:
+            self._label_preview_transitioning = False
+
+    def _label_letter_point(self, rect: QRectF, ghost, align: str) -> QPointF:
+        """Top-left for the ghost so its text lands where the strip paints it."""
+        size = ghost.boundingRect()
+        if align == "left":
+            x = rect.left() + 1.0
+        elif align == "right":
+            x = rect.right() - size.width() - 1.0
+        else:
+            x = rect.center().x() - size.width() / 2
+        return QPointF(x, rect.center().y() - size.height() / 2)
+
+    def _start_label_tracer(self, ghost, destination: QPointF):
+        """Concise 180ms tween of the ghost to its destination, then remove."""
+        self._remove_label_tracer()
+        anim = QVariantAnimation(self)
+        anim.setDuration(180)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(QPointF(ghost.pos()))
+        anim.setEndValue(QPointF(destination))
+        anim.valueChanged.connect(ghost.setPos)
+        anim.finished.connect(self._remove_label_tracer)
+        self._label_tracer = (ghost, anim)
+        anim.start()
+
+    def _remove_label_tracer(self):
+        if not self._label_tracer:
+            return
+        ghost, anim = self._label_tracer
+        self._label_tracer = None
+        anim.stop()
+        if ghost.scene() is self:
+            self.removeItem(ghost)
 
     def _on_text_item_changed(self, text_item_id: str, changes: dict):
         """Forward text item changes to MainWindow via signal"""

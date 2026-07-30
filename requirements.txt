@@ -1,6 +1,9 @@
-PyQt6
-Pillow
-matplotlib
-PyMuPDF
-websockets
-mcp
+# Pinned to the versions verified in the development environment
+# (conda env `imagelayout`). Exact pins keep every machine on the same
+# API surface — bump deliberately, test, then commit.
+PyQt6==6.11.0
+Pillow==12.2.0
+matplotlib==3.10.8
+PyMuPDF==1.27.2.2
+websockets==16.0
+mcp==1.27.1

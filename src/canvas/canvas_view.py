@@ -124,6 +124,13 @@ class CanvasView(QGraphicsView):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        # A strip-label drag outlives its source item (the hover preview can
+        # remove the strip), so the view forwards continuation events itself.
+        scene = self.scene()
+        if scene is not None and getattr(scene, '_label_drag', None) is not None:
+            scene.label_drag_move(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         # Emit scene coordinates for status bar (throttled to ~30fps)
         if self._last_mouse_emit.elapsed() > 33:
             scene_pos = self.mapToScene(event.position().toPoint())
@@ -155,6 +162,12 @@ class CanvasView(QGraphicsView):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
+        scene = self.scene()
+        if (event.button() == Qt.MouseButton.LeftButton and scene is not None
+                and getattr(scene, '_label_drag', None) is not None):
+            scene.label_drag_finish(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._rb_origin is not None:
             self._rb_origin = None
             self._rb_current = None

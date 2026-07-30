@@ -219,8 +219,14 @@ def project_describe(ctx: ToolContext) -> Dict[str, Any]:
                 "bg_enabled": t.bg_enabled,
                 "bg_color": t.bg_color,
                 "bg_padding_mm": t.bg_padding_mm,
+                "placement": getattr(t, "placement", None),
+                "label_tier": getattr(t, "label_tier", "panel"),
+                "style_locked": getattr(t, "style_locked", False),
             }
             for t in p.text_items
+        ],
+        "group_labels": [
+            g.to_dict() for g in getattr(p, "group_labels", [])
         ],
         "size_groups": [
             {"id": g.id, "name": g.name,
@@ -243,6 +249,12 @@ def project_describe(ctx: ToolContext) -> Dict[str, Any]:
             "align": p.label_align,
             "offset_x": p.label_offset_x,
             "offset_y": p.label_offset_y,
+            "scheme_sub": getattr(p, "label_scheme_sub", ""),
+            "sub_prefix_parent": getattr(p, "label_sub_prefix_parent", False),
+            "title_font_family": getattr(p, "title_label_font_family", "Arial"),
+            "title_font_size_pt": getattr(p, "title_label_font_size", 10),
+            "title_font_weight": getattr(p, "title_label_font_weight", "normal"),
+            "title_color": getattr(p, "title_label_color", "#000000"),
         },
         "path": ctx.project_path,
     })
@@ -729,29 +741,61 @@ def layout_set_mode(ctx: ToolContext, mode: str) -> Dict[str, Any]:
 
 
 def auto_label_cells(ctx: ToolContext, scheme: Optional[str] = None,
-                     placement: str = "in_cell") -> Dict[str, Any]:
-    """Generate sequential labels (a, b, c…) for every leaf cell.
+                     placement: str = "in_cell",
+                     sub_scheme: Optional[str] = None,
+                     sub_prefix: Optional[bool] = None) -> Dict[str, Any]:
+    """Generate labels for every panel cell in reading order.
 
-    *scheme* is one of ``'a'``, ``'A'``, ``'(a)'``, ``'(A)'``. Omit to keep
-    the project's current scheme. *placement* is ``'in_cell'`` (overlaid on
-    each image) or ``'row_above'`` (dedicated label row above each picture
-    row).
+    *scheme* is any of ``a A (a) (A) 1 (1) i I (i) (I)``. Omit to keep the
+    project's current scheme. *placement* is ``'in_cell'`` (overlaid on each
+    image) or ``'row_above'`` (dedicated label row above each picture row).
+
+    *sub_scheme* switches numbering to hierarchical mode: top-level panels
+    use *scheme* while each split panel restarts its children on
+    *sub_scheme* (e.g. ``A`` → ``A-i, A-ii, A-iii``). Pass ``""`` to return
+    to flat numbering. *sub_prefix* toggles whether children carry the
+    parent label as a prefix.
     """
     p = ctx.project
+    from src.utils.label_numbering import SCHEMES
     from src.app.commands import (
         AutoLabelCommand, AutoLabelOutCellCommand, ChangeLabelSchemeCommand,
     )
     cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
 
+    if sub_scheme is not None and sub_scheme != "" and sub_scheme not in SCHEMES:
+        raise ToolError(
+            "invalid_value",
+            f"sub_scheme must be one of {sorted(SCHEMES)} or '' (flat), "
+            f"got {sub_scheme!r}",
+            field="sub_scheme",
+        )
+
+    scheme_changed = False
     if scheme is not None:
-        if scheme not in ("a", "A", "(a)", "(A)"):
+        if scheme not in SCHEMES:
             raise ToolError(
                 "invalid_value",
-                f"scheme must be one of 'a'/'A'/'(a)'/'(A)', got {scheme!r}",
+                f"scheme must be one of {sorted(SCHEMES)}, got {scheme!r}",
                 field="scheme",
             )
-        if scheme != p.label_scheme:
-            _apply(ctx, ChangeLabelSchemeCommand(p, scheme, update_callback=cb))
+        scheme_changed = scheme != p.label_scheme
+    if (scheme_changed
+            or (sub_scheme is not None
+                and sub_scheme != getattr(p, "label_scheme_sub", ""))):
+        _apply(ctx, ChangeLabelSchemeCommand(
+            p,
+            scheme if scheme is not None else p.label_scheme,
+            new_sub_scheme=sub_scheme,
+            update_callback=cb,
+        ))
+
+    if sub_prefix is not None:
+        from src.app.commands import PropertyChangeCommand
+        _apply(ctx, PropertyChangeCommand(
+            p, {"label_sub_prefix_parent": bool(sub_prefix)},
+            update_callback=cb, description="Set Sub-label Prefix",
+        ))
 
     if placement == "in_cell":
         _apply(ctx, AutoLabelCommand(p, update_callback=cb))
@@ -770,6 +814,7 @@ def auto_label_cells(ctx: ToolContext, scheme: Optional[str] = None,
         if t.scope == "cell" and getattr(t, "subtype", None) != "corner"
     ]
     return _ok({"scheme": p.label_scheme, "placement": p.label_placement,
+                "sub_scheme": getattr(p, "label_scheme_sub", ""),
                 "label_count": len(labels), "labels": labels})
 
 
@@ -866,6 +911,12 @@ _TEXT_STYLE_FIELDS = {
     "text", "font_family", "font_size_pt", "font_weight", "color",
     "x", "y", "rotation", "anchor", "offset_x", "offset_y",
     "bg_enabled", "bg_color", "bg_padding_mm",
+    "placement", "label_tier", "style_locked",
+}
+
+_LABEL_ITEM_PLACEMENTS = {
+    "in_cell", "label_row_above", "label_row_below",
+    "label_col_left", "label_col_right",
 }
 
 
@@ -891,6 +942,21 @@ def text_set_style(ctx: ToolContext, text_id: str,
                         field="font_weight")
     if "font_size_pt" in changes:
         changes["font_size_pt"] = int(changes["font_size_pt"])
+    if "placement" in changes:
+        placement = changes["placement"]
+        if placement is not None and placement not in _LABEL_ITEM_PLACEMENTS:
+            raise ToolError(
+                "invalid_value",
+                "placement must be null (inherit) or one of "
+                f"{sorted(_LABEL_ITEM_PLACEMENTS)}, got {placement!r}",
+                field="placement",
+            )
+    if "label_tier" in changes and changes["label_tier"] not in ("panel", "title"):
+        raise ToolError("invalid_value",
+                        "label_tier must be 'panel' or 'title'",
+                        field="label_tier")
+    if "style_locked" in changes:
+        changes["style_locked"] = bool(changes["style_locked"])
 
     from src.app.commands import PropertyChangeCommand
     cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
@@ -955,13 +1021,18 @@ def text_remove(ctx: ToolContext, text_id: str) -> Dict[str, Any]:
     return _ok({"text_id": text_id})
 
 
-def labels_set_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
-    """Restyle every existing cell label in one shot, and update project
+def labels_set_style(ctx: ToolContext, tier: Optional[str] = None,
+                     **changes: Any) -> Dict[str, Any]:
+    """Restyle existing cell labels in one shot, and update project
     defaults so future auto-labels inherit the same look.
 
     Allowed keys: font_family, font_size_pt, font_weight, color, anchor,
-    offset_x, offset_y. Existing free-text items (non-labels) are not
-    touched.
+    offset_x, offset_y. Free-text items (non-labels) are not touched.
+
+    *tier* filters to one style tier — ``'panel'`` (bold letters) or
+    ``'title'`` (descriptive captions) — and updates that tier's project
+    defaults. Labels with ``style_locked=true`` are always skipped so a
+    global restyle never clobbers a deliberately restyled exception.
     """
     allowed = {"font_family", "font_size_pt", "font_weight",
                "color", "anchor", "offset_x", "offset_y"}
@@ -972,6 +1043,10 @@ def labels_set_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
             f"unknown fields: {sorted(bad)}",
             hint=f"allowed: {sorted(allowed)}",
         )
+    if tier is not None and tier not in ("panel", "title"):
+        raise ToolError("invalid_value",
+                        "tier must be 'panel' or 'title'",
+                        field="tier")
     if "font_size_pt" in changes:
         changes["font_size_pt"] = int(changes["font_size_pt"])
     if "font_weight" in changes and changes["font_weight"] not in ("normal", "bold"):
@@ -980,7 +1055,7 @@ def labels_set_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
                         field="font_weight")
 
     p = ctx.project
-    proj_field_map = {
+    panel_field_map = {
         "font_family": "label_font_family",
         "font_size_pt": "label_font_size",
         "font_weight": "label_font_weight",
@@ -989,7 +1064,22 @@ def labels_set_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
         "offset_x": "label_offset_x",
         "offset_y": "label_offset_y",
     }
-    proj_changes = {proj_field_map[k]: v for k, v in changes.items()}
+    title_field_map = {
+        "font_family": "title_label_font_family",
+        "font_size_pt": "title_label_font_size",
+        "font_weight": "title_label_font_weight",
+        "color": "title_label_color",
+    }
+    if tier == "title":
+        # anchor/offset are shared placement settings, not tier-specific.
+        proj_changes = {
+            panel_field_map[k] if k in ("anchor", "offset_x", "offset_y")
+            else title_field_map[k]: v
+            for k, v in changes.items()
+            if k in title_field_map or k in ("anchor", "offset_x", "offset_y")
+        }
+    else:
+        proj_changes = {panel_field_map[k]: v for k, v in changes.items()}
 
     from src.app.commands import (
         PropertyChangeCommand, MultiPropertyChangeCommand,
@@ -1005,6 +1095,8 @@ def labels_set_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
     label_items = [
         t for t in p.text_items
         if t.scope == "cell" and getattr(t, "subtype", None) != "corner"
+        and not getattr(t, "style_locked", False)
+        and (tier is None or getattr(t, "label_tier", "panel") == tier)
     ]
     if label_items and changes:
         _apply(ctx, MultiPropertyChangeCommand(
@@ -1012,6 +1104,7 @@ def labels_set_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
             description="Style Labels",
         ))
     return _ok({"updated_labels": len(label_items),
+                "tier": tier or "all",
                 "applied": dict(changes)})
 
 
@@ -1297,24 +1390,196 @@ def size_group_assign(ctx: ToolContext, cell_id: str,
     return _ok({"cell_id": cell_id, "size_group_id": group_id})
 
 
+# ── group labels (spanning bands / row titles) ────────────────────────
+
+_GROUP_LABEL_FIELDS = {
+    "text", "cell_ids", "row_index", "side", "align",
+    "thickness_mm", "gap_mm", "level", "rotation",
+    "font_family", "font_size_pt", "font_weight", "color",
+    "bracket_style", "bracket_width_pt", "bracket_tick_mm",
+    "bracket_gap_mm", "bracket_color",
+}
+
+_GROUP_LABEL_SIDES = {"top", "bottom", "left", "right"}
+_GROUP_LABEL_BRACKETS = {"none", "line", "bracket", "brace"}
+
+
+def _validate_group_label_changes(changes: Dict[str, Any]) -> None:
+    bad = set(changes) - _GROUP_LABEL_FIELDS
+    if bad:
+        raise ToolError("invalid_params",
+                        f"unknown fields: {sorted(bad)}",
+                        hint=f"allowed: {sorted(_GROUP_LABEL_FIELDS)}")
+    if "side" in changes and changes["side"] not in _GROUP_LABEL_SIDES:
+        raise ToolError("invalid_value",
+                        f"side must be one of {sorted(_GROUP_LABEL_SIDES)}",
+                        field="side")
+    if "align" in changes and changes["align"] not in ("left", "center", "right"):
+        raise ToolError("invalid_value",
+                        "align must be 'left', 'center' or 'right'",
+                        field="align")
+    if ("bracket_style" in changes
+            and changes["bracket_style"] not in _GROUP_LABEL_BRACKETS):
+        raise ToolError("invalid_value",
+                        f"bracket_style must be one of "
+                        f"{sorted(_GROUP_LABEL_BRACKETS)}",
+                        field="bracket_style")
+    if "font_weight" in changes and changes["font_weight"] not in ("normal", "bold"):
+        raise ToolError("invalid_value",
+                        "font_weight must be 'normal' or 'bold'",
+                        field="font_weight")
+    for numeric in ("thickness_mm", "gap_mm", "rotation",
+                    "bracket_width_pt", "bracket_tick_mm", "bracket_gap_mm"):
+        if numeric in changes and changes[numeric] is not None:
+            changes[numeric] = float(changes[numeric])
+    for integer in ("level", "font_size_pt", "row_index"):
+        if integer in changes and changes[integer] is not None:
+            changes[integer] = int(changes[integer])
+
+
+def group_label_add(ctx: ToolContext, text: str,
+                    cell_ids: Optional[List[str]] = None,
+                    row_index: Optional[int] = None,
+                    side: str = "top",
+                    **style: Any) -> Dict[str, Any]:
+    """Create a GroupLabel band that reserves layout space.
+
+    Pass *cell_ids* for a column header spanning those cells — top-level
+    cells, or a contiguous run of sub-cells inside one split container —
+    or *row_index* for a whole-row title. *side* places the band
+    ('top'/'bottom'/'left'/'right'); left/right bands auto-rotate the text
+    so a row title reads vertically. Style keys: align, thickness_mm,
+    gap_mm, level, rotation, font_family, font_size_pt, font_weight,
+    color, bracket_style ('none'/'line'/'bracket'/'brace'),
+    bracket_width_pt, bracket_tick_mm, bracket_gap_mm, bracket_color.
+    When *level* is omitted it is derived from span containment: a label
+    whose span nests inside another same-side label's span stacks nearer
+    the artwork.
+    """
+    from src.model.data_model import GroupLabel
+    from src.model.layout_engine import LayoutEngine
+    from src.app.commands import AddGroupLabelCommand
+
+    changes = {"side": side, **style}
+    _validate_group_label_changes(changes)
+
+    resolved_ids: List[str] = []
+    resolved_row: Optional[int] = None
+    if cell_ids:
+        for cid in cell_ids:
+            cell = _find_cell(ctx, cid)
+            if cell.id not in resolved_ids:
+                resolved_ids.append(cell.id)
+    elif row_index is not None:
+        if not any(r.index == row_index for r in ctx.project.rows):
+            raise ToolError("invalid_value",
+                            f"no row with index {row_index}",
+                            field="row_index")
+        resolved_row = int(row_index)
+    else:
+        raise ToolError(
+            "invalid_params",
+            "pass cell_ids (column header span) or row_index (row title)",
+        )
+
+    group_label = GroupLabel(
+        text=str(text), cell_ids=resolved_ids, row_index=resolved_row,
+        side=side,
+    )
+    if 'level' not in style:
+        group_label.level = LayoutEngine.group_label_auto_level(
+            ctx.project, resolved_ids, resolved_row, side)
+    for key, value in style.items():
+        setattr(group_label, key, value)
+
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    _apply(ctx, AddGroupLabelCommand(ctx.project, group_label,
+                                     update_callback=cb))
+    return _ok({"group_label_id": group_label.id,
+                "cell_ids": resolved_ids, "row_index": resolved_row,
+                "side": side})
+
+
+def group_label_remove(ctx: ToolContext,
+                       group_label_id: str) -> Dict[str, Any]:
+    """Delete a GroupLabel band; the reserved space collapses."""
+    from src.app.commands import DeleteGroupLabelCommand
+    if ctx.project.find_group_label(group_label_id) is None:
+        raise ToolError(
+            "group_label_not_found",
+            f"no group label with id={group_label_id}",
+            hint="call project_describe to list group_label ids",
+        )
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    _apply(ctx, DeleteGroupLabelCommand(ctx.project, group_label_id,
+                                        update_callback=cb))
+    return _ok({"group_label_id": group_label_id})
+
+
+def group_label_set(ctx: ToolContext, group_label_id: str,
+                    **changes: Any) -> Dict[str, Any]:
+    """Update properties of one GroupLabel.
+
+    Allowed keys: text, cell_ids, row_index, side, align, thickness_mm
+    (0 = auto), gap_mm, level, rotation (deg, null = auto),
+    font_family, font_size_pt, font_weight, color, bracket_style,
+    bracket_width_pt, bracket_tick_mm, bracket_gap_mm, bracket_color.
+    """
+    from src.app.commands import GroupLabelPropertyChangeCommand
+    if ctx.project.find_group_label(group_label_id) is None:
+        raise ToolError(
+            "group_label_not_found",
+            f"no group label with id={group_label_id}",
+            hint="call project_describe to list group_label ids",
+        )
+    _validate_group_label_changes(changes)
+    if "cell_ids" in changes and changes["cell_ids"] is not None:
+        changes["cell_ids"] = [
+            _find_cell(ctx, cid).id for cid in changes["cell_ids"]
+        ]
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    _apply(ctx, GroupLabelPropertyChangeCommand(
+        ctx.project, group_label_id, changes, update_callback=cb))
+    return _ok({"group_label_id": group_label_id,
+                "applied": dict(changes)})
+
+
 def project_set_label_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
     """Set project-level label defaults that newly auto-labeled cells inherit.
 
-    Allowed keys: scheme ('a'/'A'/'(a)'/'(A)'), placement, font_family,
-    font_size_pt, font_weight ('normal'/'bold'), color, anchor, offset_x,
-    offset_y, align ('left'/'center'/'right').
+    Allowed keys: scheme (``a A (a) (A) 1 (1) i I (i) (I)``), placement,
+    font_family, font_size_pt, font_weight ('normal'/'bold'), color,
+    anchor, offset_x, offset_y, align ('left'/'center'/'right'),
+    scheme_sub (sub-panel scheme or '' for flat numbering),
+    sub_prefix (bool — children carry the parent label as prefix),
+    title_tier (bool — apply font fields to the title tier instead).
 
     Existing labels are NOT restyled — use ``labels_set_style`` for that.
     """
     allowed = {
         "scheme", "placement", "font_family", "font_size_pt",
         "font_weight", "color", "anchor", "offset_x", "offset_y", "align",
+        "scheme_sub", "sub_prefix", "title_tier",
     }
     bad = set(changes) - allowed
     if bad:
         raise ToolError("invalid_params",
                         f"unknown fields: {sorted(bad)}",
                         hint=f"allowed: {sorted(allowed)}")
+    from src.utils.label_numbering import SCHEMES
+    if "scheme" in changes and changes["scheme"] not in SCHEMES:
+        raise ToolError("invalid_value",
+                        f"scheme must be one of {sorted(SCHEMES)}",
+                        field="scheme")
+    if ("scheme_sub" in changes and changes["scheme_sub"] != ""
+            and changes["scheme_sub"] not in SCHEMES):
+        raise ToolError("invalid_value",
+                        "scheme_sub must be '' (flat) or one of "
+                        f"{sorted(SCHEMES)}",
+                        field="scheme_sub")
+
+    title_tier = bool(changes.pop("title_tier", False))
+    font_fields = {"font_family", "font_size_pt", "font_weight", "color"}
     proj_field_map = {
         "scheme": "label_scheme",
         "placement": "label_placement",
@@ -1326,10 +1591,26 @@ def project_set_label_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
         "offset_x": "label_offset_x",
         "offset_y": "label_offset_y",
         "align": "label_align",
+        "scheme_sub": "label_scheme_sub",
+        "sub_prefix": "label_sub_prefix_parent",
     }
-    proj_changes = {proj_field_map[k]: v for k, v in changes.items()}
+    title_field_map = {
+        "font_family": "title_label_font_family",
+        "font_size_pt": "title_label_font_size",
+        "font_weight": "title_label_font_weight",
+        "color": "title_label_color",
+    }
+    proj_changes = {}
+    for key, value in changes.items():
+        if title_tier and key in font_fields:
+            proj_changes[title_field_map[key]] = value
+        else:
+            proj_changes[proj_field_map[key]] = value
     if "label_font_size" in proj_changes:
         proj_changes["label_font_size"] = int(proj_changes["label_font_size"])
+    if "title_label_font_size" in proj_changes:
+        proj_changes["title_label_font_size"] = int(
+            proj_changes["title_label_font_size"])
 
     from src.app.commands import PropertyChangeCommand
     cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
@@ -1337,7 +1618,7 @@ def project_set_label_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
         ctx.project, proj_changes, update_callback=cb,
         description="Set Label Defaults",
     ))
-    return _ok({"applied": dict(changes)})
+    return _ok({"applied": dict(changes), "title_tier": title_tier})
 
 
 # ── dispatch ────────────────────────────────────────────────────────────
@@ -1377,6 +1658,10 @@ _REGISTRY: Dict[str, Callable[..., Dict[str, Any]]] = {
     "labels_set_style":  labels_set_style,
     "project_set_label_style": project_set_label_style,
     "auto_label_cells":  auto_label_cells,
+    # Group labels (spanning bands / row titles)
+    "group_label_add":   group_label_add,
+    "group_label_remove": group_label_remove,
+    "group_label_set":   group_label_set,
     # Size groups
     "size_group_create": size_group_create,
     "size_group_delete": size_group_delete,

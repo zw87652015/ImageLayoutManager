@@ -11,12 +11,12 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QProgressDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack
-from PyQt6.QtWidgets import QUndoView
+from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack, QPalette
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
-from src.app.theme_segmented import ThemeSegmented
 from src.app.i18n import tr, set_language, current_language
+from src.app.history_timeline import HistoryTimeline
+from src.app.welcome_window import WelcomeWindow
 
 # Try importing QOpenGLWidget for GPU acceleration
 try:
@@ -25,7 +25,7 @@ try:
 except ImportError:
     HAS_OPENGL = False
 
-from src.model.data_model import Project, Cell, RowTemplate, TextItem
+from src.model.data_model import Project, Cell, RowTemplate, TextItem, GroupLabel
 from src.canvas.canvas_scene import CanvasScene
 from src.canvas.canvas_view import CanvasView
 from src.app.inspector import Inspector
@@ -48,6 +48,7 @@ from src.app.commands import (
     AddPiPItemCommand, SetPiPGeometryCommand, SetPiPOriginCommand,
     CreateSizeGroupCommand, DeleteSizeGroupCommand, SizeGroupPropertyChangeCommand,
     SetExportRegionCommand, ClearExportRegionCommand,
+    AddGroupLabelCommand, DeleteGroupLabelCommand, GroupLabelPropertyChangeCommand,
 )
 from src.model.data_model import PiPItem
 from src.utils.image_proxy import get_image_proxy
@@ -330,9 +331,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        from src.version import APP_VERSION
+        from src.version import APP_VERSION, APP_NAME
         self._app_version = APP_VERSION
-        self.setWindowTitle(f"Academic Figure Layout v{APP_VERSION}[*]")
+        self._app_name = APP_NAME
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}[*]")
         self.resize(1400, 850)
 
         # Persistent settings
@@ -440,6 +442,12 @@ class MainWindow(QMainWindow):
 
         self._update_window_title()
         self._update_theme_labels()
+
+        # Startup welcome window — a standalone launcher shown INSTEAD of
+        # this window (main.py skips window.show() while it exists). The
+        # blank tab beneath doubles as the "New Project" result.
+        self.welcome_window = WelcomeWindow(self)
+        self.welcome_window.show()
 
         # Silent update check
         self._update_checker: StartupUpdateChecker | None = None
@@ -715,6 +723,33 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(auto_label_outcell_action)
         self._act_auto_label_outcell = auto_label_outcell_action
 
+        # Shared labels: one click per band side, built from the cell selection.
+        group_label_menu = edit_menu.addMenu(tr("menu_group_label"))
+        group_label_menu.setToolTipsVisible(True)
+        group_label_menu.setToolTip(tr("tip_menu_group_label"))
+        self._menu_group_label = group_label_menu
+        self._group_label_actions = []
+        for side, tr_key in (
+            ("top", "action_group_label_top"),
+            ("bottom", "action_group_label_bottom"),
+            ("left", "action_group_label_left"),
+            ("right", "action_group_label_right"),
+        ):
+            action = QAction(tr(tr_key), self)
+            action.setToolTip(tr(f"tip_group_label_{side}"))
+            action.triggered.connect(
+                lambda checked=False, s=side: self._on_add_group_label(s))
+            group_label_menu.addAction(action)
+            self._group_label_actions.append(action)
+        # A permanently disabled trailing item states the precondition, so an
+        # empty selection reads as "here's what to do" instead of a dead menu.
+        self._act_group_label_hint = QAction(
+            tr("hint_group_label_select_cells"), self)
+        self._act_group_label_hint.setEnabled(False)
+        group_label_menu.addSeparator()
+        group_label_menu.addAction(self._act_group_label_hint)
+        group_label_menu.aboutToShow.connect(self._sync_group_label_menu)
+
         auto_layout_action = QAction(tr("action_auto_layout"), self)
         auto_layout_action.setShortcut(QKeySequence("Ctrl+Shift+A"))
         self._register_themed_action(auto_layout_action, "auto_layout")
@@ -820,10 +855,6 @@ class MainWindow(QMainWindow):
         self._toolbar_spacer.setStyleSheet("background: transparent;")
         self.toolbar.addWidget(self._toolbar_spacer)
 
-        # Light / Dark segmented pill.
-        self._theme_segmented = ThemeSegmented(initial=self._current_theme, parent=self)
-        self._theme_segmented.themeChanged.connect(self._apply_theme)
-        self.toolbar.addWidget(self._theme_segmented)
 
         # ── Preview-mode toggle ──
         self._act_preview_mode = QAction(tr("action_preview_mode"), self)
@@ -878,7 +909,7 @@ class MainWindow(QMainWindow):
         self.left_tabs = QTabWidget()
         self.left_tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.layers_panel = LayersPanel()
-        self.history_view = QUndoView()
+        self.history_view = HistoryTimeline()
         self.history_view.setCleanIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
         self.left_tabs.addTab(self.layers_panel, tr("tab_layers"))
         self.left_tabs.addTab(self.history_view, tr("tab_history"))
@@ -936,6 +967,17 @@ class MainWindow(QMainWindow):
         self.update_available_label.linkActivated.connect(self._on_update_banner_clicked)
         self.update_available_label.hide()
         self.statusbar.addPermanentWidget(self.update_available_label)
+
+        # MCP / AI-assistant status dot — click toggles the server.
+        self._mcp_last_info = ""
+        self.mcp_status_label = QLabel("")
+        self.mcp_status_label.setTextFormat(Qt.TextFormat.RichText)
+        self.mcp_status_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.mcp_status_label.setStyleSheet("padding: 0 8px;")
+        self.mcp_status_label.linkActivated.connect(
+            lambda _link: self._act_enable_agent_server.toggle())
+        self.statusbar.addPermanentWidget(self.mcp_status_label)
+        self._update_mcp_status()
         self.statusbar.addPermanentWidget(self.zoom_label)
 
     def _connect_static_signals(self):
@@ -954,6 +996,9 @@ class MainWindow(QMainWindow):
         self.inspector.size_group_pinned_changed.connect(self._on_size_group_pinned_changed)
         self.inspector.size_group_rename_requested.connect(self._on_size_group_rename)
         self.inspector.size_group_delete_requested.connect(self._on_size_group_delete)
+        self.inspector.label_item_property_changed.connect(self._on_label_item_property_changed)
+        self.inspector.group_label_property_changed.connect(self._on_group_label_property_changed)
+        self.inspector.group_label_delete_requested.connect(self._on_group_label_delete)
         self.layers_panel.items_selected.connect(self._select_cells_by_ids)
         self.layers_panel.context_menu_requested.connect(self._on_layers_context_menu)
 
@@ -980,6 +1025,10 @@ class MainWindow(QMainWindow):
         tab.scene.selection_changed_custom.connect(self._on_scene_selection_changed_custom)
         tab.scene.selectionChanged.connect(self._on_selection_changed)
         tab.scene.cell_context_menu.connect(self._on_cell_context_menu)
+        tab.scene.group_label_double_clicked.connect(self._on_group_label_double_clicked)
+        tab.scene.group_label_side_dropped.connect(self._on_group_label_side_dropped)
+        tab.scene.group_label_level_dropped.connect(self._on_group_label_level_dropped)
+        tab.scene.label_placement_dropped.connect(self._on_label_placement_dropped)
         tab.scene.cell_crop_committed.connect(self._on_cell_crop_committed)
         tab.scene.crop_mode_active.connect(self._on_crop_mode_active)
         tab.scene.empty_context_menu.connect(self._on_empty_context_menu)
@@ -1031,6 +1080,10 @@ class MainWindow(QMainWindow):
             tab.scene.selection_changed_custom.disconnect(self._on_scene_selection_changed_custom)
             tab.scene.selectionChanged.disconnect(self._on_selection_changed)
             tab.scene.cell_context_menu.disconnect(self._on_cell_context_menu)
+            tab.scene.group_label_double_clicked.disconnect(self._on_group_label_double_clicked)
+            tab.scene.group_label_side_dropped.disconnect(self._on_group_label_side_dropped)
+            tab.scene.group_label_level_dropped.disconnect(self._on_group_label_level_dropped)
+            tab.scene.label_placement_dropped.disconnect(self._on_label_placement_dropped)
             tab.scene.cell_crop_committed.disconnect(self._on_cell_crop_committed)
             tab.scene.crop_mode_active.disconnect(self._on_crop_mode_active)
             tab.scene.empty_context_menu.disconnect(self._on_empty_context_menu)
@@ -1273,14 +1326,15 @@ class MainWindow(QMainWindow):
         self.layers_panel.apply_theme(tokens)
         if hasattr(self, 'inspector'):
             self.inspector.apply_theme(tokens)
+        if hasattr(self, 'history_view'):
+            self.history_view.apply_theme(tokens)
+        if hasattr(self, 'mcp_status_label'):
+            self._update_mcp_status()
+        if getattr(self, 'welcome_window', None) is not None:
+            self.welcome_window._refresh_recent()  # accent colour follows theme
 
-        # Recolour toolbar icons + segmented glyphs to match the new theme.
+        # Recolour toolbar icons to match the new theme.
         self._refresh_toolbar_icons()
-
-        # Keep the segmented pill in sync when the theme was flipped via
-        # keyboard or menu (not by the user clicking the pill itself).
-        if hasattr(self, "_theme_segmented"):
-            self._theme_segmented.set_theme(theme)
 
         self._update_theme_labels()
 
@@ -1345,10 +1399,6 @@ class MainWindow(QMainWindow):
         # on the filled accent background.
         if hasattr(self, "_export_button"):
             self._export_button.setIcon(make_icon("export", tokens["on_accent"]))
-
-        # Segmented pill: active glyph picks up accent, idle is text_sec.
-        if hasattr(self, "_theme_segmented"):
-            self._theme_segmented.refresh_icons(tokens["accent"], tokens["text_sec"])
 
     def _update_theme_labels(self):
         if self._current_theme == DARK:
@@ -1447,6 +1497,15 @@ class MainWindow(QMainWindow):
         self._act_auto_label_incell.setToolTip(tr("tooltip_auto_label_incell"))
         self._act_auto_label_outcell.setText(tr("action_auto_label_outcell"))
         self._act_auto_label_outcell.setToolTip(tr("tooltip_auto_label_outcell"))
+        if hasattr(self, '_menu_group_label'):
+            self._menu_group_label.setTitle(tr("menu_group_label"))
+            self._menu_group_label.setToolTip(tr("tip_menu_group_label"))
+            for action, side in zip(self._group_label_actions,
+                                    ("top", "bottom", "left", "right")):
+                action.setText(tr(f"action_group_label_{side}"))
+                action.setToolTip(tr(f"tip_group_label_{side}"))
+            self._act_group_label_hint.setText(
+                tr("hint_group_label_select_cells"))
         self._act_auto_layout.setText(tr("action_auto_layout"))
         self._act_bake.setText(tr("action_bake"))
         self._act_grid_mode.setText(tr("action_grid_mode"))
@@ -1464,6 +1523,9 @@ class MainWindow(QMainWindow):
         self._lang_action.setText(tr("action_switch_zh"))
 
         self._act_toggle_layers.setText(tr("action_toggle_layers"))
+        self._act_font_zoom_in.setText(tr("action_font_zoom_in"))
+        self._act_font_zoom_out.setText(tr("action_font_zoom_out"))
+        self._act_font_zoom_reset.setText(tr("action_font_zoom_reset"))
         self._act_preview_mode.setText(tr("action_preview_mode"))
         self._act_preferences.setText(tr("action_preferences"))
         self._act_new_tab.setText(tr("action_new_tab"))
@@ -1471,9 +1533,11 @@ class MainWindow(QMainWindow):
         # Update left-panel tab labels
         self.left_tabs.setTabText(0, tr("tab_layers"))
         self.left_tabs.setTabText(1, tr("tab_history"))
+        if getattr(self, 'welcome_window', None) is not None:
+            self.welcome_window.retranslate()
+        if hasattr(self, 'mcp_status_label'):
+            self._update_mcp_status()
         self._update_theme_labels()
-        if hasattr(self, "_theme_segmented"):
-            self._theme_segmented.retranslate_ui()
         self.inspector.retranslate_ui()
         self.layers_panel.retranslate_ui()
 
@@ -1647,6 +1711,25 @@ class MainWindow(QMainWindow):
         self._sync_image_watcher()
         # Keep Layout → Label Placement radio state in sync with project
         self._sync_placement_menu()
+        # Images arriving (drop, agent tool, …) dismiss the welcome window
+        if getattr(self, 'welcome_window', None) is not None:
+            if any(getattr(c, 'image_path', None)
+                   for c in self.project.get_all_leaf_cells()):
+                self._dismiss_welcome()
+
+    def _dismiss_welcome(self):
+        """Close the launcher window and reveal the main window."""
+        win = getattr(self, 'welcome_window', None)
+        if win is None:
+            return
+        self.welcome_window = None
+        # Show BEFORE closing: WelcomeWindow.closeEvent quits the app if
+        # the main window is still hidden.
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        win.close()
 
     def _collect_image_paths(self) -> list[str]:
         """Return every on-disk image path referenced by the current project.
@@ -1758,7 +1841,7 @@ class MainWindow(QMainWindow):
             name = os.path.basename(self._current_project_path)
         else:
             name = "Untitled"
-        self.setWindowTitle(f"Academic Figure Layout v{self._app_version} - {name}[*]")
+        self.setWindowTitle(f"{self._app_name} v{self._app_version} - {name}[*]")
         self._update_convert_action()
 
     def _acquire_file_lock(self, tab, file_path: str) -> bool:
@@ -1775,9 +1858,9 @@ class MainWindow(QMainWindow):
             return True
         except PresenceLockError as e:
             QMessageBox.warning(
-                self, "File Already Open",
-                f"\"{os.path.basename(file_path)}\" is already open by {e.owner}.\n\n"
-                "Close it in the other instance before opening it here.",
+                self, tr("msg_file_open_title"),
+                tr("msg_file_open_owner").format(
+                    name=os.path.basename(file_path), owner=e.owner),
             )
             return False
         except Exception as e:
@@ -1867,6 +1950,9 @@ class MainWindow(QMainWindow):
         pending = self._snapshots.pending()
         if not pending:
             return
+        # The recovery prompt needs a visible home — surface the main
+        # window first if the launcher is still up.
+        self._dismiss_welcome()
         ret = QMessageBox.question(
             self, tr("msg_recovery_title"),
             tr("msg_recovery_body").format(count=len(pending)),
@@ -2373,6 +2459,10 @@ class MainWindow(QMainWindow):
                     "label_offset_y": self.project.label_offset_y,
                     "label_row_height": getattr(self.project, 'label_row_height', 0.0),
                     "label_col_width": getattr(self.project, 'label_col_width', 0.0),
+                    "placement": getattr(text_obj, 'placement', None) if text_obj else None,
+                    "label_tier": getattr(text_obj, 'label_tier', 'panel') if text_obj else 'panel',
+                    "style_locked": getattr(text_obj, 'style_locked', False) if text_obj else False,
+                    "rotation": getattr(text_obj, 'rotation', 0.0) if text_obj else 0.0,
                 }
                 self.inspector.set_selection('label_cell', label_data)
                 return
@@ -2428,7 +2518,13 @@ class MainWindow(QMainWindow):
                  text_dict["label_scheme"] = self.project.label_scheme
                  self.inspector.set_selection('text', text_dict)
                  return
-                 
+
+        if hasattr(item, 'group_label_id'):
+            group_label = self.project.find_group_label(item.group_label_id)
+            if group_label:
+                self.inspector.set_selection('group_label', group_label.to_dict())
+                return
+
         self.inspector.set_selection(None, self.project.to_dict())
 
     def _on_scene_selection_changed_custom(self, _ids: list):
@@ -2583,6 +2679,189 @@ class MainWindow(QMainWindow):
         cmd = DeleteSizeGroupCommand(self.project, group_id, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
+    # ------------------------------------------------------------------
+    # Group labels and per-label overrides
+    # ------------------------------------------------------------------
+
+    def _on_label_item_property_changed(self, text_item_id: str, changes: dict):
+        """Edit one numbering label's placement / tier / style lock / rotation.
+
+        A tier change also re-applies the tier's font settings so the label
+        immediately looks like its new tier.
+        """
+        text_obj = next((t for t in self.project.text_items if t.id == text_item_id), None)
+        if not text_obj:
+            return
+        if "label_tier" in changes:
+            changes = dict(changes)
+            changes.update(self.project.label_style_fields(changes["label_tier"]))
+        cmd = MultiPropertyChangeCommand(
+            [text_obj], changes, self._refresh_and_update, "Edit Label Item")
+        self.undo_stack.push(cmd)
+
+    def _on_group_label_property_changed(self, group_label_id: str, changes: dict):
+        cmd = GroupLabelPropertyChangeCommand(
+            self.project, group_label_id, changes, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_group_label_delete(self, group_label_id: str):
+        cmd = DeleteGroupLabelCommand(
+            self.project, group_label_id, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_group_label_double_clicked(self, group_label_id: str):
+        """Quick-edit the group label's text inline."""
+        group_label = self.project.find_group_label(group_label_id)
+        if not group_label:
+            return
+        from PyQt6.QtWidgets import QInputDialog
+        new_text, ok = QInputDialog.getText(
+            self, tr("grp_group_label"), tr("lbl_text") + ":",
+            text=group_label.text)
+        if ok and new_text != group_label.text:
+            self._on_group_label_property_changed(group_label_id, {"text": new_text})
+
+    def _selected_label_target_ids(self) -> list:
+        """Cell ids behind the current selection, in click order.
+
+        Sub-cells keep their own ids: a shared label spans exactly the
+        selected run, not the whole split container they live in.
+        """
+        seen = set()
+        target_ids = []
+        for item in self.scene.selectedItems():
+            if not hasattr(item, 'cell_id') or getattr(item, 'is_label_cell', False):
+                continue
+            cell = self.project.find_cell_by_id(item.cell_id)
+            if cell and cell.id not in seen:
+                seen.add(cell.id)
+                target_ids.append(cell.id)
+        return target_ids
+
+    def _top_level_ancestor(self, cell):
+        """Walk up the split hierarchy to the top-level cell containing *cell*."""
+        top = cell
+        parent = self.project.find_parent_of(top.id)
+        while parent:
+            top = parent
+            parent = self.project.find_parent_of(top.id)
+        return top
+
+    def _shared_label_eligible(self, side: str) -> bool:
+        """True when the selection can host a shared label on *side*.
+
+        Spans (top/bottom) need a contiguous run inside ONE scope: adjacent
+        cells of a single row, or adjacent siblings of one split container.
+        A row title (left/right) only needs the selection to sit in one
+        row, since it addresses the whole row anyway.
+        """
+        from src.model.layout_engine import LayoutEngine
+        cells = [self.project.find_cell_by_id(cid)
+                 for cid in self._selected_label_target_ids()]
+        cells = [c for c in cells if c]
+        if not cells:
+            return False
+        if side in ("left", "right"):
+            rows = {self._top_level_ancestor(c).row_index for c in cells}
+            return len(rows) == 1
+        parent_ids = set()
+        for c in cells:
+            parent = self.project.find_parent_of(c.id)
+            parent_ids.add(parent.id if parent else None)
+        if len(parent_ids) != 1:
+            return False
+        parent_id = next(iter(parent_ids))
+        if parent_id is None:
+            return LayoutEngine.shared_label_eligible(cells)
+        parent = self.project.find_cell_by_id(parent_id)
+        selected_ids = {c.id for c in cells}
+        positions = sorted(i for i, child in enumerate(parent.children)
+                           if child.id in selected_ids)
+        return positions == list(range(positions[0], positions[0] + len(positions)))
+
+    def _sync_group_label_menu(self):
+        """Grey out the shared-label actions when the selection can't host one."""
+        any_enabled = False
+        for action, side in zip(self._group_label_actions,
+                                ("top", "bottom", "left", "right")):
+            ok = self._shared_label_eligible(side)
+            action.setEnabled(ok)
+            any_enabled = any_enabled or ok
+        self._act_group_label_hint.setVisible(not any_enabled)
+
+    def _on_add_group_label(self, side: str):
+        """Create a GroupLabel spanning the current cell selection.
+
+        A selection inside one row makes a column header / bottom caption;
+        side labels target the whole row so a single click yields a rotated
+        row title. The text is asked for up front — a band captioned
+        "Group" would tell the user nothing.
+        """
+        target_ids = self._selected_label_target_ids()
+        if not target_ids:
+            self.statusbar.showMessage(tr("tip_group_label_needs_selection"), 3000)
+            return
+
+        from PyQt6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(
+            self, tr("menu_group_label"), tr("dlg_group_label_text"),
+            text=tr("default_group_label_text"))
+        if not ok:
+            return
+        text = text.strip() or tr("default_group_label_text")
+
+        row_index = None
+        if side in ("left", "right"):
+            first = self.project.find_cell_by_id(target_ids[0])
+            row_index = self._top_level_ancestor(first).row_index
+            target_ids = []
+
+        from src.model.layout_engine import LayoutEngine
+        level = LayoutEngine.group_label_auto_level(
+            self.project, target_ids, row_index, side)
+        group_label = GroupLabel(
+            text=text, cell_ids=target_ids,
+            row_index=row_index, side=side, level=level,
+            font_size_pt=self.project.label_font_size,
+            font_weight="bold" if side in ("top", "bottom") else "normal",
+        )
+        cmd = AddGroupLabelCommand(self.project, group_label, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+        # Select the new band so the inspector opens on it straight away.
+        item = self.scene.group_label_items.get(group_label.id)
+        if item is not None:
+            self.scene.clearSelection()
+            item.setSelected(True)
+
+    def _on_label_placement_dropped(self, text_item_id: str, placement: str):
+        """Canvas drag of a strip label onto a placement target (undoable)."""
+        self._on_label_item_property_changed(text_item_id, {"placement": placement})
+
+    def _on_group_label_level_dropped(self, group_label_id: str, level: int):
+        """Canvas drag past the resting slot = restack the band (undoable)."""
+        group_label = self.project.find_group_label(group_label_id)
+        if group_label is None or group_label.level == level:
+            return
+        cmd = GroupLabelPropertyChangeCommand(
+            self.project, group_label_id, {"level": level},
+            self._refresh_and_update)
+        self.undo_stack.push(cmd)
+
+    def _on_group_label_side_dropped(self, group_label_id: str, side: str):
+        """Apply a canvas drag-to-re-side: undoable, then animate the move."""
+        item = self.scene.group_label_items.get(group_label_id)
+        old_band = item.band_scene_rect() if item is not None else None
+        cmd = GroupLabelPropertyChangeCommand(
+            self.project, group_label_id, {"side": side},
+            self._refresh_and_update)
+        self.undo_stack.push(cmd)
+        # The relayout moved the band instantly; tween from the old rect so
+        # the eye can follow where it went.
+        if old_band is not None:
+            item = self.scene.group_label_items.get(group_label_id)
+            if item is not None:
+                item.animate_from(old_band)
+
     def _on_size_group_add_to_existing(self, group_id: str):
         """Add currently-selected cells to an existing group (from context menu)."""
         cells = self._selected_leaf_cells()
@@ -2728,6 +3007,8 @@ class MainWindow(QMainWindow):
             prefix = "label_"
             if text_obj.subtype == "corner":
                 prefix = "corner_label_"
+            elif getattr(text_obj, 'label_tier', 'panel') == "title":
+                prefix = "title_label_"
 
             if "font_family" in style_changes:
                 project_style_changes[f"{prefix}font_family"] = style_changes["font_family"]
@@ -2822,28 +3103,40 @@ class MainWindow(QMainWindow):
         label_props = {"label_font_family", "label_font_size", "label_font_weight"}
         is_label_change = bool(label_props & set(changes.keys()))
 
+        title_label_props = {"title_label_font_family", "title_label_font_size", "title_label_font_weight", "title_label_color"}
+        is_title_label_change = bool(title_label_props & set(changes.keys()))
+
         corner_label_props = {"corner_label_font_family", "corner_label_font_size", "corner_label_font_weight", "corner_label_color"}
         is_corner_label_change = bool(corner_label_props & set(changes.keys()))
-        
-        if is_label_change:
+
+        if is_label_change or is_title_label_change:
             # Use callback that also syncs label styles
             cmd = PropertyChangeCommand(self.project, processed_changes, self._refresh_and_sync_labels, "Change Label Settings")
         elif is_corner_label_change:
             cmd = PropertyChangeCommand(self.project, processed_changes, self._refresh_and_sync_corner_labels, "Change Corner Label Settings")
         else:
             cmd = PropertyChangeCommand(self.project, processed_changes, self._refresh_and_update, "Change Project Settings")
-        
+
         self.undo_stack.push(cmd)
 
     def _refresh_and_sync_labels(self):
-        """Refresh and also sync all cell-scoped labels (numbering) to project label settings (excluding color)"""
+        """Sync numbering labels to their tier's project settings.
+
+        A label keeps the font of its tier (panel vs title) rather than one
+        global look, and style-locked labels are left untouched. Color stays
+        per-label, as before.
+        """
         for text_item in self.project.text_items:
-            # Sync if it's cell-scoped and NOT explicitly a corner label
-            if text_item.scope == "cell" and text_item.subtype != "corner":
-                text_item.font_family = self.project.label_font_family
-                text_item.font_size_pt = self.project.label_font_size
-                text_item.font_weight = self.project.label_font_weight
-                # Color is now per-label, not auto-synced
+            if text_item.scope != "cell" or text_item.subtype == "corner":
+                continue
+            if getattr(text_item, 'style_locked', False):
+                continue
+            style = self.project.label_style_fields(
+                getattr(text_item, 'label_tier', 'panel')
+            )
+            text_item.font_family = style["font_family"]
+            text_item.font_size_pt = style["font_size_pt"]
+            text_item.font_weight = style["font_weight"]
         self._refresh_and_update()
 
     def _refresh_and_sync_corner_labels(self):
@@ -2916,7 +3209,12 @@ class MainWindow(QMainWindow):
 
         handled = False
         for item in items:
-            if hasattr(item, 'text_item_id'):
+            if hasattr(item, 'group_label_id'):
+                cmd = DeleteGroupLabelCommand(
+                    self.project, item.group_label_id, self._refresh_and_update)
+                self.undo_stack.push(cmd)
+                handled = True
+            elif hasattr(item, 'text_item_id'):
                 text_obj = next((t for t in self.project.text_items if t.id == item.text_item_id), None)
                 if text_obj:
                     cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
@@ -3235,6 +3533,25 @@ class MainWindow(QMainWindow):
                     add_box_action.triggered.connect(
                         lambda checked=False, _id=_anc_id: self._ctx_add_numbering_label(_id))
                 _anc = self.project.find_parent_of(_anc_id)
+
+        label_menu.addSeparator()
+
+        # Shared label — spans several selected cells; gated by the
+        # same eligibility rule the Edit menu uses.
+        shared_menu = label_menu.addMenu(tr("menu_group_label"))
+        shared_menu.setToolTipsVisible(True)
+        any_shared = False
+        for side in ("top", "bottom", "left", "right"):
+            ok = self._shared_label_eligible(side)
+            shared_act = shared_menu.addAction(tr(f"action_group_label_{side}"))
+            shared_act.setToolTip(tr(f"tip_group_label_{side}"))
+            shared_act.setEnabled(ok)
+            any_shared = any_shared or ok
+            shared_act.triggered.connect(
+                lambda checked=False, s=side: self._on_add_group_label(s))
+        if not any_shared:
+            hint_act = shared_menu.addAction(tr("hint_group_label_select_cells"))
+            hint_act.setEnabled(False)
 
         label_menu.addSeparator()
 
@@ -3822,10 +4139,10 @@ class MainWindow(QMainWindow):
 
     def _on_export_pdf(self):
         default_dir = self._get_export_default_dir()
-        path, _ = QFileDialog.getSaveFileName(self, "Export PDF", default_dir, "PDF Files (*.pdf)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_pdf"), default_dir, "PDF Files (*.pdf)")
         if path:
             PdfExporter.export(self.project, path)
-            QMessageBox.information(self, "Export", f"Exported to {path}")
+            QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_export_tiff(self):
         default_dir = self._get_export_default_dir()
@@ -3874,40 +4191,42 @@ class MainWindow(QMainWindow):
         info_tail = ""
         if color_mode == 'cmyk':
             if icc_path:
-                info_tail = f"\nICC profile: {os.path.basename(icc_path)}"
+                info_tail = tr("msg_icc_tail").format(
+                    name=os.path.basename(icc_path))
             else:
-                info_tail = "\n(no ICC profile — naive conversion)"
+                info_tail = tr("msg_no_icc_tail")
         QMessageBox.information(
-            self, "Export",
-            f"Exported to {path} ({color_mode.upper()}){info_tail}"
+            self, tr("msg_export_done_title"),
+            tr("msg_export_done").format(
+                path=path, mode=color_mode.upper(), tail=info_tail)
         )
 
     def _on_export_png(self):
         default_dir = self._get_export_default_dir()
-        path, _ = QFileDialog.getSaveFileName(self, "Export PNG", default_dir, "PNG Files (*.png)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_png"), default_dir, "PNG Files (*.png)")
         if path:
             if not path.lower().endswith('.png'):
                 path += '.png'
             ImageExporter.export(self.project, path, "PNG")
-            QMessageBox.information(self, "Export", f"Exported to {path}")
+            QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_export_jpg(self):
         default_dir = self._get_export_default_dir()
-        path, _ = QFileDialog.getSaveFileName(self, "Export JPG", default_dir, "JPEG Files (*.jpg *.jpeg)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_jpg"), default_dir, "JPEG Files (*.jpg *.jpeg)")
         if not path:
             return
         ImageExporter.export(self.project, path, "JPG")
-        QMessageBox.information(self, "Export", f"Exported to {path}")
+        QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_export_svg(self):
         from src.export.svg_exporter import SvgExporter
         default_dir = self._get_export_default_dir()
-        path, _ = QFileDialog.getSaveFileName(self, "Export SVG", default_dir, "SVG Files (*.svg)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_svg"), default_dir, "SVG Files (*.svg)")
         if path:
             if not path.lower().endswith('.svg'):
                 path += '.svg'
             SvgExporter.export(self.project, path)
-            QMessageBox.information(self, "Export", f"Exported to {path}")
+            QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_open_svg_text_inspector(self, svg_path: str, cell=None):
         """Open a stand-alone SVG text inspector for the given SVG file."""
@@ -4006,14 +4325,34 @@ class MainWindow(QMainWindow):
         else:
             self._agent_server_controller.stop()
             self._act_enable_agent_server.setText(tr("action_enable_agent_server"))
+        self._update_mcp_status()
 
     def _on_show_mcp_guide(self) -> None:
         from src.app.mcp_guide_dialog import MCPGuideDialog
         dlg = MCPGuideDialog(self)
         dlg.show()
 
+    def _update_mcp_status(self):
+        """Refresh the permanent AI/MCP status dot in the status bar."""
+        running = (self._agent_server_controller is not None
+                   and self._agent_server_controller.is_running())
+        text_col = self.palette().color(QPalette.ColorRole.WindowText).name()
+        if running:
+            dot, text = "#3FB950", tr("mcp_status_on")
+            tip = tr("mcp_status_tip_on").format(url=self._mcp_last_info or "")
+        else:
+            dot, text = "#8C959F", tr("mcp_status_off")
+            tip = tr("mcp_status_tip_off")
+        self.mcp_status_label.setText(
+            f'<a href="toggle" style="color:{text_col}; text-decoration:none;">'
+            f'<span style="color:{dot};">&#9679;</span> {text}</a>'
+        )
+        self.mcp_status_label.setToolTip(tip)
+
     def _on_agent_server_status(self, running: bool, info: str) -> None:
         """Forward agent server status to the status bar."""
+        self._mcp_last_info = info or ""
+        self._update_mcp_status()
         if running:
             self.statusBar().showMessage(f"Agent server: {info}", 6000)
         else:
@@ -4070,15 +4409,9 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _on_new_project(self):
-        if not self._maybe_save():
-            return
-
-        project = Project()
-        project.rows = [
-            RowTemplate(index=0, column_count=2, height_ratio=1.0),
-            RowTemplate(index=1, column_count=2, height_ratio=1.0)
-        ]
-        self._set_project(project, None)
+        """File > New — opens the blank project in a NEW tab; the current
+        tab keeps its project, so there is nothing to prompt-save."""
+        self._on_new_tab()
 
     # ------------------------------------------------------------------
     # Recent projects (persisted via QSettings)
@@ -4165,9 +4498,10 @@ class MainWindow(QMainWindow):
         """Extract a .figpack into the per-archive cache dir on a worker
         thread, then hydrate a Project from the resulting JSON."""
         dlg = QProgressDialog(
-            f"Opening {os.path.basename(path)}…", "Cancel", 0, 0, self,
+            tr("dlg_opening_name").format(name=os.path.basename(path)),
+            tr("btn_cancel"), 0, 0, self,
         )
-        dlg.setWindowTitle("Opening figpack")
+        dlg.setWindowTitle(tr("dlg_opening_figpack"))
         dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
         dlg.setMinimumDuration(0)
         dlg.setAutoClose(False)
@@ -4197,14 +4531,14 @@ class MainWindow(QMainWindow):
             err_msg = result["err"]
             if "lock already held" in err_msg:
                 QMessageBox.warning(
-                    self, "File Already Open",
-                    f"\"{os.path.basename(path)}\" is already open in another "
-                    "instance of ImageLayoutManager.\n\n"
-                    "Close it in the other instance before opening it here.",
+                    self, tr("msg_file_open_title"),
+                    tr("msg_file_open_instance").format(
+                        name=os.path.basename(path)),
                 )
             else:
-                QMessageBox.warning(self, "Open failed",
-                                    f"Failed to open .figpack:\n{err_msg}")
+                QMessageBox.warning(
+                    self, tr("msg_open_failed_title"),
+                    tr("msg_open_figpack_failed").format(error=err_msg))
             return
         if "wd" not in result:
             return  # cancelled
@@ -4216,7 +4550,8 @@ class MainWindow(QMainWindow):
         except Exception as e:
             wd.release()
             QMessageBox.warning(
-                self, "Open failed", f"Bundle JSON could not be parsed:\n{e}",
+                self, tr("msg_open_failed_title"),
+                tr("msg_open_failed_body").format(error=e),
             )
             return
 
@@ -4345,6 +4680,7 @@ class MainWindow(QMainWindow):
         if not os.path.exists(path):
             QMessageBox.warning(self, "Open failed", f"File not found:\n{path}")
             return
+        self._dismiss_welcome()
 
         # Same-instance deduplication: switch to existing tab instead of opening twice.
         norm = os.path.normcase(os.path.abspath(path))
@@ -4406,9 +4742,8 @@ class MainWindow(QMainWindow):
         cur_ext = os.path.splitext(self._current_project_path or "")[1].lower()
         if cur_ext != ".figpack" and not self.undo_stack.isClean():
             ret = QMessageBox.question(
-                self, "Format change clears undo history",
-                "Converting to .figpack will discard the current undo / "
-                "redo history. Continue?",
+                self, tr("msg_fmt_change_title"),
+                tr("msg_fmt_convert_body"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -4442,10 +4777,8 @@ class MainWindow(QMainWindow):
         )
         if format_change and not self.undo_stack.isClean():
             ret = QMessageBox.question(
-                self, "Format change clears undo history",
-                f"Saving as {new_ext} (was {cur_ext}) will rewrite all "
-                "image paths and discard the current undo / redo "
-                "history. Continue?",
+                self, tr("msg_fmt_change_title"),
+                tr("msg_fmt_saveas_body").format(new=new_ext, cur=cur_ext),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -4556,7 +4889,8 @@ class MainWindow(QMainWindow):
                 _sh.copy2(src, dst)
             except OSError as e:
                 QMessageBox.warning(
-                    self, "Error", f"Failed to copy {dst_name}:\n{e}",
+                    self, tr("title_error"),
+                    tr("msg_copy_failed").format(name=dst_name, error=e),
                 )
                 return False
             copied[src] = dst
@@ -4640,9 +4974,10 @@ class MainWindow(QMainWindow):
         dialog with Cancel. Returns True on success, False on cancel
         or error (after surfacing a message to the user)."""
         dlg = QProgressDialog(
-            f"Saving {os.path.basename(output_path)}…", "Cancel", 0, 0, self,
+            tr("dlg_saving_name").format(name=os.path.basename(output_path)),
+            tr("btn_cancel"), 0, 0, self,
         )
-        dlg.setWindowTitle("Saving figpack")
+        dlg.setWindowTitle(tr("dlg_saving_figpack"))
         dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
         dlg.setMinimumDuration(0)
         dlg.setAutoClose(False)
@@ -4700,8 +5035,8 @@ class MainWindow(QMainWindow):
 
         if "err" in result:
             QMessageBox.warning(
-                self, "Save failed",
-                f"Failed to save .figpack:\n{result['err']}",
+                self, tr("msg_save_failed_title"),
+                tr("msg_save_failed_body").format(error=result['err']),
             )
             return False
         if not result.get("ok"):
@@ -4710,7 +5045,7 @@ class MainWindow(QMainWindow):
 
     def _on_import_images(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Import Images", "", 
+            self, tr("dlg_import_images"), "", 
             "Images (*.png *.jpg *.jpeg *.tif *.tiff *.bmp *.gif *.webp *.svg *.pdf *.eps);;All Files (*)"
         )
         if paths:

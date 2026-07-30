@@ -19,6 +19,20 @@ class TextItem:
     scope: str = "global" # global, cell
     subtype: Optional[str] = None # numbering, corner, or None
     parent_id: Optional[str] = None # if scope is cell
+
+    # Style tier for cell labels: "panel" follows Project.label_* (bold
+    # letters), "title" follows Project.title_label_* (descriptive captions).
+    # Lets one figure mix panel letters and panel titles durably.
+    label_tier: str = "panel"  # panel | title
+
+    # When True the tier-wide style sync leaves this item alone, so a single
+    # label can keep a bespoke font without being overwritten.
+    style_locked: bool = False
+
+    # Per-label placement override. None = inherit Project.label_placement.
+    # One of in_cell | label_row_above | label_row_below | label_col_left |
+    # label_col_right. Enables mixed placement within one figure.
+    placement: Optional[str] = None
     
     # For global/floating text: absolute canvas position in MILLIMETRES.
     # Scene coordinates are in mm (page_rect is in mm), so these values are
@@ -51,6 +65,9 @@ class TextItem:
             "scope": self.scope,
             "subtype": self.subtype,
             "parent_id": self.parent_id,
+            "label_tier": self.label_tier,
+            "style_locked": self.style_locked,
+            "placement": self.placement,
             "x": self.x,
             "y": self.y,
             "rotation": self.rotation,
@@ -463,6 +480,106 @@ class ExportRegion:
         return cls(**{k: v for k, v in data.items() if k in allowed})
 
 
+#: Sides a GroupLabel band can occupy.
+GROUP_LABEL_SIDES = ("top", "bottom", "left", "right")
+#: Decorations that can be drawn between a GroupLabel and its cells.
+GROUP_LABEL_BRACKETS = ("none", "line", "bracket", "brace")
+
+
+@dataclass
+class GroupLabel:
+    """A label that spans several cells (or a whole row) and owns layout space.
+
+    Unlike a cell label — which is pinned 1:1 to one cell — a GroupLabel
+    targets a *set* of cells or an entire row and reserves a band next to
+    them, so the figure reflows instead of the text overlapping artwork.
+    This covers column headers, rotated row titles, and grouped spans such
+    as "Day 7" centred over three columns.
+
+    Targeting is either ``row_index`` (the whole row) or ``cell_ids``
+    (an arbitrary set). ``row_index`` wins when both are set.
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    text: str = "Group"
+
+    # --- Target ---
+    cell_ids: List[str] = field(default_factory=list)
+    row_index: Optional[int] = None
+
+    # --- Band placement ---
+    side: str = "top"          # top | bottom | left | right
+    # Reserved band thickness (height for top/bottom, width for left/right).
+    # 0 = auto-size from the font and bracket settings.
+    thickness_mm: float = 0.0
+    # Clearance between the band and the artwork it labels.
+    gap_mm: float = 1.0
+    # Stacking order for several bands on the same row+side.
+    # 0 sits nearest the artwork; higher levels stack further out.
+    level: int = 0
+    # Along-band alignment: left|center|right for top/bottom bands,
+    # top|center|bottom for left/right bands.
+    align: str = "center"
+    offset_x: float = 0.0
+    offset_y: float = 0.0
+    # Text rotation in degrees. None = auto (0 for top/bottom bands, 90 for
+    # left and 270 for right, matching journal row-title convention).
+    rotation: Optional[float] = None
+
+    # --- Style ---
+    font_family: str = "Arial"
+    font_size_pt: int = 12
+    font_weight: str = "bold"
+    color: str = "#000000"
+
+    # --- Bracket / rule drawn on the artwork-facing edge of the band ---
+    bracket_style: str = "none"      # none | line | bracket | brace
+    bracket_width_pt: float = 1.0
+    bracket_color: str = "#000000"
+    bracket_tick_mm: float = 1.5     # tick / brace depth
+    bracket_gap_mm: float = 0.8      # clearance between text and bracket
+
+    def auto_rotation(self) -> float:
+        """Rotation actually used, resolving the ``None`` auto value."""
+        if self.rotation is not None:
+            return self.rotation
+        if self.side == "left":
+            return 90.0
+        if self.side == "right":
+            return 270.0
+        return 0.0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "text": self.text,
+            "cell_ids": list(self.cell_ids),
+            "row_index": self.row_index,
+            "side": self.side,
+            "thickness_mm": self.thickness_mm,
+            "gap_mm": self.gap_mm,
+            "level": self.level,
+            "align": self.align,
+            "offset_x": self.offset_x,
+            "offset_y": self.offset_y,
+            "rotation": self.rotation,
+            "font_family": self.font_family,
+            "font_size_pt": self.font_size_pt,
+            "font_weight": self.font_weight,
+            "color": self.color,
+            "bracket_style": self.bracket_style,
+            "bracket_width_pt": self.bracket_width_pt,
+            "bracket_color": self.bracket_color,
+            "bracket_tick_mm": self.bracket_tick_mm,
+            "bracket_gap_mm": self.bracket_gap_mm,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'GroupLabel':
+        allowed = {f.name for f in fields(cls)}
+        clean = {k: v for k, v in data.items() if k in allowed}
+        return cls(**clean)
+
+
 @dataclass
 class Project:
     name: str = "Untitled Project"
@@ -497,9 +614,19 @@ class Project:
 
     # Text
     text_items: List[TextItem] = field(default_factory=list)
-    
+
+    # Group Labels (span several cells or a whole row, and reserve space)
+    group_labels: List[GroupLabel] = field(default_factory=list)
+
     # Global Label Settings (Numbering)
-    label_scheme: str = "(a)" # (a), (A), a, A
+    label_scheme: str = "(a)" # see src/utils/label_numbering.SCHEMES
+    # Second-level scheme for sub-cells inside a split panel. "" disables
+    # hierarchy, so every label shares one continuous sequence (legacy).
+    label_scheme_sub: str = ""
+    # When True sub-labels are prefixed with the parent's core text, giving
+    # "A-i" style compound labels instead of a bare "i".
+    label_sub_prefix_parent: bool = False
+    label_sub_separator: str = ""
     label_placement: str = "in_cell"
     label_font_family: str = "Arial"
     label_font_size: int = 12
@@ -533,6 +660,43 @@ class Project:
     corner_label_font_size: int = 12
     corner_label_font_weight: str = "bold"
     corner_label_color: str = "#000000"
+
+    # Global "title" tier settings for descriptive panel captions. Kept
+    # independent of label_* so bold panel letters and regular-weight titles
+    # can coexist without either overwriting the other.
+    title_label_font_family: str = "Arial"
+    title_label_font_size: int = 10
+    title_label_font_weight: str = "normal"
+    title_label_color: str = "#000000"
+
+    def label_style_fields(self, tier: str) -> Dict[str, Any]:
+        """Font/colour values a cell label of *tier* should inherit."""
+        if tier == "title":
+            return {
+                "font_family": self.title_label_font_family,
+                "font_size_pt": self.title_label_font_size,
+                "font_weight": self.title_label_font_weight,
+                "color": self.title_label_color,
+            }
+        return {
+            "font_family": self.label_font_family,
+            "font_size_pt": self.label_font_size,
+            "font_weight": self.label_font_weight,
+            "color": self.label_color,
+        }
+
+    def effective_label_placement(self, text_item: TextItem) -> str:
+        """Placement for *text_item*, resolving the inherit (None) case."""
+        return getattr(text_item, "placement", None) or self.label_placement
+
+    def find_group_label(self, group_label_id: str) -> Optional[GroupLabel]:
+        for g in self.group_labels:
+            if g.id == group_label_id:
+                return g
+        return None
+
+    def remove_group_label(self, group_label_id: str) -> None:
+        self.group_labels = [g for g in self.group_labels if g.id != group_label_id]
 
     def get_all_leaf_cells(self) -> List[Cell]:
         result = []
@@ -608,7 +772,11 @@ class Project:
             "size_groups": [g.to_dict() for g in self.size_groups],
             "svg_text_groups": [g.to_dict() for g in self.svg_text_groups],
             "text_items": [t.to_dict() for t in self.text_items],
+            "group_labels": [g.to_dict() for g in self.group_labels],
             "label_scheme": self.label_scheme,
+            "label_scheme_sub": self.label_scheme_sub,
+            "label_sub_prefix_parent": self.label_sub_prefix_parent,
+            "label_sub_separator": self.label_sub_separator,
             "label_placement": self.label_placement,
             "label_font_family": self.label_font_family,
             "label_font_size": self.label_font_size,
@@ -629,6 +797,10 @@ class Project:
             "corner_label_font_size": self.corner_label_font_size,
             "corner_label_font_weight": self.corner_label_font_weight,
             "corner_label_color": self.corner_label_color,
+            "title_label_font_family": self.title_label_font_family,
+            "title_label_font_size": self.title_label_font_size,
+            "title_label_font_weight": self.title_label_font_weight,
+            "title_label_color": self.title_label_color,
             "export_region": self.export_region.to_dict() if self.export_region else None,
         }
 
@@ -654,6 +826,7 @@ class Project:
         p.size_groups = [SizeGroup.from_dict(g) for g in data.get("size_groups", [])]
         p.svg_text_groups = [SvgTextGroup.from_dict(g) for g in data.get("svg_text_groups", [])]
         p.text_items = [TextItem.from_dict(t) for t in data.get("text_items", [])]
+        p.group_labels = [GroupLabel.from_dict(g) for g in data.get("group_labels", [])]
 
         # Prune orphan group references (group deleted but cell still refers to it)
         valid_group_ids = {g.id for g in p.size_groups}
@@ -662,6 +835,9 @@ class Project:
                 c.size_group_id = None
         
         p.label_scheme = data.get("label_scheme", "(a)")
+        p.label_scheme_sub = data.get("label_scheme_sub", "")
+        p.label_sub_prefix_parent = bool(data.get("label_sub_prefix_parent", False))
+        p.label_sub_separator = data.get("label_sub_separator", "")
         p.label_placement = data.get("label_placement", "in_cell")
         p.label_font_family = data.get("label_font_family", "Arial")
         p.label_font_size = data.get("label_font_size", 12)
@@ -686,6 +862,20 @@ class Project:
         p.corner_label_font_size = data.get("corner_label_font_size", 12)
         p.corner_label_font_weight = data.get("corner_label_font_weight", "bold")
         p.corner_label_color = data.get("corner_label_color", "#000000")
+
+        p.title_label_font_family = data.get("title_label_font_family", "Arial")
+        p.title_label_font_size = data.get("title_label_font_size", 10)
+        p.title_label_font_weight = data.get("title_label_font_weight", "normal")
+        p.title_label_color = data.get("title_label_color", "#000000")
+
+        # Drop group labels whose targets vanished (cells deleted while the
+        # label survived in an older save).
+        valid_cell_ids = {c.id for c in p.get_all_leaf_cells()} | {c.id for c in p.cells}
+        for g in p.group_labels:
+            g.cell_ids = [cid for cid in g.cell_ids if cid in valid_cell_ids]
+        p.group_labels = [
+            g for g in p.group_labels if g.row_index is not None or g.cell_ids
+        ]
 
         default_label_anchor = p.label_anchor or LabelPosition.TOP_LEFT.value
         if not default_label_anchor.endswith("_inside"):
