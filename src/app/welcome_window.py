@@ -88,6 +88,9 @@ class WelcomeWindow(QWidget):
         self._btn_close.clicked.connect(self.close)
         btn_col.addWidget(self._btn_close)
 
+        for button in (self._btn_new, self._btn_open, self._btn_close):
+            button.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect)
+
         btn_wrap = QHBoxLayout()
         btn_wrap.addStretch(1)
         btn_holder = QWidget()
