@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from PyQt6.QtWidgets import QGraphicsView
 from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF
 from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterPath, QPen, QBrush, QColor

@@ -641,6 +641,10 @@ class Inspector(QWidget):
         self.cell_layout.addRow(self._sec_grid_override)
         self.override_w = self._create_spinbox(0, 1000, self._on_override_w_changed)
         self.override_h = self._create_spinbox(0, 1000, self._on_override_h_changed)
+        # Ratio held by the lock when the cell has no measurable image.
+        self._locked_ratio = None
+        for spin in (self.override_w, self.override_h):
+            spin.editingFinished.connect(self._on_override_editing_finished)
         self.cell_layout.addRow(self._fl("lbl_width_mm"),  self.override_w)
         self.aspect_lock_btn = LockButton()
         self.aspect_lock_btn.setCheckable(True)
@@ -1691,26 +1695,53 @@ class Inspector(QWidget):
         icon = getattr(self, '_icon_lock_closed', None) if locked else getattr(self, '_icon_lock_open', None)
         if icon:
             self.aspect_lock_btn.setIcon(icon)
-        if locked:
-            burst_color = QColor(getattr(self, '_icon_theme_color', "#888888"))
-            self.aspect_lock_btn.play_lock_burst(burst_color)
-        if locked:
-            # Snap height to match current width using image aspect ratio
-            ar = self._current_aspect_ratio()
-            if ar and ar > 0 and self.override_w.value() > 0:
-                self.override_h.blockSignals(True)
-                self.override_h.setValue(round(self.override_w.value() / ar, 2))
-                self.override_h.blockSignals(False)
-            elif ar and ar > 0 and self.override_h.value() > 0:
-                self.override_w.blockSignals(True)
-                self.override_w.setValue(round(self.override_h.value() * ar, 2))
-                self.override_w.blockSignals(False)
+        if not locked:
+            self._locked_ratio = None
+            self._emit_override_size()
+            return
+
+        burst_color = QColor(getattr(self, '_icon_theme_color', "#888888"))
+        self.aspect_lock_btn.play_lock_burst(burst_color)
+        # Cells without a usable image still need something to hold: fall
+        # back to whatever width:height the fields show right now.
+        self._capture_locked_ratio()
+        # Snap height to match current width using the image aspect ratio.
+        ar = getattr(self, "_current_cell_aspect_ratio", None)
+        if ar and ar > 0 and self.override_w.value() > 0:
+            self.override_h.blockSignals(True)
+            self.override_h.setValue(round(self.override_w.value() / ar, 2))
+            self.override_h.blockSignals(False)
+        elif ar and ar > 0 and self.override_h.value() > 0:
+            self.override_w.blockSignals(True)
+            self.override_w.setValue(round(self.override_h.value() * ar, 2))
+            self.override_w.blockSignals(False)
         self._emit_override_size()
 
+    def _capture_locked_ratio(self):
+        """Remember the ratio the fields currently show, for cells whose image
+        ratio is unknown (placeholder cell, missing or unreadable file)."""
+        w, h = self.override_w.value(), self.override_h.value()
+        self._locked_ratio = (w / h) if w > 0 and h > 0 else None
+
+    def _on_override_editing_finished(self):
+        """Adopt a ratio once both fields are filled in under an active lock.
+
+        Deferred to editingFinished on purpose: valueChanged fires per
+        keystroke, so typing "40" would otherwise capture the ratio at "4".
+        """
+        if self.aspect_lock_btn.isChecked() and self._current_aspect_ratio() is None:
+            self._capture_locked_ratio()
+
     def _current_aspect_ratio(self) -> Optional[float]:
-        """Return w/h aspect ratio of the currently selected cell's image, or None."""
+        """Ratio the lock must hold.
+
+        The cell's displayed image ratio when it can be measured, otherwise
+        the width:height captured when the lock was engaged.
+        """
         ar = getattr(self, "_current_cell_aspect_ratio", None)
-        return ar
+        if ar and ar > 0:
+            return ar
+        return getattr(self, "_locked_ratio", None)
 
     # --- Size Group handlers ---
     _SG_DATA_ROLE = Qt.ItemDataRole.UserRole
@@ -2254,14 +2285,24 @@ class Inspector(QWidget):
             self.freeform_y.setValue(data.get("freeform_y_mm", 0.0))
             self.freeform_w.setValue(data.get("freeform_w_mm", 50.0))
             self.freeform_h.setValue(data.get("freeform_h_mm", 50.0))
+            # Ratio first: the size fields and the lock button below both
+            # consult it, and a stale value would rewrite the loaded sizes.
+            self._current_cell_aspect_ratio = data.get("_image_aspect_ratio")
+            self._locked_ratio = None
             self.override_w.setValue(data.get("override_width_mm", 0.0))
             self.override_h.setValue(data.get("override_height_mm", 0.0))
             locked = data.get("aspect_ratio_locked", False)
+            if locked and not self._current_cell_aspect_ratio:
+                # No image to measure: the stored pair is the locked ratio.
+                self._capture_locked_ratio()
+            # Syncing state is not a user click — skip the snap-to-ratio slot
+            # so the stored width/height survive selection.
+            self.aspect_lock_btn.blockSignals(True)
             self.aspect_lock_btn.setChecked(locked)
+            self.aspect_lock_btn.blockSignals(False)
             icon = getattr(self, '_icon_lock_closed', None) if locked else getattr(self, '_icon_lock_open', None)
             if icon:
                 self.aspect_lock_btn.setIcon(icon)
-            self._current_cell_aspect_ratio = data.get("_image_aspect_ratio")
             # Size group section
             self._populate_size_group_section(
                 data.get("size_group_id"),

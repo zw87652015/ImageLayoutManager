@@ -6,7 +6,7 @@ Register migrations in MIGRATIONS as (from_version, to_version, function).
 They are applied sequentially when loading an older file.
 """
 
-from typing import Dict, Any, List, Tuple, Callable
+from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
@@ -36,7 +36,7 @@ def _migrate_none_to_1_0_0(data: Dict[str, Any]) -> Dict[str, Any]:
 # ──────────────────────────────────────────────
 # (from_version_str | None, to_version_str, migration_func)
 # None means "no version tag" (legacy files).
-MIGRATIONS: List[Tuple[str | None, str, Callable[[Dict[str, Any]], Dict[str, Any]]]] = [
+MIGRATIONS: List[Tuple[Optional[str], str, Callable[[Dict[str, Any]], Dict[str, Any]]]] = [
     (None, "1.0.0", _migrate_none_to_1_0_0),
 ]
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import math
 import uuid
@@ -2580,8 +2582,8 @@ class MainWindow(QMainWindow):
                 )
         self.undo_stack.endMacro()
 
-    def _cell_image_aspect_ratio(self, cell) -> Optional[float]:
-        """Return w/h aspect ratio of the cell's image, or None if unavailable."""
+    def _cell_image_source_size(self, cell) -> Optional[Tuple[float, float]]:
+        """Return the (width, height) of the cell's image file, or None."""
         path = getattr(cell, 'image_path', None)
         if not path or not os.path.isfile(path):
             return None
@@ -2596,24 +2598,49 @@ class MainWindow(QMainWindow):
                 r = QSvgRenderer(QByteArray(data))
                 sz = r.defaultSize()
                 if sz.width() > 0 and sz.height() > 0:
-                    return sz.width() / sz.height()
+                    return (float(sz.width()), float(sz.height()))
             elif ext in ('.pdf', '.eps'):
                 import fitz
                 doc = fitz.open(path)
                 if doc.page_count > 0:
                     rect = doc[0].rect
                     doc.close()
-                    if rect.height > 0:
-                        return rect.width / rect.height
+                    if rect.width > 0 and rect.height > 0:
+                        return (float(rect.width), float(rect.height))
             else:
                 from PIL import Image
                 with Image.open(path) as img:
                     w, h = img.size
-                    if h > 0:
-                        return w / h
+                    if w > 0 and h > 0:
+                        return (float(w), float(h))
         except Exception:
             pass
         return None
+
+    def _cell_image_aspect_ratio(self, cell) -> Optional[float]:
+        """Return the w/h aspect ratio the cell actually *displays*, or None.
+
+        Crop and 90/270 rotation change the visible shape, so the aspect
+        ratio lock has to work from the effective ratio — not the raw one
+        stored in the file. Crop fractions apply to the original image,
+        before rotation (see Cell.crop_* in data_model).
+        """
+        size = self._cell_image_source_size(cell)
+        if size is None:
+            return None
+        w, h = size
+
+        frac_w = getattr(cell, 'crop_right', 1.0) - getattr(cell, 'crop_left', 0.0)
+        frac_h = getattr(cell, 'crop_bottom', 1.0) - getattr(cell, 'crop_top', 0.0)
+        if frac_w > 0:
+            w *= frac_w
+        if frac_h > 0:
+            h *= frac_h
+
+        if int(getattr(cell, 'rotation', 0) or 0) % 180 == 90:
+            w, h = h, w
+
+        return w / h if h > 0 else None
 
     def _size_groups_payload(self) -> list:
         """Build the list-of-dicts passed to the inspector for combo population."""
