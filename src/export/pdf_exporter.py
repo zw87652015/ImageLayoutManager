@@ -788,15 +788,13 @@ class PdfExporter:
 
         Each label is styled from its own TextItem fields rather than the
         project defaults, so panel letters and panel titles can share a
-        figure. Uses the same QGraphicsTextItem rendering approach as
-        _draw_text to ensure font size matches the canvas exactly.
+        figure. Sizing mirrors CellItem._draw_label_cell so the exported
+        label matches the canvas exactly.
         """
         label_rects = getattr(layout_result, 'label_rects', {})
         if not label_rects:
             return
 
-        # Use same base_pt / text_scale approach as _draw_text and TextGraphicsItem
-        base_pt = 24
         align = getattr(project, 'label_align', 'center')
         ox_mm = getattr(project, 'label_offset_x', 0.0)
         oy_mm = getattr(project, 'label_offset_y', 0.0)
@@ -808,53 +806,38 @@ class PdfExporter:
                 continue
             lx, ly, lw, lh = label_rects[t.parent_id]
 
-            text_scale = t.font_size_pt / base_pt
-            font = QFont(t.font_family, base_pt)
+            # The canvas draws strip labels with an explicit pixel size, i.e.
+            # one point of label font spans one millimetre on the page (the
+            # same convention the layout engine sizes the strip with). Mirror
+            # that here instead of measuring a point-sized QGraphicsTextItem,
+            # whose metrics carry the screen's 96-dpi pt→px factor and would
+            # render the label a third larger than the app shows.
+            font = QFont(t.font_family)
+            font.setPixelSize(max(1, int(round(t.font_size_pt * scale))))
             if t.font_weight == "bold":
                 font.setBold(True)
 
-            # Create a temporary QGraphicsTextItem to measure and render
-            temp_item = QGraphicsTextItem()
-            temp_item.setPlainText(t.text)
-            temp_item.setFont(font)
-            temp_item.setDefaultTextColor(QColor(t.color))
-
-            base_rect = temp_item.boundingRect()
-            tw_mm = base_rect.width() * text_scale
-            th_mm = base_rect.height() * text_scale
-
-            # Position within label cell (mm), applying alignment and offsets
-            cell_x_mm = lx + ox_mm
-            cell_y_mm = ly + oy_mm
-            cell_w_mm = lw
-            cell_h_mm = lh
-
-            # Vertical: center in label cell
-            y_mm = cell_y_mm + (cell_h_mm - th_mm) / 2.0
-
-            # Horizontal: align within label cell
+            rect_dots = QRectF((lx + ox_mm) * scale, (ly + oy_mm) * scale,
+                               lw * scale, lh * scale)
             if align == 'left':
-                x_mm = cell_x_mm
+                h_align = Qt.AlignmentFlag.AlignLeft
             elif align == 'right':
-                x_mm = cell_x_mm + cell_w_mm - tw_mm
+                h_align = Qt.AlignmentFlag.AlignRight
             else:
-                x_mm = cell_x_mm + (cell_w_mm - tw_mm) / 2.0
+                h_align = Qt.AlignmentFlag.AlignHCenter
 
-            # Render using painter.scale — same approach as _draw_text
-            render_scale = text_scale * scale
-            rotation = getattr(t, 'rotation', 0.0) or 0.0
             painter.save()
+            painter.setFont(font)
+            painter.setPen(QColor(t.color))
+            rotation = getattr(t, 'rotation', 0.0) or 0.0
             if rotation:
-                # Rotate about the text's centre so alignment still holds.
-                painter.translate((x_mm + tw_mm / 2.0) * scale,
-                                  (y_mm + th_mm / 2.0) * scale)
+                # Rotate about the strip's centre so alignment still holds.
+                centre = rect_dots.center()
+                painter.translate(centre)
                 painter.rotate(rotation)
-                painter.translate(-(tw_mm / 2.0) * scale, -(th_mm / 2.0) * scale)
-            else:
-                painter.translate(x_mm * scale, y_mm * scale)
-            painter.scale(render_scale, render_scale)
-            option = QStyleOptionGraphicsItem()
-            temp_item.paint(painter, option, None)
+                painter.translate(-centre)
+            painter.drawText(rect_dots, h_align | Qt.AlignmentFlag.AlignVCenter,
+                             t.text)
             painter.restore()
 
     @staticmethod

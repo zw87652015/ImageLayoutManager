@@ -264,12 +264,11 @@ def project_new(ctx: ToolContext,
                 page_size: Optional[Dict[str, float]] = None,
                 dpi: Optional[int] = None,
                 margins: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
-    """Create a fresh project. GUI transport opens it in a new tab."""
-    if ctx.main_window is None:
-        raise ToolError(
-            "not_supported_in_cli",
-            "project_new requires the GUI transport in v0.1",
-        )
+    """Create a fresh project.
+
+    GUI transport opens it in a new tab; CLI transport replaces the context
+    project in place (same shape as :func:`project_open`).
+    """
     project = Project()
     if page_size:
         project.page_width_mm = float(page_size.get("w", project.page_width_mm))
@@ -288,7 +287,12 @@ def project_new(ctx: ToolContext,
         Cell(row_index=r, col_index=c, is_placeholder=True)
         for r in range(2) for c in range(2)
     ]
-    ctx.main_window._create_tab(project, path=None)
+    if ctx.main_window is not None:
+        ctx.main_window._create_tab(project, path=None)
+    else:
+        # CLI: swap the context project in place.
+        ctx.project = project
+        ctx.project_path = None
     return _ok({"name": project.name})
 
 
@@ -354,15 +358,22 @@ def project_save(ctx: ToolContext,
         bytes_written = os.path.getsize(abs_target) if os.path.isfile(abs_target) else 0
         return _ok({"path": abs_target, "bytes_written": bytes_written})
 
-    # CLI fallback — Project.save_to_file handles .figlayout and .json only.
+    # CLI fallback. Bundles go through the same packer the `pack` verb uses;
+    # .figlayout / .json are plain JSON via Project.save_to_file.
     if ext == ".figpack":
-        raise ToolError(
-            "not_supported_in_cli",
-            ".figpack writing requires the GUI transport "
-            "(bundle/cache machinery lives in MainWindow)",
-            hint="use .figlayout or .json from CLI, or run with --agent-server",
-            field="path",
-        )
+        from src.utils.figpack import pack_project, BundleError
+        from src.version import APP_VERSION
+        try:
+            result = pack_project(ctx.project, abs_target, app_version=APP_VERSION)
+        except BundleError as e:
+            raise ToolError("save_failed", f"pack failed: {e}", field="path") from e
+        ctx.project_path = abs_target
+        return _ok({
+            "path": abs_target,
+            "bytes_written": result.bytes_written,
+            "assets": result.asset_count,
+            "missing_assets": result.missing_count,
+        })
     ctx.project.name = os.path.splitext(os.path.basename(abs_target))[0]
     ctx.project.save_to_file(abs_target)
     ctx.project_path = abs_target

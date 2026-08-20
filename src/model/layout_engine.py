@@ -440,8 +440,10 @@ class LayoutEngine:
         current_y = project.margin_top_mm
 
         # Per row: (above_y, above_h, below_y, below_h, pic_y, pic_h,
-        #           row_template, band_slots) where band_slots maps a group
-        #           label id to its (y, thickness).
+        #           row_template, band_slots, row_top, row_bottom) where
+        #           band_slots maps a group label id to its (y, thickness),
+        #           and row_top/row_bottom are the row's full vertical extent
+        #           including any group-label bands (used for bounding rects).
         calculated_row_geometries = []
 
         for r_temp in row_templates:
@@ -450,7 +452,7 @@ class LayoutEngine:
             row_heights[r_temp.index] = pic_h
 
             band_slots: Dict[str, Tuple[float, float]] = {}
-            y = current_y
+            row_top = y = current_y
 
             # Outer-to-inner: group bands, then the cell-label strip.
             # Same-slot (disjoint-span) labels share one y — side by side.
@@ -485,8 +487,10 @@ class LayoutEngine:
                         band_slots[group_label.id] = (y, thickness)
                 y += thickness
 
+            row_bottom = y
             calculated_row_geometries.append(
-                (above_y, above_h, below_y, below_h, pic_y, pic_h, r_temp, band_slots)
+                (above_y, above_h, below_y, below_h, pic_y, pic_h, r_temp, band_slots,
+                 row_top, row_bottom)
             )
             current_y = y + gap_mm
             
@@ -509,7 +513,7 @@ class LayoutEngine:
         label_rects: Dict[str, Tuple[float, float, float, float]] = {}
         
         for (above_y, above_h, below_y, below_h, pic_y, pic_h,
-             r_temp, _band_slots) in calculated_row_geometries:
+             r_temp, _band_slots, _row_top, _row_bottom) in calculated_row_geometries:
             col_count = r_temp.column_count
             if col_count <= 0:
                 continue
@@ -623,8 +627,8 @@ class LayoutEngine:
         # Compute row bounding rects (include label strips if present)
         row_rects: Dict[int, Tuple[float, float, float, float]] = {}
         row_spans: Dict[int, Tuple[float, float]] = {}
-        for (above_y, above_h, below_y, below_h, pic_y, pic_h,
-             r_temp, _band_slots) in calculated_row_geometries:
+        for (_above_y, _above_h, _below_y, _below_h, _pic_y, _pic_h,
+             r_temp, _band_slots, row_top, row_bottom) in calculated_row_geometries:
             col_count = r_temp.column_count
             
             # Re-calculate x_offset and row_width for bounding rect
@@ -641,11 +645,9 @@ class LayoutEngine:
                 x_offset = content_x
                 row_width = content_width
 
-            top_y = pic_y if above_y is None else min(above_y, pic_y)
-            bot_y = pic_y + pic_h
-            if below_y is not None:
-                bot_y = max(bot_y, below_y + below_h)
-            row_rects[r_temp.index] = (x_offset, top_y, row_width, bot_y - top_y)
+            # row_top/row_bottom already span any reserved group-label bands,
+            # so add-row/add-cell buttons never land inside a shared label's band.
+            row_rects[r_temp.index] = (x_offset, row_top, row_width, row_bottom - row_top)
             row_spans[r_temp.index] = (x_offset, row_width)
 
         group_label_rects = LayoutEngine._compute_group_label_rects(
@@ -678,7 +680,7 @@ class LayoutEngine:
         rects: Dict[str, Tuple[float, float, float, float]] = {}
 
         for (_above_y, _above_h, _below_y, _below_h, _pic_y, _pic_h,
-             r_temp, band_slots) in calculated_row_geometries:
+             r_temp, band_slots, _row_top, _row_bottom) in calculated_row_geometries:
             if not band_slots:
                 continue
             row_x, row_w = row_spans.get(r_temp.index, (content_x, content_width))

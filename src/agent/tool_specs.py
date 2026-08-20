@@ -105,7 +105,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
     {
         "name": "project_new",
         "description": (
-            "Create a fresh project in a new tab (GUI transport only). "
+            "Create a fresh project. GUI transport opens it in a new tab; "
+            "CLI transport replaces the in-memory project. "
             "Defaults to A4 portrait at 600 DPI with a 2×2 placeholder "
             "grid — reshape with row_add / row_remove / cell_split before "
             "importing images if you want a different topology."
@@ -139,7 +140,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "  • `.figlayout` — JSON layout + external image paths (default; "
             "small, edit-friendly)\n"
             "  • `.figpack`   — zipped bundle that embeds the images "
-            "(portable, single file). GUI transport only.\n"
+            "(portable, single file)\n"
             "  • `.json`      — legacy plain JSON (same shape as .figlayout)\n"
             "**Do NOT hand-roll JSON and write it yourself** — call this "
             "tool so ILM owns the schema, paths, and bundle/cache details. "

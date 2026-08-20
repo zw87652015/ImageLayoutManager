@@ -11,6 +11,7 @@ Headless driver for ImageLayoutManager. Same renderer as the GUI's
 | `pack`    | `.figlayout` → `.figpack` (bundle layout + referenced assets)   |
 | `unpack`  | `.figpack` → folder containing assets + sidecar `.figlayout`    |
 | `inspect` | Print page size, DPI, cell counts, etc. (text or `--json`)      |
+| `edit`    | Mutate a project headlessly — create rows, import images, label, lay out |
 
 ## Examples
 
@@ -35,6 +36,68 @@ imagelayout-cli.exe unpack figure_4.figpack -o ./extracted/
 imagelayout-cli.exe inspect figure_4.figpack
 imagelayout-cli.exe inspect figure_4.figpack --json
 ```
+
+## `edit` — headless authoring
+
+`edit` applies the *same* operations the AI assistant uses (see
+[`agent_concepts.md`](agent_concepts.md) for what each tool means and how
+rows / cells / labels relate) to a file, with no GUI and no MCP host
+running. It is
+the scriptable half of the app: everything the tool registry exposes —
+rows, cells, splits, image import, labels, group labels, size groups,
+PiPs, export regions, auto-layout — is reachable from a shell or CI job.
+
+```powershell
+# What can I call?
+imagelayout-cli.exe edit --list-tools
+
+# Label every panel, overwriting the input (written atomically)
+imagelayout-cli.exe edit figure_4.figlayout --in-place `
+    --call auto_label_cells '{"scheme": "(a)"}'
+
+# Build a figure from scratch, then render it
+imagelayout-cli.exe edit --new -o figure_5.figlayout `
+    --call row_add '{"position": 2, "column_count": 3}'
+imagelayout-cli.exe render figure_5.figlayout -f pdf
+
+# Batch of steps from a file, packed straight into a bundle
+imagelayout-cli.exe edit figure_4.figlayout -o figure_4.figpack --script ops.json
+
+# Machine-readable report of every step
+imagelayout-cli.exe edit figure_4.figlayout --dry-run --json `
+    --call project_describe
+```
+
+`ops.json` is an ordered step list — a bare array, or `{"steps": [...]}`:
+
+```json
+[
+  { "tool": "image_import", "params": { "cell_id": "…", "path": "C:/data/a.png" } },
+  { "tool": "auto_layout" },
+  { "tool": "auto_label_cells", "params": { "scheme": "(a)" } }
+]
+```
+
+Pass `--script -` to read it from stdin.
+
+### Contract
+
+- **Ordered.** `--script` steps run first, then each `--call` in
+  command-line order.
+- **All-or-nothing.** A failing step aborts before anything is written, so
+  the input file is left exactly as it was. `--keep-going` applies the
+  remaining steps and still writes, but the exit code stays `1`.
+- **Atomic.** `--in-place` and every `.figlayout` / `.json` write commit
+  through a temp file + rename; an interrupted run cannot truncate your
+  only copy.
+- **Pipeable.** Per-step progress goes to **stderr**; **stdout** carries
+  only the output path (or the `--json` report, or the project JSON with
+  `-o -`).
+- **`.figpack` output** is supported (`-o out.figpack`); `.figpack`
+  *input* is not — `unpack` it first, edit the `.figlayout`, then `pack`.
+  A bundle's images live in a temporary extraction, so editing one
+  in place would re-resolve assets from paths that may not exist on this
+  machine.
 
 ## Exit codes
 

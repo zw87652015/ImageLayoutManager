@@ -9,6 +9,14 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.3.5", "2026-08-21", [
+        {"en": "New shared labels are numbered automatically: Label 1, Label 2, and so on.",
+         "zh": "新建共享标签会自动编号：标注 1、标注 2，以此类推。"},
+        {"en": "The + row/cell buttons always stay in the margin now, even with shared labels.",
+         "zh": "+ 加行/加列按钮现在始终呆在边距里，即使有共享标签也不会叠上去。"},
+        {"en": "Label text in exported files now matches the size you see in the app.",
+         "zh": "导出文件里的标注文字大小，现在和软件里看到的一样了。"},
+    ]),
     ("3.3.3", "2026-07-30", [
         {"en": "Shared labels can span several cells; drag a label band outward to stack it.",
          "zh": "共享标签可以跨多个单元格了；把标签带往外拖，就能调整叠放顺序。"},

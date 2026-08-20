@@ -104,6 +104,7 @@ Windows 安装包中包含无头 CLI 工具（`imagelayout-cli.exe`），用于�
 | `pack`    | `.figlayout` → `.figpack`（打包布局 + 引用的资源）   |
 | `unpack`  | `.figpack` → 包含资源 + 侧边 `.figlayout` 的文件夹    |
 | `inspect` | 打印页面尺寸、DPI、单元格数量等（文本或 `--json`）      |
+| `edit`    | 无需 GUI 直接修改项目 —— 行/单元格、导入图片、标号、自动排版 |
 | `mcp`     | 面向 AI 工具的 stdio MCP 适配器，将工具调用转发到正在运行的 GUI |
 
 ### 示例
@@ -129,9 +130,21 @@ imagelayout-cli.exe unpack figure_4.figpack -o ./extracted/
 imagelayout-cli.exe inspect figure_4.figpack
 imagelayout-cli.exe inspect figure_4.figpack --json
 
+# 不打开 GUI 直接编辑：为所有面板添加标号（原地保存）
+imagelayout-cli.exe edit figure_4.figlayout --in-place `
+    --call auto_label_cells '{"scheme": "(a)"}'
+
+# 从零创建项目，或批量回放文件中的操作步骤
+imagelayout-cli.exe edit --new -o figure_5.figlayout --script ops.json
+imagelayout-cli.exe edit --list-tools
+
 # 启用 GUI 内 MCP Server 后，Claude/Cursor/Windsurf 等工具会启动该适配器
 imagelayout-cli.exe mcp
 ```
+
+`edit` 使用与 AI 助手完全相同的操作集，因此每个脚本步骤的行为与对应的 GUI
+操作一致。任一步骤失败则在写入前中止，`--in-place` 采用原子写入。完整说明见
+[`docs/cli.md`](docs/cli.md)。
 
 MCP 配置方法见 [`docs/mcp_setup_zh.md`](docs/mcp_setup_zh.md)。更新后请同时重启 ImageLayoutManager 和 AI 工具，确保 GUI 服务与 `imagelayout-cli.exe mcp` 加载同一套工具列表。如果安装器提示 `.pyd` 文件被锁定，请完全退出 AI 工具或结束残留的 `imagelayout-cli.exe` 进程后再重新安装。
 

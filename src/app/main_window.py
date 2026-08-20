@@ -2816,26 +2816,34 @@ class MainWindow(QMainWindow):
             any_enabled = any_enabled or ok
         self._act_group_label_hint.setVisible(not any_enabled)
 
+    def _next_group_label_number(self) -> int:
+        """Smallest positive integer not already used as a trailing number
+        in an existing group label's text (so gaps left by deletion are reused)."""
+        import re
+        used = set()
+        for gl in self.project.group_labels:
+            m = re.search(r"(\d+)$", gl.text.strip())
+            if m:
+                used.add(int(m.group(1)))
+        n = 1
+        while n in used:
+            n += 1
+        return n
+
     def _on_add_group_label(self, side: str):
         """Create a GroupLabel spanning the current cell selection.
 
         A selection inside one row makes a column header / bottom caption;
         side labels target the whole row so a single click yields a rotated
-        row title. The text is asked for up front — a band captioned
-        "Group" would tell the user nothing.
+        row title. The label is created immediately with placeholder text —
+        double-click it (or edit the inspector field) to rename it.
         """
         target_ids = self._selected_label_target_ids()
         if not target_ids:
             self.statusbar.showMessage(tr("tip_group_label_needs_selection"), 3000)
             return
 
-        from PyQt6.QtWidgets import QInputDialog
-        text, ok = QInputDialog.getText(
-            self, tr("menu_group_label"), tr("dlg_group_label_text"),
-            text=tr("default_group_label_text"))
-        if not ok:
-            return
-        text = text.strip() or tr("default_group_label_text")
+        text = tr("default_group_label_text").format(n=self._next_group_label_number())
 
         row_index = None
         if side in ("left", "right"):

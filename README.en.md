@@ -109,6 +109,7 @@ A headless CLI tool (`imagelayout-cli.exe`) is included with the Windows install
 | `pack`    | `.figlayout` → `.figpack` (bundle layout + referenced assets)   |
 | `unpack`  | `.figpack` → folder containing assets + sidecar `.figlayout`    |
 | `inspect` | Print page size, DPI, cell counts, etc. (text or `--json`)      |
+| `edit`    | Mutate a project headlessly — rows, images, labels, auto-layout  |
 | `mcp`     | Stdio MCP adapter for AI hosts; proxies tools to the running GUI |
 
 ### Examples
@@ -134,9 +135,22 @@ imagelayout-cli.exe unpack figure_4.figpack -o ./extracted/
 imagelayout-cli.exe inspect figure_4.figpack
 imagelayout-cli.exe inspect figure_4.figpack --json
 
+# Edit without opening the GUI: label every panel in place
+imagelayout-cli.exe edit figure_4.figlayout --in-place `
+    --call auto_label_cells '{"scheme": "(a)"}'
+
+# Build a figure from scratch, or replay a batch of steps from a file
+imagelayout-cli.exe edit --new -o figure_5.figlayout --script ops.json
+imagelayout-cli.exe edit --list-tools
+
 # MCP adapter used by Claude/Cursor/Windsurf after enabling MCP Server in the GUI
 imagelayout-cli.exe mcp
 ```
+
+`edit` runs the same operations the AI assistant uses, so every scripted
+step behaves exactly like the equivalent GUI action. A failing step aborts
+before anything is written, and `--in-place` writes atomically. See
+[`docs/cli.md`](docs/cli.md) for the full contract.
 
 For setup instructions, see [`docs/mcp_setup.md`](docs/mcp_setup.md). After upgrading, restart both ImageLayoutManager and your AI host so the GUI server and `imagelayout-cli.exe mcp` load the same tool list. If the installer reports a locked `.pyd` file, fully quit the AI host or stop any remaining `imagelayout-cli.exe` process, then run the installer again.
 

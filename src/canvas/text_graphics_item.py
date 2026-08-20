@@ -8,9 +8,15 @@ class TextGraphicsItem(QGraphicsTextItem):
     # Signal to notify model update when text changes or moves
     item_changed = pyqtSignal(str, object) # text_item_id, changes_dict
 
+    # Text always draws above cells (cell z comes from Cell.z_index, near 0).
+    # Without an explicit z, stacking would fall back to scene insertion order,
+    # so cells created after a text item would cover it.
+    Z = 100
+
     def __init__(self, text_item_id: str, text: str, parent=None):
         super().__init__(text, parent)
         self.text_item_id = text_item_id
+        self.setZValue(self.Z)
 
         # Flags
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)

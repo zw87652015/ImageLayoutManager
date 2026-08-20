@@ -6,6 +6,7 @@ Verbs (v1):
     pack     .figlayout                       ->  .figpack
     unpack   .figpack                         ->  <dir>/<name>.figlayout + <dir>/<name>_assets/
     inspect  .figpack | .figlayout | .json    ->  human-readable summary on stdout
+    edit     .figlayout | .json               ->  .figlayout | .json | .figpack
 
 Output parity with the GUI is intentional: every verb that produces a
 rendered figure goes through the same ``PdfExporter`` /
@@ -324,6 +325,250 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# edit — headless project mutation via the agent tool registry
+# ---------------------------------------------------------------------------
+#
+# ``src/agent/tools.py`` was written GUI-agnostic on purpose:
+# ``ToolContext`` allows ``undo_stack``/``main_window`` to be None, and
+# ``_apply`` then runs each QUndoCommand directly instead of pushing it.
+# ``edit`` is the CLI transport for that registry — the same tools an MCP
+# host drives through a running GUI, applied to a file with no GUI at all.
+#
+# Stdout discipline matches ``render``: only the resulting path (or the
+# ``--json`` report) goes to stdout, so the verb stays pipeable. Per-step
+# progress is written to stderr.
+
+_EDIT_OUTPUT_EXTS = (".figlayout", ".json", ".figpack")
+
+
+def _parse_call(spec: List[str]) -> Tuple[str, dict]:
+    """Turn one ``--call TOOL ['{json}']`` occurrence into ``(name, params)``.
+
+    Trailing values are re-joined before parsing: cmd.exe and PowerShell both
+    re-split a quoted JSON argument on its spaces, so ``{"a": 1}`` can arrive
+    as two argv entries. JSON is whitespace-insensitive, so joining restores
+    the original document on every shell.
+    """
+    if not spec:
+        raise SystemExit("error: --call needs a TOOL name")
+    name = spec[0]
+    if len(spec) == 1:
+        return name, {}
+    raw = " ".join(spec[1:])
+    try:
+        params = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"error: --call {name}: invalid JSON params: {e}") from e
+    if not isinstance(params, dict):
+        raise SystemExit(f"error: --call {name}: params must be a JSON object")
+    return name, params
+
+
+def _load_script(path: str) -> List[Tuple[str, dict]]:
+    """Read an ordered step list from *path* (``-`` means stdin).
+
+    Accepts a bare JSON array or ``{"steps": [...]}``. Each step is
+    ``{"tool": name, "params": {...}}``; ``name``/``args`` are honoured as
+    aliases so hand-written scripts and tool-call logs both work.
+    """
+    try:
+        if path == "-":
+            raw = sys.stdin.read()
+        else:
+            # utf-8-sig: PowerShell's Out-File/redirection writes a BOM by
+            # default, and json.loads rejects it. Plain UTF-8 still decodes.
+            with open(path, "r", encoding="utf-8-sig") as f:
+                raw = f.read()
+    except OSError as e:
+        raise SystemExit(f"error: cannot read script {path}: {e}") from e
+    raw = raw.lstrip("\ufeff")  # piped stdin can carry a BOM too
+
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"error: script {path} is not valid JSON: {e}") from e
+
+    steps = doc.get("steps") if isinstance(doc, dict) else doc
+    if not isinstance(steps, list):
+        raise SystemExit(
+            f"error: script {path} must be a JSON array of steps "
+            'or {"steps": [...]}'
+        )
+
+    out: List[Tuple[str, dict]] = []
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise SystemExit(f"error: script step {i} is not a JSON object")
+        name = step.get("tool") or step.get("name")
+        if not name:
+            raise SystemExit(f'error: script step {i} has no "tool" key')
+        params = step.get("params", step.get("args", {})) or {}
+        if not isinstance(params, dict):
+            raise SystemExit(f'error: script step {i}: "params" must be an object')
+        out.append((str(name), params))
+    return out
+
+
+def _write_project(project, out: str) -> str:
+    """Persist *project* to *out*. ``-`` streams .figlayout JSON to stdout."""
+    if out == "-":
+        sys.stdout.write(json.dumps(project.to_dict(), indent=4) + "\n")
+        return "-"
+
+    abs_out = os.path.abspath(out)
+    parent = os.path.dirname(abs_out) or "."
+    if not os.path.isdir(parent):
+        raise SystemExit(f"error: output directory does not exist: {parent}")
+
+    if os.path.splitext(abs_out)[1].lower() == ".figpack":
+        from src.utils.figpack import pack_project, BundleError
+        from src.version import APP_VERSION
+        try:
+            pack_project(project, abs_out, app_version=APP_VERSION)
+        except BundleError as e:
+            raise SystemExit(f"error: pack failed: {e}") from e
+        return abs_out
+
+    # .figlayout / .json — same serialisation Project.save_to_file uses,
+    # but committed atomically: an interrupted --in-place edit must never
+    # truncate what may be the user's only copy.
+    from src.utils.figpack.atomic_write import atomic_write_bytes
+    project.name = os.path.splitext(os.path.basename(abs_out))[0]
+    atomic_write_bytes(abs_out, json.dumps(project.to_dict(), indent=4).encode("utf-8"))
+    return abs_out
+
+
+def _resolve_edit_target(args: argparse.Namespace) -> Optional[str]:
+    """Validate the input/output combination; return the output path or None."""
+    if args.in_place:
+        if not args.input:
+            raise SystemExit("error: --in-place needs an INPUT file")
+        out = args.input
+    elif args.output:
+        out = args.output
+    elif args.dry_run:
+        return None
+    else:
+        raise SystemExit(
+            "error: nothing to write to — pass -o/--output, --in-place, "
+            "or --dry-run"
+        )
+
+    if out == "-" and args.json:
+        raise SystemExit(
+            "error: -o - and --json both write to stdout; pick one"
+        )
+
+    if out != "-":
+        ext = os.path.splitext(out)[1].lower()
+        if ext not in _EDIT_OUTPUT_EXTS:
+            raise SystemExit(
+                f"error: unsupported output extension '{ext}' "
+                f"(want {', '.join(_EDIT_OUTPUT_EXTS)})"
+            )
+
+    if args.input and os.path.splitext(args.input)[1].lower() == ".figpack":
+        # A .figpack is opened by extracting into a temp working dir that is
+        # released on exit, so its cell image_paths are only valid for this
+        # process. Re-packing from them would also re-resolve every asset
+        # from its original source path, silently dropping any asset whose
+        # source is absent on this machine. Route users through unpack.
+        raise SystemExit(
+            "error: 'edit' does not take .figpack input\n"
+            "       run 'imagelayout-cli unpack in.figpack -o dir' first, edit "
+            "dir/<name>.figlayout, then 'pack' it back"
+        )
+    return out
+
+
+def _cmd_edit(args: argparse.Namespace) -> int:
+    from src.agent import tools
+
+    if args.list_tools:
+        for name in tools.list_tools():
+            sys.stdout.write(f"{name}\n")
+        return 0
+
+    if args.new and args.input:
+        raise SystemExit("error: --new takes no INPUT file")
+    if not args.new and not args.input:
+        raise SystemExit("error: 'edit' needs an INPUT file (or --new)")
+
+    steps: List[Tuple[str, dict]] = []
+    if args.script:
+        steps.extend(_load_script(args.script))
+    for spec in (args.call or []):
+        steps.append(_parse_call(spec))
+    if args.new:
+        # --new is just an implicit first step, so it shows up in --json
+        # output like everything else and has one definition of "new project".
+        steps.insert(0, ("project_new", {}))
+    if not steps:
+        raise SystemExit(
+            "error: no operations given — use --call and/or --script "
+            "(--list-tools lists what's available)"
+        )
+
+    known = set(tools.list_tools())
+    unknown = sorted({name for name, _ in steps if name not in known})
+    if unknown:
+        raise SystemExit(
+            f"error: unknown tool(s): {', '.join(unknown)}\n"
+            "       run 'imagelayout-cli edit --list-tools' for the full list"
+        )
+
+    out = _resolve_edit_target(args)
+
+    # Tools construct QUndoCommands and a few (project_export,
+    # view_screenshot) drive the real exporters, so a QApplication has to
+    # exist. Spinning one up unconditionally costs ~200 ms and avoids the
+    # "works for these tools, crashes for those" class of surprise.
+    _ensure_qapp()
+
+    from src.agent.tools import ToolContext
+    from src.model.data_model import Project
+
+    if args.new:
+        ctx = ToolContext(project=Project(), project_path=None)
+    else:
+        project, _ = _load_project(args.input)
+        ctx = ToolContext(project=project,
+                          project_path=os.path.abspath(args.input))
+
+    envelopes: List[dict] = []
+    failed = 0
+    for name, params in steps:
+        env = tools.dispatch(name, params, ctx)
+        envelopes.append({"tool": name, **env})
+        if env.get("ok"):
+            if not args.json:
+                sys.stderr.write(f"ok    {name}\n")
+        else:
+            failed += 1
+            if not args.json:
+                sys.stderr.write(
+                    f"FAIL  {name}: {env.get('error')}: {env.get('detail')}\n"
+                )
+            if not args.keep_going:
+                break
+
+    # A failed step without --keep-going aborts before any write, so the
+    # input file is left exactly as it was.
+    wrote: Optional[str] = None
+    if out is not None and not args.dry_run and not (failed and not args.keep_going):
+        wrote = _write_project(ctx.project, out)
+
+    if args.json:
+        json.dump({"ok": failed == 0, "steps": envelopes, "output": wrote},
+                  sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    elif wrote and wrote != "-":
+        sys.stdout.write(f"{wrote}\n")
+    sys.stdout.flush()
+    return 1 if failed else 0
+
+
+# ---------------------------------------------------------------------------
 # mcp (MCP-over-stdio adapter — no Qt required)
 # ---------------------------------------------------------------------------
 
@@ -401,6 +646,52 @@ def _build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--json", action="store_true",
                      help="Emit machine-readable JSON instead of text.")
     ins.set_defaults(func=_cmd_inspect)
+
+    # edit -------------------------------------------------------------------
+    ed = sub.add_parser(
+        "edit",
+        help="Apply agent tool operations to a project headlessly (no GUI).",
+        description="Mutate a project by running agent tools against it. "
+                    "Steps are applied in order: --script first, then each "
+                    "--call. Nothing is written unless every step succeeds "
+                    "(see --keep-going). Per-step progress goes to stderr; "
+                    "stdout carries only the output path or the --json report.",
+        epilog="examples:\n"
+               "  imagelayout-cli edit fig.figlayout --in-place "
+               "--call auto_label_cells '{\"scheme\": \"(a)\"}'\n"
+               "  imagelayout-cli edit fig.figlayout -o out.figpack "
+               "--script ops.json --json\n"
+               "  imagelayout-cli edit --new -o blank.figlayout "
+               "--call row_add '{\"position\": 2, \"column_count\": 3}'\n"
+               "  cat ops.json | imagelayout-cli edit fig.figlayout -o - --script -",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    ed.add_argument("input", nargs="?",
+                    help=".figlayout or .json (omit when using --new)")
+    ed.add_argument("--new", action="store_true",
+                    help="Start from a blank project instead of INPUT.")
+    ed.add_argument("--call", action="append", nargs="+", metavar="TOOL",
+                    help="Run TOOL, optionally followed by a JSON object of "
+                         "params. Repeatable; applied in order.")
+    ed.add_argument("--script", metavar="FILE",
+                    help='JSON array of {"tool": ..., "params": {...}} steps '
+                         "('-' reads stdin).")
+    tgt = ed.add_mutually_exclusive_group()
+    tgt.add_argument("-o", "--output",
+                     help="Write the result here: .figlayout, .json or "
+                          ".figpack ('-' streams .figlayout JSON to stdout).")
+    tgt.add_argument("-i", "--in-place", action="store_true",
+                     help="Overwrite INPUT (written atomically).")
+    ed.add_argument("--keep-going", action="store_true",
+                    help="Continue past a failing step and still write the "
+                         "result (exit code stays 1).")
+    ed.add_argument("--dry-run", action="store_true",
+                    help="Apply every step in memory but write nothing.")
+    ed.add_argument("--json", action="store_true",
+                    help="Emit one JSON object containing every step envelope.")
+    ed.add_argument("--list-tools", action="store_true",
+                    help="Print the available tool names and exit.")
+    ed.set_defaults(func=_cmd_edit)
 
     # mcp --------------------------------------------------------------------
     mcp = sub.add_parser(

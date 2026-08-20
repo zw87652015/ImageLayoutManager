@@ -752,6 +752,21 @@ class CanvasScene(QGraphicsScene):
             self.addItem(btn)
             self._add_buttons.append(btn)
 
+        # Side (left/right) shared-label bands reserve their own gutter next
+        # to a row; buttons must clear those bands too, not just the row rect.
+        group_label_rects = list(getattr(layout_result, 'group_label_rects', {}).values())
+
+        def _side_band_extent(rx, ry, rw, rh):
+            left_x, right_x = rx, rx + rw
+            for bx, by, bw, bh in group_label_rects:
+                if by + bh <= ry or by >= ry + rh:
+                    continue  # no vertical overlap with this row
+                if bx + bw <= rx + 0.01:
+                    left_x = min(left_x, bx)
+                elif bx >= rx + rw - 0.01:
+                    right_x = max(right_x, bx + bw)
+            return left_x, right_x
+
         # --- Per-row: Add Cell Left / Right (tall vertical bars spanning row height) ---
         for row_idx, (rx, ry, rw, rh) in sorted_rows:
             row_temp = next((r for r in self.project.rows if r.index == row_idx), None)
@@ -759,18 +774,19 @@ class CanvasScene(QGraphicsScene):
 
             cell_btn_w = T
             cell_btn_h = rh
+            left_x, right_x = _side_band_extent(rx, ry, rw, rh)
 
             # Left button
             btn_l = AddButtonItem("cell_left", width=cell_btn_w, height=cell_btn_h,
                                   row_index=row_idx, col_index=0)
-            btn_l.setPos(rx - cell_btn_w - GAP, ry)
+            btn_l.setPos(left_x - cell_btn_w - GAP, ry)
             self.addItem(btn_l)
             self._add_buttons.append(btn_l)
 
             # Right button
             btn_r = AddButtonItem("cell_right", width=cell_btn_w, height=cell_btn_h,
                                   row_index=row_idx, col_index=col_count)
-            btn_r.setPos(rx + rw + GAP, ry)
+            btn_r.setPos(right_x + GAP, ry)
             self.addItem(btn_r)
             self._add_buttons.append(btn_r)
 

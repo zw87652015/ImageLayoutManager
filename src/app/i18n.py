@@ -160,7 +160,7 @@ _T: dict[str, dict[str, str]] = {
                                       "zh": "请先选中同一行的单元格"},
     "tip_group_label_needs_selection": {"en": "Select one or more cells first.", "zh": "请先选择一个或多个单元格。"},
     "dlg_group_label_text": {"en": "Label text:",   "zh": "标注文字："},
-    "default_group_label_text": {"en": "Group",     "zh": "分组"},
+    "default_group_label_text": {"en": "Label {n}", "zh": "标注 {n}"},
     "action_add_text":      {"en": "Add Text Box", "zh": "添加文本框"},
     "ctx_add_floating_text_here": {"en": "Add Text Box Here", "zh": "在此处添加文本框"},
     "opt_color_custom":      {"en": "Custom…",             "zh": "自定义…"},
