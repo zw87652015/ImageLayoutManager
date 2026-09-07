@@ -53,7 +53,7 @@ class ThumbnailWorker(QRunnable):
         """Load SVG and render to QImage at appropriate size."""
         from PyQt6.QtCore import QByteArray
         from src.utils.svg_utils import sanitize_svg_bytes
-        if self.svg_override_bytes:
+        if self.svg_override_bytes is not None:
             svg_bytes = sanitize_svg_bytes(self.svg_override_bytes)
         else:
             with open(self.path, "rb") as _f:
@@ -133,6 +133,7 @@ class ImageProxy(QObject):
     Uses LRU cache with bounded size and thread pool for concurrent loading.
     """
     thumbnail_ready = pyqtSignal(str) # path
+    _thumbnail_finished = pyqtSignal(str, QImage, object, object)
 
     def __init__(self, max_cache_items=256):
         super().__init__()
@@ -145,24 +146,34 @@ class ImageProxy(QObject):
         self._svg_overrides = {}  # path -> bytes (pre-computed modified SVG)
         # Per-path subscriber callbacks: path -> list[callable]
         # Each callable is invoked (instead of the broadcast signal) when that path loads.
-        self._subscribers: dict[str, list] = {}
+        self._subscribers: dict[object, list] = {}
+        self._request_tokens = {}
+        self._thumbnail_finished.connect(
+            self._on_thumbnail_finished, Qt.ConnectionType.QueuedConnection
+        )
 
     def shutdown(self):
         # Wait for all workers to finish
         self._thread_pool.waitForDone(2000)
         self._loading.clear()
+        self._request_tokens.clear()
 
     def clear_cache(self):
         """Clear all cached thumbnails to force reload from disk."""
         self._cache.clear()
         self._loading.clear()
+        self._request_tokens.clear()
 
     def invalidate(self, path: str):
         """Drop a single cached entry so the next get_pixmap reloads from disk."""
         if not path:
             return
-        self._cache.pop(path, None)
-        self._loading.discard(path)
+        keys = set(self._cache) | self._loading | set(self._request_tokens)
+        for key in keys:
+            if key == path or isinstance(key, tuple) and key[0] == path:
+                self._cache.pop(key, None)
+                self._loading.discard(key)
+                self._request_tokens.pop(key, None)
 
     def subscribe(self, path: str, callback) -> None:
         """Register *callback* to be called when *path* finishes loading.
@@ -174,28 +185,27 @@ class ImageProxy(QObject):
 
     def unsubscribe(self, path: str, callback) -> None:
         """Remove a previously registered callback."""
-        if path in self._subscribers:
-            try:
-                self._subscribers[path].remove(callback)
-            except ValueError:
-                pass
-            if not self._subscribers[path]:
-                del self._subscribers[path]
+        for key in list(self._subscribers):
+            if key == path or isinstance(key, tuple) and key[0] == path:
+                try:
+                    self._subscribers[key].remove(callback)
+                except ValueError:
+                    pass
+                if not self._subscribers[key]:
+                    del self._subscribers[key]
 
     def set_svg_override(self, path: str, content: bytes):
         """Set pre-computed modified SVG bytes for a path and invalidate its cache entry."""
         self._svg_overrides[path] = content
-        self._cache.pop(path, None)
-        self._loading.discard(path)
+        self.invalidate(path)
 
     def clear_svg_overrides(self):
         """Remove all SVG overrides and invalidate their cache entries."""
         for path in self._svg_overrides:
-            self._cache.pop(path, None)
-            self._loading.discard(path)
+            self.invalidate(path)
         self._svg_overrides.clear()
 
-    def get_pixmap(self, path: str, callback=None) -> QPixmap:
+    def get_pixmap(self, path: str, callback=None, svg_override_bytes=None) -> QPixmap:
         """
         Returns a cached QPixmap if available.
         If not, returns None and triggers background loading.
@@ -206,39 +216,55 @@ class ImageProxy(QObject):
         if not path or not os.path.exists(path):
             return None
 
-        if path in self._cache:
-            self._cache.move_to_end(path)
-            return self._cache[path]
+        key = path
+        if svg_override_bytes is not None:
+            svg_override_bytes = bytes(svg_override_bytes)
+            key = (path, hashlib.sha256(svg_override_bytes).hexdigest())
+        else:
+            svg_override_bytes = self._svg_overrides.get(path)
+
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
 
         if callback is not None:
-            self.subscribe(path, callback)
+            self.subscribe(key, callback)
 
-        if path not in self._loading:
-            self._start_loading(path)
+        if key not in self._loading:
+            self._start_loading(path, key, svg_override_bytes)
 
         return None
 
-    def _start_loading(self, path):
-        self._loading.add(path)
-        override = self._svg_overrides.get(path)
-        worker = ThumbnailWorker(path, self._max_size, self._on_thumbnail_finished, override)
+    def _start_loading(self, path, key, svg_override_bytes):
+        self._loading.add(key)
+        token = object()
+        self._request_tokens[key] = token
+        worker = ThumbnailWorker(
+            path, self._max_size,
+            lambda original_path, qimage: self._thumbnail_finished.emit(
+                original_path, qimage, key, token
+            ),
+            svg_override_bytes,
+        )
         self._thread_pool.start(worker)
 
-    def _on_thumbnail_finished(self, path, qimage):
-        if not qimage.isNull():
+    def _on_thumbnail_finished(self, path, qimage, key, token):
+        if self._request_tokens.get(key) is not token:
+            return
+        self._request_tokens.pop(key)
+        self._loading.discard(key)
+
+        if not qimage.isNull() and self._max_cache_items > 0:
             pixmap = QPixmap.fromImage(qimage)
 
             # Evict oldest item if cache is full (LRU)
-            if len(self._cache) >= self._max_cache_items:
+            while len(self._cache) >= self._max_cache_items:
                 self._cache.popitem(last=False)
 
-            self._cache[path] = pixmap
-
-        if path in self._loading:
-            self._loading.remove(path)
+            self._cache[key] = pixmap
 
         # Notify only subscribers for this specific path (avoids O(N) broadcast)
-        callbacks = self._subscribers.pop(path, [])
+        callbacks = self._subscribers.pop(key, [])
         if callbacks:
             for cb in callbacks:
                 try:

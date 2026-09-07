@@ -268,7 +268,10 @@ class CanvasScene(QGraphicsScene):
             # Build a fingerprint of everything that affects this cell's appearance
             rect_key = layout_result.cell_rects.get(cell.id)
             pip_items = getattr(cell, 'pip_items', [])
+            from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
+            svg_override = get_svg_override_bytes_for_cell(self.project, cell, layout_result)
             fingerprint = (
+                svg_override,
                 rect_key,
                 cell.image_path,
                 cell.fit_mode,
@@ -344,6 +347,7 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'crop_top', 0.0),
                     getattr(cell, 'crop_right', 1.0),
                     getattr(cell, 'crop_bottom', 1.0),
+                    svg_override_bytes=svg_override,
                 )
                 item.update_pip_items(pip_items)
 

@@ -128,14 +128,7 @@ def apply_svg_font_overrides(svg_path: str, overrides: dict) -> Optional[bytes]:
         return None
 
     root = tree.getroot()
-    modified = False
-
-    for elem, key, _idx in _iter_text_elements(root):
-        if key in overrides:
-            _set_font_size(elem, overrides[key])
-            modified = True
-
-    if not modified:
+    if not _apply_group_font_sizes(root, overrides):
         return None
 
     try:
@@ -241,7 +234,7 @@ def _walk_normalize(elem, acc: list, target_pt: float) -> None:
 
     if local == 'text':
         effective_scale = _matrix_effective_scale(new_acc)
-        adjusted = round(target_pt / effective_scale, 3)
+        adjusted = target_pt / effective_scale
         _set_font_size(elem, adjusted)
         # Normalise all <tspan> descendants to the same visual size.
         # tspan cannot carry its own transform, so effective_scale is the same.
@@ -321,12 +314,7 @@ def apply_svg_font_overrides_from_bytes(
         root = ET.fromstring(svg_bytes)
     except Exception:
         return None
-    modified = False
-    for elem, key, _idx in _iter_text_elements(root):
-        if key in overrides:
-            _set_font_size(elem, overrides[key])
-            modified = True
-    if not modified:
+    if not _apply_group_font_sizes(root, overrides):
         return None
     try:
         return ET.tostring(root, encoding='unicode').encode('utf-8')
@@ -334,7 +322,64 @@ def apply_svg_font_overrides_from_bytes(
         return None
 
 
-def get_svg_override_bytes_for_cell(project, cell) -> Optional[bytes]:
+def _apply_group_font_sizes(root, overrides):
+    parents = {child: parent for parent in root.iter() for child in parent}
+    modified = False
+    for elem, key, _idx in _iter_text_elements(root):
+        if key not in overrides:
+            continue
+        transforms = []
+        parent = parents.get(elem)
+        while parent is not None:
+            transforms.append(parent.get('transform', ''))
+            parent = parents.get(parent)
+        acc = _parse_transform_matrix(' '.join(reversed(transforms)))
+        _walk_normalize(elem, acc, overrides[key])
+        modified = True
+    return modified
+
+
+def _svg_panel_scale(project, cell, svg_bytes, layout_result, content_size_mm):
+    from PyQt6.QtCore import QByteArray
+    from PyQt6.QtSvg import QSvgRenderer
+    from src.model.layout_engine import LayoutEngine
+    from src.utils.svg_utils import sanitize_svg_bytes
+
+    if content_size_mm is None:
+        if layout_result is None:
+            layout_result = LayoutEngine.calculate_layout(project)
+        rect = layout_result.cell_rects.get(cell.id)
+        if rect is None:
+            return 1.0
+        width, height = rect[2:]
+        if project.layout_mode != 'freeform':
+            width -= cell.padding_left + cell.padding_right
+            height -= cell.padding_top + cell.padding_bottom
+    else:
+        width, height = content_size_mm
+    if width <= 0 or height <= 0:
+        return 1.0
+
+    renderer = QSvgRenderer(QByteArray(sanitize_svg_bytes(svg_bytes)))
+    if not renderer.isValid():
+        return 1.0
+    size = renderer.defaultSize()
+    view_box = renderer.viewBoxF()
+    if size.isEmpty() or view_box.isEmpty():
+        return 1.0
+    image_w, image_h = size.width(), size.height()
+    crop_w = image_w * max(0.001, cell.crop_right - cell.crop_left)
+    crop_h = image_h * max(0.001, cell.crop_bottom - cell.crop_top)
+    if cell.rotation in (90, 270):
+        crop_w, crop_h = crop_h, crop_w
+    fit = min if cell.fit_mode == 'contain' else max
+    ratio = fit(width / crop_w, height / crop_h)
+    view_scale = math.sqrt(image_w / view_box.width() * image_h / view_box.height())
+    return ratio * view_scale * 96.0 / 25.4
+
+
+def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
+                                    content_size_mm=None) -> Optional[bytes]:
     """Return modified SVG bytes for *cell*, or ``None`` if no changes are needed.
 
     Pipeline (in order):
@@ -360,6 +405,10 @@ def get_svg_override_bytes_for_cell(project, cell) -> Optional[bytes]:
             base_bytes = fh.read()
     except OSError:
         return None
+
+    if overrides:
+        panel_scale = _svg_panel_scale(project, cell, base_bytes, layout_result, content_size_mm)
+        overrides = {key: size / panel_scale for key, size in overrides.items()}
 
     # Step 1 — normalise
     if do_normalize:

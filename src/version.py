@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────
 # Application Version  (update this before release)
 # ──────────────────────────────────────────────
-APP_VERSION = "3.3.5"
+APP_VERSION = "3.3.6"
 
 # Display name shown inside the app (window title, About, Help).
 APP_NAME = "Image Layout Manager"

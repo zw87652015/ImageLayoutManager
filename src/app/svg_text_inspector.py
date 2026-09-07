@@ -35,6 +35,7 @@ class SvgTextInspectorWindow(QDialog):
 
     def __init__(self, svg_path: str, project, cell=None, parent=None):
         super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.svg_path = svg_path
         self.project = project
         self._cell = cell
@@ -205,9 +206,9 @@ class SvgTextInspectorWindow(QDialog):
             suffix = f"  [{grp}]" if grp else ""
             item = QListWidgetItem(f"{label}{suffix}")
             item.setData(Qt.ItemDataRole.UserRole, el['key'])
+            self._elem_list.addItem(item)
             if el['key'] in sel_keys:
                 item.setSelected(True)
-            self._elem_list.addItem(item)
         self._elem_list.blockSignals(False)
 
     def _refresh_group_combo(self):

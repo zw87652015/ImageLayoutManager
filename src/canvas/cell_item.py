@@ -413,6 +413,7 @@ class CellItem(QGraphicsRectItem):
         self.cell_id = cell_id
         # ... existing init code ...
         self.image_path = None
+        self._svg_override_bytes = None
         self.fit_mode = FitMode.CONTAIN
         self.align_h = "center"  # left, center, right
         self.align_v = "center"  # top, center, bottom
@@ -986,7 +987,11 @@ class CellItem(QGraphicsRectItem):
                      scale_bar_color="#FFFFFF", scale_bar_show_text=False, scale_bar_thickness_mm=0.5,
                      scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0,
                      scale_bar_custom_text=None, scale_bar_text_size_mm=2.0, scale_bar_unit="µm",
-                     crop_left=0.0, crop_top=0.0, crop_right=1.0, crop_bottom=1.0):
+                     crop_left=0.0, crop_top=0.0, crop_right=1.0, crop_bottom=1.0,
+                     svg_override_bytes=None):
+        if self.image_path:
+            self.proxy.unsubscribe(self.image_path, self.on_thumbnail_ready)
+        self._svg_override_bytes = svg_override_bytes
         self.image_path = image_path
         self.fit_mode = FitMode(fit_mode)
         self.rotation = rotation
@@ -1019,7 +1024,8 @@ class CellItem(QGraphicsRectItem):
         if self.image_path:
             self._image_file_missing = not os.path.exists(self.image_path)
             if not self._image_file_missing:
-                self._pixmap = self.proxy.get_pixmap(self.image_path, self.on_thumbnail_ready)
+                self._pixmap = self.proxy.get_pixmap(
+                    self.image_path, self.on_thumbnail_ready, self._svg_override_bytes)
             else:
                 self._pixmap = None
         else:
@@ -1029,7 +1035,9 @@ class CellItem(QGraphicsRectItem):
         self.update()
 
     def on_thumbnail_ready(self, path):
-        self._pixmap = self.proxy.get_pixmap(path)
+        if path != self.image_path:
+            return
+        self._pixmap = self.proxy.get_pixmap(path, self.on_thumbnail_ready, self._svg_override_bytes)
         self.update()
 
     # ── PiP inset support ────────────────────────────────────────────────────

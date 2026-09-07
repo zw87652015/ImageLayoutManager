@@ -1261,6 +1261,7 @@ class MainWindow(QMainWindow):
         if idx < 0 or idx >= len(self._tabs):
             return
         tab = self._tabs[idx]
+        self._close_svg_text_inspectors(tab.project)
         # Only disconnect if this is the currently-connected (active) tab
         if idx == self._active_tab_idx:
             self._disconnect_tab_signals(tab)
@@ -1702,7 +1703,6 @@ class MainWindow(QMainWindow):
 
     def _refresh_and_update(self):
         self._sync_svg_overrides()  # apply any stored SVG overrides
-        self.scene.refresh_layout()
         self.layers_panel.set_project(self.project)
         # Update Canvas Size Label
         rect = self.scene.sceneRect()
@@ -2031,6 +2031,8 @@ class MainWindow(QMainWindow):
                      bundle_workdir: Optional[WorkingDir] = None):
         """Replace the active tab's project (e.g. on open/new)."""
         tab = self._tabs[self._active_tab_idx]
+        if tab.project is not project:
+            self._close_svg_text_inspectors(tab.project)
         # Release any previously held bundle lock before swapping.
         if tab.bundle_workdir is not None and tab.bundle_workdir is not bundle_workdir:
             try:
@@ -4268,28 +4270,36 @@ class MainWindow(QMainWindow):
         from src.app.svg_text_inspector import SvgTextInspectorWindow
         win = SvgTextInspectorWindow(svg_path, self.project, cell=cell, parent=self)
         win.groups_changed.connect(self._on_svg_text_groups_changed)
-        win.finished.connect(self._on_svg_text_groups_changed)
         win.show()
         win.raise_()
         win.activateWindow()
 
+    def _close_svg_text_inspectors(self, project):
+        from src.app.svg_text_inspector import SvgTextInspectorWindow
+        for win in self.findChildren(SvgTextInspectorWindow):
+            if win.project is project:
+                win.blockSignals(True)
+                win.close()
+
     def _sync_svg_overrides(self):
         """Recompute and push SVG overrides (normalization + group overrides) to the proxy."""
-        from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
-        proxy = get_image_proxy()
-        proxy.clear_svg_overrides()
-        for cell in self.project.get_all_leaf_cells():
-            path = getattr(cell, 'image_path', None)
-            if not path or not path.lower().endswith('.svg'):
-                continue
-            content = get_svg_override_bytes_for_cell(self.project, cell)
-            if content:
-                proxy.set_svg_override(path, content)
+        self.scene.refresh_layout()
 
     def _on_svg_text_groups_changed(self):
         """Called when the user edits SVG text groups — syncs overrides then refreshes."""
+        from src.app.svg_text_inspector import SvgTextInspectorWindow
+        sender = self.sender()
+        project = sender.project if isinstance(sender, SvgTextInspectorWindow) else self.project
+        tab = next((tab for tab in self._tabs if tab.project is project), None)
+        if tab is None:
+            return
+        for win in self.findChildren(SvgTextInspectorWindow):
+            if win is not sender and win.project is project and win.isVisible():
+                win.refresh()
+        if project is not self.project:
+            tab.undo_stack.resetClean()
+            return
         self._sync_svg_overrides()
-        self.scene.refresh_layout()
         self._mark_dirty()
 
     def _on_show_about(self):

@@ -120,7 +120,9 @@ class PdfExporter:
                         svg_override = None
                         if cell.image_path.lower().endswith('.svg'):
                             from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
-                            svg_override = get_svg_override_bytes_for_cell(project, cell)
+                            svg_override = get_svg_override_bytes_for_cell(
+                                project, cell, layout_result,
+                                (content_rect.width() / scale, content_rect.height() / scale))
                         PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
 
                         # Draw scale bar if enabled
