@@ -15,17 +15,17 @@ Right: two sections stacked vertically —
 import os
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLabel, QComboBox, QDoubleSpinBox, QLineEdit,
+    QPushButton, QLabel, QComboBox,
     QSplitter, QWidget, QScrollArea, QFrame, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QByteArray
-from PyQt6.QtGui import QPixmap, QPainter, QImage, QFont
+from PyQt6.QtGui import QPixmap, QPainter, QImage
 from PyQt6.QtSvg import QSvgRenderer
 
 from src.utils.svg_text_utils import get_svg_text_elements, get_svg_override_bytes_for_cell
-from src.model.data_model import SvgTextGroup, SvgTextMember
+from src.model.data_model import SvgTextMember
 from src.app.i18n import tr
-from src.app.wheel_guard import install_wheel_guard
+from src.app.text_groups_widget import TextGroupsWidget, section_label
 
 
 class SvgTextInspectorWindow(QDialog):
@@ -123,35 +123,15 @@ class SvgTextInspectorWindow(QDialog):
         rv.addWidget(div)
 
         # Section 2 — Groups
-        groups_header = QHBoxLayout()
-        groups_header.addWidget(self._section_label(tr("svgtxt_groups_section_label")), 1)
-        self._btn_add_group = QPushButton("+ " + tr("svgtxt_add_group_btn"))
-        self._btn_add_group.clicked.connect(self._on_add_group)
-        groups_header.addWidget(self._btn_add_group)
-        rv.addLayout(groups_header)
-
-        # Scrollable group rows container
-        self._groups_scroll = QScrollArea()
-        self._groups_scroll.setWidgetResizable(True)
-        self._groups_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self._groups_container = QWidget()
-        self._groups_vbox = QVBoxLayout(self._groups_container)
-        self._groups_vbox.setContentsMargins(0, 0, 0, 0)
-        self._groups_vbox.setSpacing(3)
-        self._groups_vbox.addStretch()
-        self._groups_scroll.setWidget(self._groups_container)
-        rv.addWidget(self._groups_scroll, 1)
+        self._groups_widget = TextGroupsWidget(self.project)
+        self._groups_widget.groups_changed.connect(self._on_groups_edited)
+        self._groups_widget.group_added.connect(self._on_group_added)
+        rv.addWidget(self._groups_widget, 1)
 
         splitter.addWidget(right)
         splitter.setSizes([380, 500])
 
-    @staticmethod
-    def _section_label(text: str) -> QLabel:
-        lbl = QLabel(text)
-        f = lbl.font()
-        f.setWeight(QFont.Weight.DemiBold)
-        lbl.setFont(f)
-        return lbl
+    _section_label = staticmethod(section_label)
 
     # ──────────────────────────────────────────────────────────────────
     # Refresh helpers
@@ -212,85 +192,24 @@ class SvgTextInspectorWindow(QDialog):
         self._elem_list.blockSignals(False)
 
     def _refresh_group_combo(self):
-        prev_id = self._group_combo.currentData()
-        self._group_combo.blockSignals(True)
-        self._group_combo.clear()
-        for g in self.project.svg_text_groups:
-            self._group_combo.addItem(g.name, g.id)
-        if self._group_combo.count() == 0:
-            self._group_combo.addItem(tr("svgtxt_no_groups"), None)
-        # Restore previous selection if still present
-        idx = self._group_combo.findData(prev_id)
-        if idx >= 0:
-            self._group_combo.setCurrentIndex(idx)
-        self._group_combo.blockSignals(False)
+        self._groups_widget.fill_combo(self._group_combo)
 
     def _rebuild_group_rows(self):
-        """Rebuild the inline group list (name + font-size spinner + delete)."""
-        # Remove all widgets except the trailing stretch
-        while self._groups_vbox.count() > 1:
-            item = self._groups_vbox.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._groups_widget.refresh()
 
-        for g in self.project.svg_text_groups:
-            row = self._make_group_row(g)
-            self._groups_vbox.insertWidget(self._groups_vbox.count() - 1, row)
+    def _on_groups_edited(self):
+        # Sync combo + element list labels
+        self._refresh_group_combo()
+        self._refresh_elements()
+        self._refresh_preview()
+        self.groups_changed.emit()
 
-    def _make_group_row(self, group) -> QWidget:
-        row = QWidget()
-        h = QHBoxLayout(row)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(6)
-
-        name_edit = QLineEdit(group.name)
-        name_edit.setPlaceholderText(tr("svgtxt_group_name_placeholder"))
-        name_edit.setMinimumWidth(80)
-
-        def _on_name_changed(text, gid=group.id):
-            g = next((x for x in self.project.svg_text_groups if x.id == gid), None)
-            if g:
-                g.name = text.strip() or tr("svgtxt_default_group_name")
-                # Sync combo + element list labels
-                self._refresh_group_combo()
-                self._refresh_elements()
-                self.groups_changed.emit()
-
-        name_edit.textChanged.connect(_on_name_changed)
-        h.addWidget(name_edit, 1)
-
-        spin = QDoubleSpinBox()
-        spin.setRange(1.0, 200.0)
-        spin.setDecimals(1)
-        spin.setSuffix(" pt")
-        spin.setValue(group.font_size_pt)
-        spin.setFixedWidth(80)
-
-        def _on_size_changed(val, gid=group.id):
-            g = next((x for x in self.project.svg_text_groups if x.id == gid), None)
-            if g:
-                g.font_size_pt = val
-                self._refresh_preview()
-                self.groups_changed.emit()
-
-        spin.valueChanged.connect(_on_size_changed)
-        h.addWidget(spin)
-
-        del_btn = QPushButton("✕")
-        del_btn.setFixedWidth(28)
-        del_btn.setToolTip(tr("svgtxt_delete_group_btn"))
-
-        def _on_delete(gid=group.id):
-            self.project.svg_text_groups = [x for x in self.project.svg_text_groups if x.id != gid]
-            self._refresh_all()
-            self.groups_changed.emit()
-
-        del_btn.clicked.connect(_on_delete)
-        h.addWidget(del_btn)
-
-        # Scrolling the group list must never retune a font size.
-        install_wheel_guard(row, self._groups_scroll)
-        return row
+    def _on_group_added(self, gid):
+        # Auto-select the new group in the combo
+        self._refresh_group_combo()
+        idx = self._group_combo.findData(gid)
+        if idx >= 0:
+            self._group_combo.setCurrentIndex(idx)
 
     # ──────────────────────────────────────────────────────────────────
     # Slots
@@ -328,17 +247,6 @@ class SvgTextInspectorWindow(QDialog):
                          if not (m.svg_path == self.svg_path and m.element_key in keys)]
         self._refresh_elements()
         self._refresh_preview()
-        self.groups_changed.emit()
-
-    def _on_add_group(self):
-        g = SvgTextGroup(name=tr("svgtxt_default_group_name"), font_size_pt=12.0)
-        self.project.svg_text_groups.append(g)
-        self._refresh_group_combo()
-        self._rebuild_group_rows()
-        # Auto-select the new group in the combo
-        idx = self._group_combo.findData(g.id)
-        if idx >= 0:
-            self._group_combo.setCurrentIndex(idx)
         self.groups_changed.emit()
 
     def refresh(self):

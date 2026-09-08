@@ -126,7 +126,11 @@ def _load_project(path: str):
             raise
     elif ext in (".figlayout", ".json"):
         from src.model.data_model import Project
-        return Project.load_from_file(path), None
+        from src.model.migrations import ProjectMigrationError
+        try:
+            return Project.load_from_file(path), None
+        except ProjectMigrationError as e:
+            raise SystemExit(f"error: cannot open project: {e}") from e
     else:
         raise SystemExit(
             f"error: unsupported input extension '{ext}' "

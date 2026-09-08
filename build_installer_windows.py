@@ -338,6 +338,11 @@ def main() -> int:
     args.append("--hidden-import=matplotlib.backends.backend_pdf")
     args.append("--hidden-import=matplotlib.backends.backend_svg")
 
+    # rapidocr is the shipped OCR backend for raster text size matching.
+    # collect-all pulls in its ONNX models, YAML config and onnxruntime DLLs.
+    args.append("--collect-all=rapidocr")
+    args.append("--collect-all=onnxruntime")
+
     for mod in unused_qt_modules:
         args.append(f"--exclude-module={mod}")
 
@@ -430,6 +435,8 @@ def main() -> int:
         cli_args.append("--hidden-import=matplotlib.backends.backend_agg")
         cli_args.append("--hidden-import=matplotlib.backends.backend_pdf")
         cli_args.append("--hidden-import=matplotlib.backends.backend_svg")
+        cli_args.append("--collect-all=rapidocr")
+        cli_args.append("--collect-all=onnxruntime")
         for mod in unused_qt_modules:
             cli_args.append(f"--exclude-module={mod}")
         cli_args.append(str(cli_entry))

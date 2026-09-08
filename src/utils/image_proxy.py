@@ -21,13 +21,50 @@ def is_supported_image(path: str) -> bool:
     ext = os.path.splitext(path)[1].lower()
     return ext in VECTOR_EXTENSIONS or ext in RASTER_EXTENSIONS
 
+
+def _natural_key(path: str):
+    import re
+    return [int(tok) if tok.isdigit() else tok.lower()
+            for tok in re.split(r'(\d+)', os.path.basename(path))]
+
+
+def collect_importable_images(paths, recursive: bool = True) -> list:
+    """Expand files/folders dropped by the user into a de-duplicated,
+    naturally sorted list of supported image paths (``fig1`` < ``fig2`` <
+    ``fig10``). Folders are walked in sorted order; hidden entries are skipped.
+    Project files and anything else unsupported are ignored."""
+    seen = set()
+    result = []
+
+    def _add(p):
+        p = os.path.normpath(p)
+        key = os.path.normcase(os.path.abspath(p))
+        if key not in seen and is_supported_image(p) and os.path.isfile(p):
+            seen.add(key)
+            result.append(p)
+
+    for path in paths:
+        if os.path.isdir(path):
+            for root, dirs, files in os.walk(path):
+                dirs[:] = sorted(d for d in dirs if not d.startswith('.')) if recursive else []
+                for name in sorted(files, key=_natural_key):
+                    if not name.startswith('.'):
+                        _add(os.path.join(root, name))
+        elif path:
+            _add(path)
+    # Explorer hands over multi-selections in arbitrary order, so sort the
+    # final list naturally to get a predictable panel sequence.
+    result.sort(key=_natural_key)
+    return result
+
 class ThumbnailWorker(QRunnable):
-    def __init__(self, path, max_size, callback, svg_override_bytes=None):
+    def __init__(self, path, max_size, callback, svg_override_bytes=None, raster_override=None):
         super().__init__()
         self.path = path
         self.max_size = max_size
         self.callback = callback
         self.svg_override_bytes = svg_override_bytes
+        self.raster_override = raster_override
         self.setAutoDelete(True)
 
     def run(self):
@@ -115,17 +152,17 @@ class ThumbnailWorker(QRunnable):
 
     def _load_raster(self) -> QImage:
         """Load raster image with PIL."""
-        with Image.open(self.path) as img:
-            img.thumbnail((self.max_size, self.max_size), Image.Resampling.LANCZOS)
-            
-            # Convert to RGBA for Qt
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            
-            data = img.tobytes("raw", "RGBA")
-            qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-            # Deep copy to ensure ownership
-            return qimage.copy()
+        if self.raster_override:
+            from src.utils.raster_text_utils import load_raster_with_overrides
+            img = load_raster_with_overrides(self.path, self.raster_override)
+        else:
+            with Image.open(self.path) as src:
+                img = src.convert('RGBA')
+        img.thumbnail((self.max_size, self.max_size), Image.Resampling.LANCZOS)
+        data = img.tobytes("raw", "RGBA")
+        qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+        # Deep copy to ensure ownership
+        return qimage.copy()
 
 class ImageProxy(QObject):
     """
@@ -205,7 +242,8 @@ class ImageProxy(QObject):
             self.invalidate(path)
         self._svg_overrides.clear()
 
-    def get_pixmap(self, path: str, callback=None, svg_override_bytes=None) -> QPixmap:
+    def get_pixmap(self, path: str, callback=None, svg_override_bytes=None,
+                   raster_override=None) -> QPixmap:
         """
         Returns a cached QPixmap if available.
         If not, returns None and triggers background loading.
@@ -220,6 +258,9 @@ class ImageProxy(QObject):
         if svg_override_bytes is not None:
             svg_override_bytes = bytes(svg_override_bytes)
             key = (path, hashlib.sha256(svg_override_bytes).hexdigest())
+        elif raster_override:
+            from src.utils.raster_text_utils import spec_key
+            key = (path, hashlib.sha256(spec_key(raster_override).encode()).hexdigest())
         else:
             svg_override_bytes = self._svg_overrides.get(path)
 
@@ -231,11 +272,11 @@ class ImageProxy(QObject):
             self.subscribe(key, callback)
 
         if key not in self._loading:
-            self._start_loading(path, key, svg_override_bytes)
+            self._start_loading(path, key, svg_override_bytes, raster_override)
 
         return None
 
-    def _start_loading(self, path, key, svg_override_bytes):
+    def _start_loading(self, path, key, svg_override_bytes, raster_override=None):
         self._loading.add(key)
         token = object()
         self._request_tokens[key] = token
@@ -245,6 +286,7 @@ class ImageProxy(QObject):
                 original_path, qimage, key, token
             ),
             svg_override_bytes,
+            raster_override,
         )
         self._thread_pool.start(worker)
 

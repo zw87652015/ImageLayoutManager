@@ -11,4 +11,6 @@ dependencies:
       - PyMuPDF==1.27.2.2
       - websockets==16.0
       - mcp==1.27.1
+      - rapidocr==3.9.1
+      - onnxruntime==1.28.0
       - PyInstaller==6.21.0

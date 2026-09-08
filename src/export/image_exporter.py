@@ -99,13 +99,12 @@ class ImageExporter:
                     rotation = getattr(cell, 'rotation', 0)
                     crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                             getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                    svg_override = None
-                    if cell.image_path.lower().endswith('.svg'):
-                        from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
-                        svg_override = get_svg_override_bytes_for_cell(
+                    from src.utils.text_overrides import overrides_for_cell
+                    svg_override, raster_override = overrides_for_cell(
                         project, cell, layout_result,
                         (content_rect.width() / scale, content_rect.height() / scale))
-                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
+                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop,
+                                              svg_override, raster_override)
 
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
@@ -174,13 +173,12 @@ class ImageExporter:
                 rotation = getattr(cell, 'rotation', 0)
                 crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                         getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                svg_override = None
-                if cell.image_path.lower().endswith('.svg'):
-                    from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
-                    svg_override = get_svg_override_bytes_for_cell(
-                        project, cell, layout_result,
-                        (content_rect.width() / scale, content_rect.height() / scale))
-                ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
+                from src.utils.text_overrides import overrides_for_cell
+                svg_override, raster_override = overrides_for_cell(
+                    project, cell, layout_result,
+                    (content_rect.width() / scale, content_rect.height() / scale))
+                ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop,
+                                          svg_override, raster_override)
                 if getattr(cell, 'scale_bar_enabled', False):
                     ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
             ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
@@ -470,7 +468,8 @@ class ImageExporter:
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                    crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None):
+                    crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None,
+                    raster_override: dict = None):
         """Draw an image into the given rect, applying crop and rotation."""
         ext = os.path.splitext(path)[1].lower()
         if ext == '.svg':
@@ -478,7 +477,7 @@ class ImageExporter:
         elif ext in ('.pdf', '.eps'):
             ImageExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation, crop)
         else:
-            ImageExporter._draw_raster(painter, path, rect, fit_mode_str, rotation, crop)
+            ImageExporter._draw_raster(painter, path, rect, fit_mode_str, rotation, crop, raster_override)
 
     @staticmethod
     def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
@@ -552,57 +551,55 @@ class ImageExporter:
     
     @staticmethod
     def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                     crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+                     crop: tuple = (0.0, 0.0, 1.0, 1.0), raster_override: dict = None):
         """Draw raster image using PIL, honouring crop."""
         try:
-            with Image.open(path) as img:
-                if img.mode != 'RGBA':
-                    img = img.convert('RGBA')
+            from src.utils.raster_text_utils import load_raster_with_overrides
+            img = load_raster_with_overrides(path, raster_override)
+            cl, ct, cr, cb = crop
+            full_w, full_h = img.width, img.height
+            # Crop to the visible region in source pixels
+            cx0 = int(cl * full_w)
+            cy0 = int(ct * full_h)
+            cx1 = max(cx0 + 1, int(cr * full_w))
+            cy1 = max(cy0 + 1, int(cb * full_h))
+            if cx0 != 0 or cy0 != 0 or cx1 != full_w or cy1 != full_h:
+                img = img.crop((cx0, cy0, cx1, cy1))
 
-                cl, ct, cr, cb = crop
-                full_w, full_h = img.width, img.height
-                # Crop to the visible region in source pixels
-                cx0 = int(cl * full_w)
-                cy0 = int(ct * full_h)
-                cx1 = max(cx0 + 1, int(cr * full_w))
-                cy1 = max(cy0 + 1, int(cb * full_h))
-                if cx0 != 0 or cy0 != 0 or cx1 != full_w or cy1 != full_h:
-                    img = img.crop((cx0, cy0, cx1, cy1))
+            data = img.tobytes("raw", "RGBA")
+            qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
 
-                data = img.tobytes("raw", "RGBA")
-                qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+            fit_mode = FitMode(fit_mode_str)
+            img_w = qimage.width()
+            img_h = qimage.height()
 
-                fit_mode = FitMode(fit_mode_str)
-                img_w = qimage.width()
-                img_h = qimage.height()
+            is_sideways = rotation in [90, 270]
+            eff_img_w = img_h if is_sideways else img_w
+            eff_img_h = img_w if is_sideways else img_h
 
-                is_sideways = rotation in [90, 270]
-                eff_img_w = img_h if is_sideways else img_w
-                eff_img_h = img_w if is_sideways else img_h
+            if fit_mode == FitMode.CONTAIN:
+                ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
+            else:
+                ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
 
-                if fit_mode == FitMode.CONTAIN:
-                    ratio = min(rect.width() / eff_img_w, rect.height() / eff_img_h)
-                else:
-                    ratio = max(rect.width() / eff_img_w, rect.height() / eff_img_h)
+            new_w = eff_img_w * ratio
+            new_h = eff_img_h * ratio
+            x = rect.left() + (rect.width() - new_w) / 2
+            y = rect.top() + (rect.height() - new_h) / 2
+            target_rect = QRectF(x, y, new_w, new_h)
 
-                new_w = eff_img_w * ratio
-                new_h = eff_img_h * ratio
-                x = rect.left() + (rect.width() - new_w) / 2
-                y = rect.top() + (rect.height() - new_h) / 2
-                target_rect = QRectF(x, y, new_w, new_h)
-
-                painter.save()
-                if fit_mode == FitMode.COVER:
-                    painter.setClipRect(rect)
-                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-                if rotation != 0:
-                    painter.translate(target_rect.center())
-                    painter.rotate(rotation)
-                    draw_rect = QRectF(-img_w * ratio / 2, -img_h * ratio / 2, img_w * ratio, img_h * ratio)
-                    painter.drawImage(draw_rect, qimage)
-                else:
-                    painter.drawImage(target_rect, qimage)
-                painter.restore()
+            painter.save()
+            if fit_mode == FitMode.COVER:
+                painter.setClipRect(rect)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            if rotation != 0:
+                painter.translate(target_rect.center())
+                painter.rotate(rotation)
+                draw_rect = QRectF(-img_w * ratio / 2, -img_h * ratio / 2, img_w * ratio, img_h * ratio)
+                painter.drawImage(draw_rect, qimage)
+            else:
+                painter.drawImage(target_rect, qimage)
+            painter.restore()
 
         except Exception as e:
             print(f"Failed to export image {path}: {e}")

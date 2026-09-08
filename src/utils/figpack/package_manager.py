@@ -41,6 +41,11 @@ import zipfile
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from src.model.migrations import (
+    ProjectMigrationError,
+    UnsupportedProjectVersion,
+    migrate_project_data,
+)
 from src.utils.figpack.atomic_write import atomic_writer, cleanup_stray_tmps
 from src.utils.figpack.cache_manager import (
     DEFAULT_QUOTA_BYTES,
@@ -1214,6 +1219,16 @@ def unpack_project(
                     f"build understands up to {FIGPACK_FORMAT_VERSION}",
                     code="unsupported_version",
                 )
+
+            try:
+                project_data = migrate_project_data(project_data)
+            except ProjectMigrationError as e:
+                code = (
+                    "unsupported_project_version"
+                    if isinstance(e, UnsupportedProjectVersion)
+                    else "invalid_project_data"
+                )
+                raise BundleError(str(e), code=code) from e
 
             # Build sha256 lookup keyed by archive_path.
             sha_by_path: Dict[str, str] = {}

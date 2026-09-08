@@ -485,6 +485,8 @@ _T: dict[str, dict[str, str]] = {
     # ── Welcome page (startup) ─────────────────────────────────────
     "welcome_new":          {"en": "New Project",         "zh": "新建工程"},
     "welcome_open_project": {"en": "Open Project…",       "zh": "打开工程…"},
+    "welcome_drop_project": {"en": "Or drop a saved project here\n.figpack / .figlayout / .json",
+                             "zh": "也可将已保存的工程拖到此处\n.figpack / .figlayout / .json"},
     "welcome_close":        {"en": "Close",               "zh": "关闭"},
     "welcome_about":        {"en": "About",               "zh": "关于"},
     "welcome_recent":       {"en": "Recent",              "zh": "最近打开"},
@@ -711,6 +713,87 @@ _T: dict[str, dict[str, str]] = {
     "svgtxt_assign_to":              {"en": "Assign to",                       "zh": "分配到"},
     "svgtxt_groups_section_label":   {"en": "Groups",                          "zh": "组"},
 
+    # ── Raster text size matching ────────────────────────────────────
+    "ctx_raster_text_inspector":     {"en": "Match Raster Text Size…",           "zh": "匹配位图文字大小…"},
+    "ctx_raster_text_disabled":      {"en": "Match Raster Text Size… (configure OCR in Preferences)",
+                                      "zh": "匹配位图文字大小…（请在偏好设置中配置 OCR）"},
+    "rastertxt_inspector_title":     {"en": "Raster Text Size Matching",          "zh": "位图文字大小匹配"},
+    "rastertxt_preview_label":       {"en": "Preview (as rendered)",              "zh": "预览（实际渲染效果）"},
+    "rastertxt_show_original":       {"en": "Show original",                      "zh": "显示原图"},
+    "rastertxt_legend":              {"en": "Tinted outlines follow the included text. Click an outline to select; "
+                                            "Ctrl-click to select multiple. Strong outline: selected or hovered. "
+                                            "Faint: disabled or skipped; see the list for details.",
+                                      "zh": "半透明轮廓贴合选中的文字。点击轮廓选择，Ctrl+点击多选。"
+                                            "加深边线：选中或悬停。淡色：已禁用或跳过，详情见列表。"},
+    "rastertxt_review_hint":         {"en": "⚑ review: {reason}",                "zh": "⚑ 请确认：{reason}"},
+    "rastertxt_disabled_hint":       {"en": "○ unticked — tick to resize",       "zh": "○ 未勾选 — 勾选后才会缩放"},
+    "rastertxt_review_tip":          {"en": "The analysis flagged this box, but it is only a hint. If the box looks "
+                                            "clean to you, tick it (or assign it to a group) to enable resizing.",
+                                      "zh": "分析对该区域给出了提示，但这仅供参考。若你看到框内是干净的，勾选（或分配到组）即可启用缩放。"},
+    "rastertxt_detect_btn":          {"en": "Detect text (OCR)",                  "zh": "检测文字（OCR）"},
+    "rastertxt_ocr_unavailable":     {"en": "OCR unavailable: {reason}",          "zh": "OCR 不可用：{reason}"},
+    "rastertxt_ocr_failed":          {"en": "Text detection failed:\n{error}",    "zh": "文字检测失败：\n{error}"},
+    "rastertxt_none_found":          {"en": "No text was detected in this image.", "zh": "未在此图像中检测到文字。"},
+    "rastertxt_regions_label":       {"en": "Text regions  (tick to enable, select to edit)",
+                                      "zh": "文字区域（勾选以启用，选中以编辑）"},
+    "rastertxt_size_px":             {"en": "Est. font size",                     "zh": "估计字号"},
+    "rastertxt_enabled_short":       {"en": "On", "zh": "启用"},
+    "rastertxt_disabled_short":      {"en": "Off", "zh": "停用"},
+    "rastertxt_group_badge":         {"en": "Group: {name}", "zh": "组：{name}"},
+    "rastertxt_ungrouped":           {"en": "No group", "zh": "未分组"},
+    "rastertxt_source_size":         {"en": "Est. {size} px", "zh": "估计 {size} px"},
+    "rastertxt_paused_status":       {"en": "Paused — check to enable resizing", "zh": "已暂停 — 勾选后启用缩放"},
+    "rastertxt_assign_status":       {"en": "Assign a group to resize", "zh": "分配到组后即可缩放"},
+    "rastertxt_applied_status":      {"en": "Resizing applied", "zh": "已应用缩放"},
+    "rastertxt_original_status":     {"en": "Showing original — resizing hidden", "zh": "正在显示原图 — 缩放效果已隐藏"},
+    "rastertxt_ready_status":        {"en": "Ready to resize", "zh": "准备缩放"},
+    "rastertxt_review_status":       {"en": "Review: {reason}", "zh": "请确认：{reason}"},
+    "rastertxt_result_skipped_no_text": {"en": "Skipped: no text pixels", "zh": "已跳过：无文字像素"},
+    "rastertxt_result_skipped_bounds": {"en": "Skipped: would leave the image", "zh": "已跳过：会超出图像"},
+    "rastertxt_result_skipped_collision": {"en": "Skipped: would overlap other content", "zh": "已跳过：会与其他内容重叠"},
+    "rastertxt_preserved_status":    {"en": "Nearby content preserved", "zh": "已保留附近内容"},
+    "rastertxt_anchor":              {"en": "Anchor",                             "zh": "锚点"},
+    "rastertxt_anchor_center":       {"en": "Center",                             "zh": "居中"},
+    "rastertxt_anchor_left":         {"en": "Left",                               "zh": "左对齐"},
+    "rastertxt_anchor_right":        {"en": "Right",                              "zh": "右对齐"},
+    "rastertxt_anchor_top":          {"en": "Top",                                "zh": "顶部"},
+    "rastertxt_anchor_bottom":       {"en": "Bottom",                             "zh": "底部"},
+    "rastertxt_vertical":            {"en": "Vertical text",                      "zh": "竖排文字"},
+    "rastertxt_remove_btn":          {"en": "Remove region",                      "zh": "移除区域"},
+    "rastertxt_untitled":            {"en": "(text)",                             "zh": "（文字）"},
+    "rastertxt_status_skipped_no_text":   {"en": "⚠ no text pixels",             "zh": "⚠ 无文字像素"},
+    "rastertxt_status_skipped_bounds":    {"en": "⚠ would leave the image",      "zh": "⚠ 会超出图像"},
+    "rastertxt_status_skipped_collision": {"en": "⚠ would overlap other content", "zh": "⚠ 会与其他内容重叠"},
+    "rastertxt_reason_no_text":      {"en": "no text pixels found",               "zh": "未找到文字像素"},
+    "rastertxt_reason_background":   {"en": "background is not uniform",          "zh": "背景不均匀"},
+    "rastertxt_reason_touching":     {"en": "text touches other content",         "zh": "文字与其他内容相连"},
+    "rastertxt_foreign_hint":        {"en": "ⓘ nearby content preserved",         "zh": "ⓘ 已保留附近内容"},
+    "rastertxt_foreign_tip":         {"en": "Some content inside this box isn't part of the text (e.g. a pointer "
+                                            "sitting in the gap a box picks up above short letters when the same "
+                                            "line also has tall ones). It has been left untouched and will not be "
+                                            "resized or moved.",
+                                      "zh": "此区域内有一部分内容并非文字本身（例如，当同一行同时存在高矮字母时，"
+                                            "矮字母上方留出的空隙中恰好有指示线等内容）。该内容已被保留，"
+                                            "不会随文字一起缩放或移动。"},
+
+    "prefs_tab_ocr":                 {"en": "Text Detection",                     "zh": "文字检测"},
+    "prefs_ocr_backend":             {"en": "OCR backend",                        "zh": "OCR 后端"},
+    "prefs_ocr_backend_rapidocr":    {"en": "RapidOCR (built-in, default)",       "zh": "RapidOCR（内置，默认）"},
+    "prefs_ocr_backend_tesseract":   {"en": "Tesseract (pytesseract)",            "zh": "Tesseract（pytesseract）"},
+    "prefs_ocr_backend_command":     {"en": "Custom command",                     "zh": "自定义命令"},
+    "prefs_ocr_backend_none":        {"en": "Disabled",                           "zh": "禁用"},
+    "prefs_ocr_command":             {"en": "Command",                            "zh": "命令"},
+    "prefs_ocr_command_tip":         {"en": "Executable receiving {image} (a PNG path). Must print JSON: a list of "
+                                            "objects with x, y, w, h in pixels and optional text / confidence.",
+                                      "zh": "接收 {image}（PNG 路径）的可执行程序。需输出 JSON：包含 x、y、w、h（像素）"
+                                            "及可选 text / confidence 的对象列表。"},
+    "prefs_ocr_test":                {"en": "Check availability",                 "zh": "检查可用性"},
+    "prefs_ocr_status_ok":           {"en": "Ready.",                             "zh": "可用。"},
+    "prefs_ocr_hint":                {"en": "Used by “Match Raster Text Size” to locate labels in pixel-based panels. "
+                                            "Only detection geometry is used; recognised text is shown for reference.",
+                                      "zh": "用于“匹配位图文字大小”功能定位像素图中的文字。仅使用检测到的位置；"
+                                            "识别出的文字仅供参考。"},
+
     # ── SVG text normalization (per-cell inspector section) ─────────
     "grp_svg_normalize":             {"en": "SVG Text Normalization",          "zh": "SVG 文字标准化"},
     "chk_svg_normalize":             {"en": "Normalize text size",             "zh": "标准化文字大小"},
@@ -759,6 +842,10 @@ _T: dict[str, dict[str, str]] = {
     "msg_no_placeholders_text":     {"en": "No more placeholder cells available. {n} images not imported.",
                                      "zh": "没有更多占位单元格可用。有 {n} 张图片未被导入。"},
     "dlg_open_images_grid_title":   {"en": "Open Images as Grid",           "zh": "以网格形式打开图片"},
+    "msg_drop_no_images":           {"en": "No supported image files were found in the dropped items.",
+                                     "zh": "拖入的内容中未找到支持的图片文件。"},
+    "status_images_opened_as_layout": {"en": "Opened {n} images as an auto-arranged layout",
+                                       "zh": "已将 {n} 张图片作为自动排版打开"},
 }
 
 

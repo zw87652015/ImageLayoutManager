@@ -26,6 +26,7 @@ class WelcomeWindow(QWidget):
     def __init__(self, main_window):
         super().__init__(None)  # no parent: an independent top-level window
         self._mw = main_window
+        self.setAcceptDrops(True)
         self.setObjectName("welcomePage")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setWindowTitle(tr("about_app_name"))
@@ -67,6 +68,10 @@ class WelcomeWindow(QWidget):
         self._title.setObjectName("welcomeTitle")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self._title)
+        self._drop_hint = QLabel(tr("welcome_drop_project"))
+        self._drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._drop_hint.setWordWrap(True)
+        root.addWidget(self._drop_hint)
         root.addSpacing(18)
 
         # Action buttons, centred fixed-width column
@@ -166,10 +171,44 @@ class WelcomeWindow(QWidget):
         self._btn_open.setText(tr("welcome_open_project"))
         self._btn_close.setText(tr("welcome_close"))
         self._recent_header.setText(tr("welcome_recent"))
+        self._drop_hint.setText(tr("welcome_drop_project"))
 
     # ------------------------------------------------------------------
     # Window behaviour
     # ------------------------------------------------------------------
+
+    def _project_drop_paths(self, mime_data):
+        if not mime_data.hasUrls():
+            return []
+        paths, seen = [], set()
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            path = os.path.normpath(url.toLocalFile())
+            key = os.path.normcase(os.path.abspath(path))
+            if key not in seen and os.path.isfile(path) and self._mw._is_project_drop_path(path):
+                seen.add(key)
+                paths.append(path)
+        return paths
+
+    def dragEnterEvent(self, event):
+        if self._project_drop_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = self._project_drop_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        open_project = self._mw._open_path_dispatch
+        for path in paths:
+            open_project(path)
 
     def closeEvent(self, event):
         # If the main window never surfaced, closing the launcher means

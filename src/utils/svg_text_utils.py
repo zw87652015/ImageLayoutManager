@@ -342,23 +342,8 @@ def _apply_group_font_sizes(root, overrides):
 def _svg_panel_scale(project, cell, svg_bytes, layout_result, content_size_mm):
     from PyQt6.QtCore import QByteArray
     from PyQt6.QtSvg import QSvgRenderer
-    from src.model.layout_engine import LayoutEngine
+    from src.utils.panel_scale import panel_mm_per_unit
     from src.utils.svg_utils import sanitize_svg_bytes
-
-    if content_size_mm is None:
-        if layout_result is None:
-            layout_result = LayoutEngine.calculate_layout(project)
-        rect = layout_result.cell_rects.get(cell.id)
-        if rect is None:
-            return 1.0
-        width, height = rect[2:]
-        if project.layout_mode != 'freeform':
-            width -= cell.padding_left + cell.padding_right
-            height -= cell.padding_top + cell.padding_bottom
-    else:
-        width, height = content_size_mm
-    if width <= 0 or height <= 0:
-        return 1.0
 
     renderer = QSvgRenderer(QByteArray(sanitize_svg_bytes(svg_bytes)))
     if not renderer.isValid():
@@ -368,12 +353,7 @@ def _svg_panel_scale(project, cell, svg_bytes, layout_result, content_size_mm):
     if size.isEmpty() or view_box.isEmpty():
         return 1.0
     image_w, image_h = size.width(), size.height()
-    crop_w = image_w * max(0.001, cell.crop_right - cell.crop_left)
-    crop_h = image_h * max(0.001, cell.crop_bottom - cell.crop_top)
-    if cell.rotation in (90, 270):
-        crop_w, crop_h = crop_h, crop_w
-    fit = min if cell.fit_mode == 'contain' else max
-    ratio = fit(width / crop_w, height / crop_h)
+    ratio = panel_mm_per_unit(project, cell, image_w, image_h, layout_result, content_size_mm)
     view_scale = math.sqrt(image_w / view_box.width() * image_h / view_box.height())
     return ratio * view_scale * 96.0 / 25.4
 

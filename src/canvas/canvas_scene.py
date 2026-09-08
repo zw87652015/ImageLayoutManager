@@ -1,4 +1,5 @@
 import copy
+import os
 
 from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent, QGraphicsSimpleTextItem
 from PyQt6.QtGui import QColor, QFont, QPen, QBrush, QPainter, QPainterPath
@@ -20,6 +21,7 @@ class CanvasScene(QGraphicsScene):
     cell_swapped = pyqtSignal(str, str) # cell_id_1, cell_id_2
     multi_cells_swapped = pyqtSignal(list, list) # source_ids, target_ids
     new_image_dropped = pyqtSignal(str, float, float) # file_path, x, y (for creating new cells)
+    images_batch_dropped = pyqtSignal(list) # several files and/or folders dropped at once
     project_file_dropped = pyqtSignal(str) # file_path for .figlayout files
     text_item_changed = pyqtSignal(str, dict) # text_item_id, changes_dict
     selection_changed_custom = pyqtSignal(list) # list of selected item ids
@@ -269,9 +271,12 @@ class CanvasScene(QGraphicsScene):
             rect_key = layout_result.cell_rects.get(cell.id)
             pip_items = getattr(cell, 'pip_items', [])
             from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
+            from src.utils.raster_text_utils import build_raster_override_spec, spec_key
             svg_override = get_svg_override_bytes_for_cell(self.project, cell, layout_result)
+            raster_override = build_raster_override_spec(self.project, cell, layout_result)
             fingerprint = (
                 svg_override,
+                spec_key(raster_override) if raster_override else None,
                 rect_key,
                 cell.image_path,
                 cell.fit_mode,
@@ -348,6 +353,7 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'crop_right', 1.0),
                     getattr(cell, 'crop_bottom', 1.0),
                     svg_override_bytes=svg_override,
+                    raster_override=raster_override,
                 )
                 item.update_pip_items(pip_items)
 
@@ -632,7 +638,10 @@ class CanvasScene(QGraphicsScene):
 
         urls = event.mimeData().urls()
         local_path = urls[0].toLocalFile() if urls else ""
-        is_image = local_path and not local_path.lower().endswith(('.figlayout', '.json', '.figpack'))
+        # Cell hover feedback only makes sense for a single image file; a
+        # multi-file or folder drop builds a whole new layout instead.
+        is_image = (len(urls) == 1 and local_path and os.path.isfile(local_path)
+                    and not local_path.lower().endswith(('.figlayout', '.json', '.figpack')))
 
         pos = event.scenePos()
         target_cell = next(
@@ -672,6 +681,17 @@ class CanvasScene(QGraphicsScene):
                 if self._drag_target_cell is not None:
                     self._drag_target_cell.end_ext_drag()
                     self._drag_target_cell = None
+                return
+
+            # Several files, or a folder: hand the whole batch to the main
+            # window, which builds and auto-arranges a new layout from it.
+            local_paths = [u.toLocalFile() for u in urls if u.toLocalFile()]
+            if len(local_paths) > 1 or os.path.isdir(local_path):
+                if self._drag_target_cell is not None:
+                    self._drag_target_cell.end_ext_drag()
+                    self._drag_target_cell = None
+                self.images_batch_dropped.emit(local_paths)
+                event.accept()
                 return
 
             # Check if it's a project file

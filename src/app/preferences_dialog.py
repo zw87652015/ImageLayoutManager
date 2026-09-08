@@ -72,8 +72,11 @@ def get_pref(key: str, default):
 
 class PreferencesDialog(QDialog):
     """
-    Modal preferences dialog.  Call ``exec()``; the caller checks
-    ``result()`` and calls ``apply(main_window)`` to propagate changes.
+    Modal preferences dialog with explicit Apply semantics: edits to any
+    control only take effect (saved to QSettings + propagated to the live
+    ``main_window``) when Apply or OK is pressed. Cancel — or simply closing
+    the dialog without pressing either — discards them; nothing is written
+    or applied until then. OK is "Apply, then close".
     """
 
     def __init__(self, main_window, parent=None):
@@ -92,15 +95,41 @@ class PreferencesDialog(QDialog):
         self._tabs.addTab(self._build_general(), tr("prefs_tab_general"))
         self._tabs.addTab(self._build_files(), tr("prefs_tab_files"))
         self._tabs.addTab(self._build_bundles(), tr("prefs_tab_bundles"))
+        self._tabs.addTab(self._build_ocr(), tr("prefs_tab_ocr"))
         root.addWidget(self._tabs)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Apply
         )
         btns.accepted.connect(self._on_ok)
         btns.rejected.connect(self.reject)
+        self._apply_btn = btns.button(QDialogButtonBox.StandardButton.Apply)
+        self._apply_btn.clicked.connect(self._on_apply)
+        self._apply_btn.setEnabled(False)
         root.addWidget(btns)
+
+        # Any edit to a settings control arms Apply; OK/Apply disarm it again.
+        # Wired last so the initial setChecked()/setValue() calls above don't
+        # themselves count as user edits.
+        self._wire_dirty_tracking()
+
+    def _wire_dirty_tracking(self):
+        """Arm the Apply button when any settings control changes value."""
+        for w in self.findChildren(QComboBox):
+            w.currentIndexChanged.connect(self._mark_dirty)
+        for w in self.findChildren(QCheckBox):
+            w.toggled.connect(self._mark_dirty)
+        for w in self.findChildren(QRadioButton):
+            w.toggled.connect(self._mark_dirty)
+        for w in self.findChildren(QSpinBox):
+            w.valueChanged.connect(self._mark_dirty)
+        for w in self.findChildren(QLineEdit):
+            w.textChanged.connect(self._mark_dirty)
+
+    def _mark_dirty(self, *_args):
+        self._apply_btn.setEnabled(True)
 
     # ── Tab builders ──────────────────────────────────────────────────────────
 
@@ -277,7 +306,64 @@ class PreferencesDialog(QDialog):
         layout.addStretch()
         return w
 
+    def _build_ocr(self) -> QWidget:
+        from src.utils.raster_text_ocr import BACKENDS, DEFAULT_BACKEND
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        hint = QLabel(tr("prefs_ocr_hint"))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        self._ocr_combo = QComboBox()
+        for name in BACKENDS:
+            self._ocr_combo.addItem(tr("prefs_ocr_backend_" + name), name)
+        idx = self._ocr_combo.findData(self._settings.value("ocr_backend", DEFAULT_BACKEND))
+        self._ocr_combo.setCurrentIndex(max(0, idx))
+        form.addRow(tr("prefs_ocr_backend"), self._ocr_combo)
+
+        self._ocr_command = QLineEdit(self._settings.value("ocr_command", ""))
+        self._ocr_command.setPlaceholderText("my_ocr.exe --json {image}")
+        self._ocr_command.setToolTip(tr("prefs_ocr_command_tip"))
+        form.addRow(tr("prefs_ocr_command"), self._ocr_command)
+        layout.addLayout(form)
+
+        cmd_tip = QLabel(tr("prefs_ocr_command_tip"))
+        cmd_tip.setWordWrap(True)
+        cmd_tip.setStyleSheet("color: #666;")
+        layout.addWidget(cmd_tip)
+
+        test_row = QHBoxLayout()
+        test_btn = QPushButton(tr("prefs_ocr_test"))
+        test_btn.clicked.connect(self._on_ocr_test)
+        self._ocr_status = QLabel()
+        self._ocr_status.setWordWrap(True)
+        test_row.addWidget(test_btn)
+        test_row.addWidget(self._ocr_status, 1)
+        layout.addLayout(test_row)
+
+        def _sync_command_enabled(_=None):
+            self._ocr_command.setEnabled(self._ocr_combo.currentData() == "command")
+        self._ocr_combo.currentIndexChanged.connect(_sync_command_enabled)
+        _sync_command_enabled()
+
+        layout.addStretch()
+        return w
+
     # ── Actions ───────────────────────────────────────────────────────────────
+
+    def _on_ocr_test(self):
+        from src.utils.raster_text_ocr import backend_status
+        reason = backend_status(self._ocr_combo.currentData(), self._ocr_command.text())
+        if reason is None:
+            self._ocr_status.setStyleSheet("color: #2e9e44;")
+            self._ocr_status.setText(tr("prefs_ocr_status_ok"))
+        else:
+            self._ocr_status.setStyleSheet("color: #b00020;")
+            self._ocr_status.setText(reason)
 
     def _browse_export_dir(self):
         start = self._exp_custom_path.text() or os.path.expanduser("~")
@@ -319,9 +405,16 @@ class PreferencesDialog(QDialog):
     # ── OK / apply ────────────────────────────────────────────────────────────
 
     def _on_ok(self):
+        self._on_apply()
+        self.accept()
+
+    def _on_apply(self):
+        """Persist settings and propagate them to the running app. Nothing
+        in this dialog takes effect until Apply (or OK, which applies then
+        closes) is pressed — Cancel leaves the running app untouched."""
         self._save()
         self.apply()
-        self.accept()
+        self._apply_btn.setEnabled(False)
 
     def _save(self):
         s = self._settings
@@ -351,6 +444,10 @@ class PreferencesDialog(QDialog):
         s.setValue("figpack_quota_gb", self._quota_spin.value())
         s.setValue("figpack_watch_original", self._watch_chk.isChecked())
         s.setValue("figpack_compress_assets", self._compress_chk.isChecked())
+
+        # Text detection
+        s.setValue("ocr_backend", self._ocr_combo.currentData())
+        s.setValue("ocr_command", self._ocr_command.text().strip())
 
     def apply(self):
         """Propagate saved settings to the running main window."""
@@ -387,12 +484,13 @@ class PreferencesDialog(QDialog):
             else:
                 mw._autosave_timer.stop()
 
-        # Hot-reload enabled/disabled
+        # Hot-reload enabled/disabled — instant, both directions: turning it
+        # back on must re-arm the watcher immediately, not just on next load.
         hot_reload = get_pref("hot_reload_enabled", True)
         if hasattr(mw, '_image_watcher'):
             if hot_reload:
-                if not mw._image_watcher.signalsBlocked():
-                    pass  # already active
+                if hasattr(mw, '_sync_image_watcher'):
+                    mw._sync_image_watcher()
             else:
                 # Clearing files from the watcher effectively disables it
                 files = mw._image_watcher.files()

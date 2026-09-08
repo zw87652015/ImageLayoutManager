@@ -5,6 +5,7 @@ from dataclasses import dataclass, field, fields
 from typing import List, Optional, Dict, Any
 from .enums import FitMode, LabelPosition, PageSizePreset
 from src.version import APP_VERSION
+from .migrations import PROJECT_SCHEMA_VERSION, migrate_project_data
 
 @dataclass
 class TextItem:
@@ -207,6 +208,47 @@ class SvgTextGroup:
 
 
 @dataclass
+class RasterTextRegion:
+    """A detected text label inside a raster panel whose visual size can be
+    matched to a project-wide text group.  Coordinates are source-image pixels
+    (before crop/rotation).  ``font_size_px`` is the estimated em size of the
+    label in source pixels; the user may correct it in the inspector."""
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    x: int = 0
+    y: int = 0
+    w: int = 0
+    h: int = 0
+    text: str = ""
+    font_size_px: float = 0.0
+    group_id: Optional[str] = None
+    enabled: bool = True
+    anchor: str = "center"      # center | left | right | top | bottom
+    vertical: bool = False       # rotated label: glyph height runs along x
+    background: Optional[str] = None  # "#rrggbb"; None = sample around the box
+    # Advisory safety hint from analysis (None = looks clean). Never blocks
+    # the user: a flagged region is just unticked by default.
+    warning: Optional[str] = None
+    # True when analysis found content inside the box that isn't part of
+    # these glyphs (e.g. a diagram pointer poking into the gap a bounding
+    # box picks up above short letters when the same line also has tall
+    # ones). That content is left untouched on the canvas — informational
+    # only, does not block the region.
+    foreign_excluded: bool = False
+    # OCR per-character boxes ``[char, x, y, w, h]`` (image px), when the
+    # backend provides them. Lets the classifier know that e.g. a mid-height
+    # blob under a "-" or a floating dot over an "i" IS text.
+    chars: List[list] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {f.name: getattr(self, f.name) for f in fields(self)}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'RasterTextRegion':
+        allowed = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in allowed})
+
+
+@dataclass
 class SizeGroup:
     """A named group that forces member cells to share the same W/H.
 
@@ -308,6 +350,9 @@ class Cell:
     svg_normalize_text: bool = False
     svg_normalize_text_pt: float = 8.0
 
+    # Raster text size matching: OCR-detected labels re-scaled to a text group.
+    raster_text_regions: List[RasterTextRegion] = field(default_factory=list)
+
     @property
     def is_leaf(self) -> bool:
         return len(self.children) == 0
@@ -368,6 +413,7 @@ class Cell:
             "pip_items": [p.to_dict() for p in self.pip_items],
             "svg_normalize_text": self.svg_normalize_text,
             "svg_normalize_text_pt": self.svg_normalize_text_pt,
+            "raster_text_regions": [r.to_dict() for r in self.raster_text_regions],
         }
 
     @classmethod
@@ -416,6 +462,7 @@ class Cell:
         # Handle children separately (recursive deserialization)
         children_data = payload.pop("children", [])
         pip_items_data = payload.pop("pip_items", [])
+        regions_data = payload.pop("raster_text_regions", [])
         
         # Resolve image path: try absolute first, then relative to project file
         if payload.get("image_path") and project_dir:
@@ -430,6 +477,7 @@ class Cell:
         cell = cls(**payload)
         cell.children = [Cell.from_dict(c, project_dir) for c in children_data]
         cell.pip_items = [PiPItem.from_dict(p) for p in pip_items_data]
+        cell.raster_text_regions = [RasterTextRegion.from_dict(r) for r in regions_data]
         return cell
 
 @dataclass
@@ -755,6 +803,7 @@ class Project:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "file_version": APP_VERSION,
+            "schema_version": PROJECT_SCHEMA_VERSION,
             "name": self.name,
             "page_width_mm": self.page_width_mm,
             "page_height_mm": self.page_height_mm,
@@ -806,6 +855,7 @@ class Project:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], project_dir: Optional[str] = None) -> 'Project':
+        data = migrate_project_data(data)
         p = cls()
         p.name = data.get("name", "Untitled Project")
         p.page_width_mm = data.get("page_width_mm", 210.0)
@@ -887,16 +937,16 @@ class Project:
         return p
 
     def save_to_file(self, filepath: str):
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(self.to_dict(), f, indent=4)
+        from src.utils.figpack.atomic_write import atomic_write_bytes
+        payload = json.dumps(self.to_dict(), indent=4).encode('utf-8')
+        atomic_write_bytes(filepath, payload)
 
     @classmethod
     def load_from_file(cls, filepath: str) -> 'Project':
-        from src.model.migrations import migrate_project_data
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        data = migrate_project_data(data)
-        # Always derive the project name from the filename
-        data["name"] = os.path.splitext(os.path.basename(filepath))[0]
         project_dir = os.path.dirname(os.path.abspath(filepath))
-        return cls.from_dict(data, project_dir)
+        project = cls.from_dict(data, project_dir)
+        # Always derive the project name from the filename
+        project.name = os.path.splitext(os.path.basename(filepath))[0]
+        return project

@@ -7,3 +7,6 @@ matplotlib==3.10.8
 PyMuPDF==1.27.2.2
 websockets==16.0
 mcp==1.27.1
+# Raster text size matching (default OCR backend; models ship inside the wheel)
+rapidocr==3.9.1
+onnxruntime==1.28.0

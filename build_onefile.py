@@ -113,10 +113,19 @@ def main() -> int:
         "    'matplotlib.backends.backend_agg',",
         "    'matplotlib.backends.backend_pdf',",
         "    'matplotlib.backends.backend_svg',",
-    ] + [f"    *collect_submodules({m!r})," for m in used_qt_modules] + [f"    *collect_submodules('matplotlib'),"]
+    ] + [f"    *collect_submodules({m!r})," for m in used_qt_modules] + [
+        f"    *collect_submodules('matplotlib'),",
+        f"    *collect_submodules('rapidocr'),",
+        f"    *collect_submodules('onnxruntime'),",
+    ]
 
     icon_arg = f"    icon={str(icon_path)!r}," if icon_path.exists() else ""
     matplotlib_datas = collect_data_files('matplotlib')
+    for pkg in ('rapidocr', 'onnxruntime'):
+        try:
+            matplotlib_datas = matplotlib_datas + collect_data_files(pkg)
+        except Exception:
+            pass
     if assets_dir.exists():
         datas_list = [(str(assets_dir), 'assets')] + matplotlib_datas
     else:
@@ -137,7 +146,7 @@ def main() -> int:
         "a = Analysis(",
         entry_arg,
         pathex_arg,
-        "    binaries=list(collect_dynamic_libs('PyQt6')),",
+        "    binaries=list(collect_dynamic_libs('PyQt6')) + list(collect_dynamic_libs('onnxruntime')),",
         datas_arg,
         "    hiddenimports=[",
         *hidden_lines,

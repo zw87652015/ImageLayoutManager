@@ -117,13 +117,12 @@ class PdfExporter:
                         rotation = getattr(cell, 'rotation', 0)
                         crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
                                 getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                        svg_override = None
-                        if cell.image_path.lower().endswith('.svg'):
-                            from src.utils.svg_text_utils import get_svg_override_bytes_for_cell
-                            svg_override = get_svg_override_bytes_for_cell(
-                                project, cell, layout_result,
-                                (content_rect.width() / scale, content_rect.height() / scale))
-                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop, svg_override)
+                        from src.utils.text_overrides import overrides_for_cell
+                        svg_override, raster_override = overrides_for_cell(
+                            project, cell, layout_result,
+                            (content_rect.width() / scale, content_rect.height() / scale))
+                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop,
+                                                svg_override, raster_override)
 
                         # Draw scale bar if enabled
                         if getattr(cell, 'scale_bar_enabled', False):
@@ -388,7 +387,8 @@ class PdfExporter:
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                    crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None):
+                    crop: tuple = (0.0, 0.0, 1.0, 1.0), svg_override_bytes: bytes = None,
+                    raster_override: dict = None):
         ext = os.path.splitext(path)[1].lower()
 
         if ext == '.svg':
@@ -396,7 +396,7 @@ class PdfExporter:
         elif ext in ('.pdf', '.eps'):
             PdfExporter._draw_pdf(painter, path, rect, fit_mode_str, rotation, crop)
         else:
-            PdfExporter._draw_raster(painter, path, rect, fit_mode_str, rotation, crop)
+            PdfExporter._draw_raster(painter, path, rect, fit_mode_str, rotation, crop, raster_override)
 
     @staticmethod
     def _draw_svg(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
@@ -501,13 +501,11 @@ class PdfExporter:
 
     @staticmethod
     def _draw_raster(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                     crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+                     crop: tuple = (0.0, 0.0, 1.0, 1.0), raster_override: dict = None):
         """Draw raster image using PIL, honouring crop."""
         try:
-            with Image.open(path) as img:
-                if img.mode != 'RGBA':
-                    img = img.convert('RGBA')
-
+            from src.utils.raster_text_utils import load_raster_with_overrides
+            with load_raster_with_overrides(path, raster_override) as img:
                 cl, ct, cr, cb = crop
                 full_w, full_h = img.width, img.height
                 cx0 = int(cl * full_w)

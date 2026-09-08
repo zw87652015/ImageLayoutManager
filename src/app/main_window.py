@@ -53,7 +53,7 @@ from src.app.commands import (
     AddGroupLabelCommand, DeleteGroupLabelCommand, GroupLabelPropertyChangeCommand,
 )
 from src.model.data_model import PiPItem
-from src.utils.image_proxy import get_image_proxy
+from src.utils.image_proxy import get_image_proxy, is_supported_image, collect_importable_images
 from src.utils.figpack import (
     BundleError, WorkingDir, cleanup_orphans, open_bundle, pack_project,
     register_pre_delete_hook,
@@ -1022,6 +1022,7 @@ class MainWindow(QMainWindow):
         tab.scene.cell_swapped.connect(self._on_cell_swapped)
         tab.scene.multi_cells_swapped.connect(self._on_multi_cells_swapped)
         tab.scene.new_image_dropped.connect(self._on_new_image_dropped)
+        tab.scene.images_batch_dropped.connect(self._on_images_batch_dropped)
         tab.scene.project_file_dropped.connect(self._on_project_file_dropped)
         tab.scene.text_item_changed.connect(self._on_text_item_drag_changed)
         tab.scene.selection_changed_custom.connect(self._on_scene_selection_changed_custom)
@@ -1077,6 +1078,7 @@ class MainWindow(QMainWindow):
             tab.scene.cell_swapped.disconnect(self._on_cell_swapped)
             tab.scene.multi_cells_swapped.disconnect(self._on_multi_cells_swapped)
             tab.scene.new_image_dropped.disconnect(self._on_new_image_dropped)
+            tab.scene.images_batch_dropped.disconnect(self._on_images_batch_dropped)
             tab.scene.project_file_dropped.disconnect(self._on_project_file_dropped)
             tab.scene.text_item_changed.disconnect(self._on_text_item_drag_changed)
             tab.scene.selection_changed_custom.disconnect(self._on_scene_selection_changed_custom)
@@ -3660,6 +3662,19 @@ class MainWindow(QMainWindow):
                     lambda checked=False, p=_svg_path, c=_svg_cell: self._on_open_svg_text_inspector(p, c)
                 )
 
+            # Raster text size matching (pixel images; needs a configured OCR backend)
+            from src.utils.raster_text_utils import is_raster_path
+            if is_raster_path(cell.image_path):
+                from src.utils.raster_text_ocr import configured_backend
+                menu.addSeparator()
+                ocr_ready = configured_backend() is not None or bool(cell.raster_text_regions)
+                raster_action = menu.addAction(
+                    tr("ctx_raster_text_inspector") if ocr_ready else tr("ctx_raster_text_disabled"))
+                raster_action.setEnabled(ocr_ready)
+                raster_action.triggered.connect(
+                    lambda checked=False, p=cell.image_path, c=cell: self._on_open_raster_text_inspector(p, c)
+                )
+
             # --- Crop ---
             menu.addSeparator()
             crop_action = menu.addAction(tr("ctx_crop_image"))
@@ -4274,9 +4289,22 @@ class MainWindow(QMainWindow):
         win.raise_()
         win.activateWindow()
 
-    def _close_svg_text_inspectors(self, project):
+    def _on_open_raster_text_inspector(self, image_path: str, cell):
+        """Open the raster text size-matching dialog for a pixel-image cell."""
+        from src.app.raster_text_inspector import RasterTextInspectorWindow
+        win = RasterTextInspectorWindow(image_path, self.project, cell, parent=self)
+        win.groups_changed.connect(self._on_svg_text_groups_changed)
+        win.show()
+        win.raise_()
+        win.activateWindow()
+
+    def _text_inspector_windows(self):
         from src.app.svg_text_inspector import SvgTextInspectorWindow
-        for win in self.findChildren(SvgTextInspectorWindow):
+        from src.app.raster_text_inspector import RasterTextInspectorWindow
+        return self.findChildren(SvgTextInspectorWindow) + self.findChildren(RasterTextInspectorWindow)
+
+    def _close_svg_text_inspectors(self, project):
+        for win in self._text_inspector_windows():
             if win.project is project:
                 win.blockSignals(True)
                 win.close()
@@ -4287,13 +4315,12 @@ class MainWindow(QMainWindow):
 
     def _on_svg_text_groups_changed(self):
         """Called when the user edits SVG text groups — syncs overrides then refreshes."""
-        from src.app.svg_text_inspector import SvgTextInspectorWindow
         sender = self.sender()
-        project = sender.project if isinstance(sender, SvgTextInspectorWindow) else self.project
+        project = getattr(sender, 'project', None) or self.project
         tab = next((tab for tab in self._tabs if tab.project is project), None)
         if tab is None:
             return
-        for win in self.findChildren(SvgTextInspectorWindow):
+        for win in self._text_inspector_windows():
             if win is not sender and win.project is project and win.isVisible():
                 win.refresh()
         if project is not self.project:
@@ -4684,9 +4711,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _is_supported_drop_path(path: str) -> bool:
+    def _is_project_drop_path(path: str) -> bool:
         lp = path.lower()
         return lp.endswith((".figpack", ".figlayout", ".json"))
+
+    @classmethod
+    def _is_supported_drop_path(cls, path: str) -> bool:
+        return (cls._is_project_drop_path(path) or os.path.isdir(path)
+                or is_supported_image(path))
 
     def dragEnterEvent(self, event):
         md = event.mimeData()
@@ -4715,10 +4747,48 @@ class MainWindow(QMainWindow):
             super().dropEvent(event)
             return
         event.acceptProposedAction()
-        # Open each dropped file in turn. Re-using the active blank
+        # Open each dropped project file in turn. Re-using the active blank
         # tab is handled by the per-format opener.
         for p in paths:
-            self._open_path_dispatch(p)
+            if self._is_project_drop_path(p):
+                self._open_path_dispatch(p)
+        # Images and folders (anywhere on the window) become a new layout.
+        image_sources = [p for p in paths if not self._is_project_drop_path(p)]
+        if image_sources:
+            self._on_images_batch_dropped(image_sources)
+
+    def _on_images_batch_dropped(self, paths):
+        """Several files and/or folders were dropped: collect the importable
+        images and open them as an auto-arranged layout. A lone image falls
+        back to filling the first empty cell, like a canvas drop."""
+        images = collect_importable_images(paths)
+        if not images:
+            QMessageBox.information(self, tr("title_import"), tr("msg_drop_no_images"))
+            return
+        if len(images) == 1 and not any(os.path.isdir(p) for p in paths):
+            self._dismiss_welcome()
+            self._on_new_image_dropped(images[0], 0.0, 0.0)
+            return
+        self._open_images_as_layout(images)
+
+    def _open_images_as_layout(self, paths):
+        """Build a grid sized for *paths*, auto-arrange it and show it in the
+        active tab if that tab is still a clean untitled project, otherwise in
+        a new tab."""
+        self._dismiss_welcome()
+        project = self._build_project_from_images(paths)
+        active = self._tabs[self._active_tab_idx] if 0 <= self._active_tab_idx < len(self._tabs) else None
+        if active is not None and active.undo_stack.isClean() and active.path is None \
+                and active.bundle_workdir is None:
+            self._set_project(project, None)
+        else:
+            self._create_tab(project, None)
+        cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
+        self.undo_stack.push(cmd)
+        self._tabs[self._active_tab_idx].assets_dirty = True
+        self._check_image_resolution()
+        if not self.statusbar.currentMessage():
+            self.statusbar.showMessage(tr("status_images_opened_as_layout").format(n=len(paths)), 5000)
 
     def _open_path_dispatch(self, path: str):
         """Route *path* to the right opener based on extension."""
@@ -5129,7 +5199,7 @@ class MainWindow(QMainWindow):
         if not paths:
             return
 
-        project = self._build_project_from_images(paths)
+        project = self._build_project_from_images(collect_importable_images(paths) or paths)
         self._set_project(project, None)
 
         cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
