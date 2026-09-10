@@ -389,6 +389,7 @@ def main() -> int:
             name_lower.startswith("api-ms-win-")
             or name_lower == "ucrtbase.dll"
             or name_lower.startswith("icu")  # icuuc.dll, icudt*.dll, icuin.dll
+            or (name_lower.startswith("qt6") and name_lower.endswith(".dll"))
         ):
             p.unlink()
             print(f"  Removed: {p.name}")
@@ -459,7 +460,8 @@ def main() -> int:
             for p in cli_internal.iterdir():
                 n = p.name.lower()
                 if (n.startswith("api-ms-win-") or n == "ucrtbase.dll"
-                        or n.startswith("icu")):
+                        or n.startswith("icu")
+                        or (n.startswith("qt6") and n.endswith(".dll"))):
                     p.unlink()
                     cli_removed += 1
             print(f"Removed {cli_removed} rogue DLL(s) from CLI _internal.")
@@ -557,6 +559,9 @@ def main() -> int:
         [Tasks]
         Name: "desktopicon"; Description: "{{cm:CreateDesktopIcon}}"; GroupDescription: "{{cm:AdditionalIcons}}"
         Name: "assoc"; Description: "{{cm:AssocDescription}}"; GroupDescription: "{{cm:AssocGroupDescription}}"; Flags: checkedonce
+
+        [InstallDelete]
+        Type: files; Name: "{{app}}\\_internal\\Qt6*.dll"
 
         [Files]
         Source: "{dist_dir}\\*"; DestDir: "{{app}}"; Flags: ignoreversion recursesubdirs createallsubdirs

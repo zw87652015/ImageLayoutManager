@@ -1,14 +1,62 @@
-from PyQt6.QtCore import QEvent, QRect, QRectF, QSize, Qt
+from PyQt6.QtCore import QEvent, QRect, QRectF, QSize, Qt, QTimer, pyqtSlot
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPalette, QPen
 from PyQt6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionButton
 
 from src.app.i18n import tr
+from src.app.motion import MotionTween
 
 
 REGION_DETAILS_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class RasterTextRegionDelegate(QStyledItemDelegate):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._feedback = {}
+        self._groups = {}
+        self._states = {}
+        if parent is not None:
+            parent.model().rowsRemoved.connect(self._schedule_prune)
+            parent.model().modelReset.connect(self._schedule_prune)
+
+    def _schedule_prune(self, *args):
+        QTimer.singleShot(0, self._prune)
+
+    def _prune(self):
+        view = self.parent()
+        if view is not None:
+            model = view.model()
+            self.set_regions({model.index(row, 0).data(Qt.ItemDataRole.UserRole):
+                              (model.index(row, 0).data(REGION_DETAILS_ROLE) or {}).get('group')
+                              for row in range(model.rowCount())})
+
+    @pyqtSlot(float)
+    def _feedback_updated(self, _value):
+        if self.parent() is not None:
+            self.parent().viewport().update()
+
+    def set_regions(self, groups):
+        for rid in self._feedback.keys() - groups.keys():
+            self._states.pop(rid, None)
+            for tween in self._feedback.pop(rid):
+                tween.updated.disconnect(self._feedback_updated)
+                tween.set_target(tween.value, ms=0)
+                tween.deleteLater()
+        for rid, group in groups.items():
+            if rid not in self._feedback:
+                self._states[rid] = (False, False)
+                self._feedback[rid] = tuple(MotionTween(self, value=value)
+                                            for value in (0, 0, bool(group), 0))
+                for tween in self._feedback[rid]:
+                    tween.updated.connect(self._feedback_updated)
+            elif group != self._groups.get(rid):
+                self._feedback[rid][2].set_target(float(bool(group)), ms=100)
+                pulse = self._feedback[rid][3]
+                pulse.set_target(1.0, ms=0)
+                pulse.set_target(0.0, ms=100)
+        self._groups = dict(groups)
+        self._feedback_updated(0)
+
     def sizeHint(self, option, index):
         height = QFontMetrics(option.font).height()
         details = index.data(REGION_DETAILS_ROLE) or {}
@@ -38,12 +86,22 @@ class RasterTextRegionDelegate(QStyledItemDelegate):
         subtle.setAlpha(180)
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         hovered = bool(option.state & QStyle.StateFlag.State_MouseOver)
+        rid = index.data(Qt.ItemDataRole.UserRole)
+        if rid not in self._feedback or details['group'] != self._groups.get(rid):
+            self.set_regions({**self._groups, rid: details['group']})
+        selection, hover, group, pulse = self._feedback[rid]
+        previous = self._states[rid]
+        self._states[rid] = (selected, hovered)
+        for tween, old, new in zip((selection, hover), previous, self._states[rid]):
+            if old != new:
+                tween.set_target(float(new), ms=100)
         painter.fillRect(rect, palette.color(QPalette.ColorRole.Base))
         tint = QColor(accent)
-        tint.setAlpha(28 if selected else 12 if hovered else 0)
+        tint.setAlpha(round(28 * selection.value + 12 * hover.value * (1 - selection.value)))
         painter.fillRect(rect, tint)
-        if selected:
-            painter.fillRect(QRect(rect.left(), rect.top() + 5, 3, rect.height() - 10), accent)
+        stripe = QColor(accent)
+        stripe.setAlpha(round(255 * selection.value))
+        painter.fillRect(QRect(rect.left(), rect.top() + 5, 3, rect.height() - 10), stripe)
         line = QColor(text)
         line.setAlpha(25)
         painter.setPen(line)
@@ -81,8 +139,10 @@ class RasterTextRegionDelegate(QStyledItemDelegate):
         badge_text = tr('rastertxt_group_badge').format(name=details['group']) if details['group'] else tr('rastertxt_ungrouped')
         badge_w = min(metrics.horizontalAdvance(badge_text) + 16, max(40, int(width * 0.58)))
         badge = QRectF(left, badge_y, badge_w, line_h + 4)
-        badge_color = QColor(accent if details['group'] else text)
-        badge_color.setAlpha(22 if details['group'] else 12)
+        badge_color = QColor(*(round(a + (b - a) * group.value)
+                               for a, b in zip(text.getRgb()[:3], accent.getRgb()[:3])))
+        badge_color.setAlpha(round(12 + 10 * group.value + 12 * pulse.value
+                                   + 6 * selection.value + 4 * hover.value))
         painter.setBrush(badge_color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(badge, 4, 4)

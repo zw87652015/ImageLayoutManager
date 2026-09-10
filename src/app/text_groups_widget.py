@@ -15,6 +15,7 @@ from PyQt6.QtGui import QFont
 from src.model.data_model import SvgTextGroup
 from src.app.i18n import tr
 from src.app.wheel_guard import install_wheel_guard
+from src.app.motion import install_button_feedback
 
 
 def section_label(text: str) -> QLabel:
@@ -57,6 +58,7 @@ class TextGroupsWidget(QWidget):
         self._scroll.setWidget(container)
         root.addWidget(self._scroll, 1)
         self.refresh()
+        install_button_feedback(self)
 
     def refresh(self):
         while self._vbox.count() > 1:
@@ -132,6 +134,7 @@ class TextGroupsWidget(QWidget):
 
         # Scrolling the group list must never retune a font size.
         install_wheel_guard(row, self._scroll)
+        install_button_feedback(row)
         return row
 
     def _on_add_group(self):

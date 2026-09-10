@@ -3,6 +3,7 @@
 ## Environment
 - Conda env: `imagelayout` (`conda env create -f environment.yml`); `git` is not on PATH in the default shell.
 - Run the app: `python main.py`; headless CLI: `python cli_main.py --help`.
+- Windows packaging: keep Qt DLLs under `_internal/PyQt6/Qt6/bin`, not duplicate `_internal/Qt6*.dll` copies from Conda. Inno Setup upgrades must also remove obsolete top-level Qt DLLs with the targeted `[InstallDelete]` rule; copying a clean bundle over an old installation leaves stale DLLs behind. `python -m unittest test_windows_packaging` checks that cleanup stays limited to those files.
 
 ## Verification
 - Tests are plain `unittest` modules at the repo root (no pytest config):
@@ -11,6 +12,7 @@
   - `python -m unittest test_raster_text_overlay` — rounded text envelopes, protected pixels, preview selection, scaling, and theme colors.
   - `python -m unittest test_project_migrations test_project_bundle_compatibility` — legacy/schema migrations, future-version guards, plain/bundle parity, rendering and save integrity.
   - `python -m unittest test_welcome_drop` — welcome-window saved-project drag/drop, filtering, and opener routing.
+  - `python -m unittest test_help_dialog` — bilingual in-app guide pages, rich-text markup, and shortcut/content checks. The offline guide content is embedded in `src/app/help_dialog.py`; tab labels live in `src/app/i18n.py`.
 - GUI tests need `QT_QPA_PLATFORM=offscreen`; Qt finds no system fonts offscreen, so tests load
   `%WINDIR%\Fonts\arial.ttf` explicitly when text rendering matters.
 - Byte-compile check: `python -m compileall -q src main.py cli_main.py`.

@@ -9,6 +9,18 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.3.6", "2026-09-10", [
+        {"en": "Match selected text sizes across SVG and raster panels without changing the source files.",
+         "zh": "无需修改源文件，即可统一 SVG 和位图面板中所选文字的大小。"},
+        {"en": "Drop several images or a folder onto the app to create an automatically arranged layout.",
+         "zh": "将多张图片或一个文件夹拖入软件，即可自动创建并排布版面。"},
+        {"en": "Drag a saved project onto the welcome window to open it directly.",
+         "zh": "将已保存的工程拖到欢迎窗口，即可直接打开。"},
+        {"en": "Older project files now open through safer, versioned upgrades.",
+         "zh": "旧版工程文件现在会通过更安全、带版本的升级流程打开。"},
+        {"en": "Choose Standard, Reduced, or Off motion in Preferences for calmer interactions.",
+         "zh": "可在“首选项”中选择标准、减少或关闭动效，让交互更从容。"},
+    ]),
     ("3.3.5", "2026-08-21", [
         {"en": "New shared labels are numbered automatically: Label 1, Label 2, and so on.",
          "zh": "新建共享标签会自动编号：标注 1、标注 2，以此类推。"},

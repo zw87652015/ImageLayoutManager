@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QGraphicsView
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF
-from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterPath, QPen, QBrush, QColor
+import math
+
+from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QVariantAnimation, QEasingCurve
+from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterPath, QPen, QBrush, QColor, QCursor, QTransform
+
+from src.app.motion import start_animation
 
 
 class CanvasView(QGraphicsView):
+    MIN_ZOOM = 0.05
+    MAX_ZOOM = 64.0
+    ZOOM_DURATION_MS = 140
+
     zoom_changed = pyqtSignal(float)
     mouse_scene_pos_changed = pyqtSignal(float, float)  # x_mm, y_mm
     navigate_cell = pyqtSignal(str)       # direction: "up"/"down"/"left"/"right"/"next"/"prev"
@@ -21,7 +29,7 @@ class CanvasView(QGraphicsView):
         
         # Interaction — NoDrag: custom rubber band avoids QMacCGContext/OpenGL conflict
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
 
         # Custom rubber-band state (viewport coords)
@@ -34,6 +42,13 @@ class CanvasView(QGraphicsView):
         
         # Zoom state
         self._zoom_level = 1.0
+        self._zoom_target = 1.0
+        self._zoom_anim = None
+        for bar in (self.horizontalScrollBar(), self.verticalScrollBar()):
+            bar.sliderPressed.connect(self._cancel_zoom)
+            bar.actionTriggered.connect(self._cancel_zoom)
+        if scene is not None:
+            scene.sceneRectChanged.connect(self._scene_rect_changed)
 
         # Space-drag pan state
         self._space_held = False
@@ -59,20 +74,102 @@ class CanvasView(QGraphicsView):
         if not scene:
             return
         page_rect = getattr(scene, 'page_rect', scene.sceneRect())
-        self.fitInView(page_rect, Qt.AspectRatioMode.KeepAspectRatio)
-        self._zoom_level = self.transform().m11()
-        self.zoom_changed.emit(self._zoom_level)
+        if page_rect.isEmpty():
+            return
+        viewport = self.viewport().rect()
+        zoom = min(max(1, viewport.width() - 4) / page_rect.width(),
+                   max(1, viewport.height() - 4) / page_rect.height())
+        self._start_zoom(zoom, QPointF(viewport.center()), page_rect.center())
 
     def zoom_to_100(self):
         """Reset zoom to 100%."""
-        self.resetTransform()
-        self._zoom_level = 1.0
+        self._start_zoom(1.0)
+
+    def _zoom_anchor(self):
+        point = self.viewport().mapFromGlobal(QCursor.pos())
+        if not self.viewport().rect().contains(point):
+            point = self.viewport().rect().center()
+        return QPointF(point)
+
+    def _scene_at(self, viewport_pos):
+        inverse, valid = self.viewportTransform().inverted()
+        return inverse.map(QPointF(viewport_pos)) if valid else QPointF()
+
+    def _cancel_zoom(self):
+        anim = self._zoom_anim
+        self._zoom_anim = None
+        if anim is not None:
+            anim.stop()
+            anim.deleteLater()
+        self._zoom_level = self.transform().m11()
+        self._zoom_target = self._zoom_level
+
+    def _scene_rect_changed(self, _rect):
+        anchor = QPointF(self.viewport().rect().center())
+        scene_anchor = self._scene_at(anchor)
+        self._cancel_zoom()
+        self._set_zoom_frame(self._zoom_level, scene_anchor, anchor)
+
+    def _set_zoom_frame(self, zoom, scene_anchor, viewport_anchor):
+        viewport = self.viewport().rect()
+        center = scene_anchor + (QPointF(viewport.center()) - viewport_anchor) / zoom
+        width, height = viewport.width() / zoom, viewport.height() / zoom
+        visible_margin = QRectF(center.x() - width, center.y() - height,
+                                2 * width, 2 * height)
+        scene = self.scene()
+        self.setSceneRect(visible_margin.united(scene.sceneRect()) if scene else visible_margin)
+        offset = viewport_anchor - scene_anchor * zoom
+        scroll_x, scroll_y = round(-offset.x()), round(-offset.y())
+        transform = QTransform(zoom, 0, 0, zoom,
+                               offset.x() + scroll_x, offset.y() + scroll_y)
+        self.setTransform(transform)
+        self.horizontalScrollBar().setValue(scroll_x)
+        self.verticalScrollBar().setValue(scroll_y)
+        self._zoom_level = self.transform().m11()
         self.zoom_changed.emit(self._zoom_level)
 
-    def _apply_zoom(self, factor):
-        self.scale(factor, factor)
-        self._zoom_level *= factor
-        self.zoom_changed.emit(self._zoom_level)
+    def _start_zoom(self, zoom, anchor=None, scene_target=None, animated=True):
+        if not math.isfinite(zoom) or zoom <= 0:
+            return
+        zoom = min(self.MAX_ZOOM, max(self.MIN_ZOOM, zoom))
+        anchor = self._zoom_anchor() if anchor is None else QPointF(anchor)
+        scene_start = self._scene_at(anchor)
+        scene_end = scene_start if scene_target is None else QPointF(scene_target)
+        self._cancel_zoom()
+        self._zoom_target = zoom
+        start = self._zoom_level
+        if not animated or (zoom == start and scene_start == scene_end):
+            self._set_zoom_frame(zoom, scene_end, anchor)
+            return
+        anim = QVariantAnimation(self)
+        self._zoom_anim = anim
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def update(value):
+            if self._zoom_anim is anim:
+                t = float(value)
+                frame_zoom = zoom if t >= 1.0 else start + (zoom - start) * t
+                frame_anchor = scene_end if t >= 1.0 else scene_start + (scene_end - scene_start) * t
+                self._set_zoom_frame(frame_zoom, frame_anchor, anchor)
+
+        def finish():
+            if self._zoom_anim is not anim:
+                return
+            self._zoom_anim = None
+            self._zoom_target = zoom
+            anim.deleteLater()
+
+        anim.valueChanged.connect(update)
+        anim.finished.connect(finish)
+        start_animation(anim, self.ZOOM_DURATION_MS, spatial=True)
+
+    def _apply_zoom(self, factor, anchor=None, animated=True):
+        if not math.isfinite(factor) or factor <= 0:
+            return
+        base = self._zoom_target if animated and self._zoom_anim is not None else self.transform().m11()
+        self._start_zoom(base * factor, anchor, animated=animated)
 
     # ------------------------------------------------------------------
     # Events
@@ -80,14 +177,27 @@ class CanvasView(QGraphicsView):
 
     def wheelEvent(self, event: QWheelEvent):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            angle = event.angleDelta().y()
-            factor = 1.1 if angle > 0 else 0.9
-            self._apply_zoom(factor)
+            pixels = event.pixelDelta()
+            direct = not pixels.isNull() or event.phase() != Qt.ScrollPhase.NoScrollPhase
+            delta = pixels.y() if not pixels.isNull() else event.angleDelta().y()
+            if delta:
+                steps = max(-20.0, min(20.0, delta / (40.0 if not pixels.isNull() else 120.0)))
+                self._apply_zoom(1.1 ** steps, event.position(), animated=not direct)
+            elif direct:
+                self._cancel_zoom()
             event.accept()
         else:
-            super().wheelEvent(event)
+            self._cancel_zoom()
+            pixels = event.pixelDelta()
+            if not pixels.isNull():
+                self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - pixels.x())
+                self.verticalScrollBar().setValue(self.verticalScrollBar().value() - pixels.y())
+                event.accept()
+            else:
+                super().wheelEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
+        self._cancel_zoom()
         if event.button() == Qt.MouseButton.MiddleButton or self._space_held:
             # Pan via middle-button or Space+drag — handled entirely in the
             # view so the event never reaches scene items (prevents accidental
@@ -140,6 +250,7 @@ class CanvasView(QGraphicsView):
             self._last_mouse_emit.restart()
 
         if self._pan_active and self._pan_last_pos is not None:
+            self._cancel_zoom()
             current = event.position().toPoint()
             delta = current - self._pan_last_pos
             self._pan_last_pos = current
@@ -208,7 +319,8 @@ class CanvasView(QGraphicsView):
             return
 
         # Zoom shortcuts
-        if mod & Qt.KeyboardModifier.ControlModifier:
+        if (mod & Qt.KeyboardModifier.ControlModifier
+                and not mod & Qt.KeyboardModifier.AltModifier):
             if key == Qt.Key.Key_0:
                 self.zoom_to_fit()
                 event.accept()
@@ -275,6 +387,15 @@ class CanvasView(QGraphicsView):
             return
 
         super().keyPressEvent(event)
+
+    def resizeEvent(self, event):
+        if hasattr(self, '_zoom_anim'):
+            self._cancel_zoom()
+        super().resizeEvent(event)
+
+    def hideEvent(self, event):
+        self._cancel_zoom()
+        super().hideEvent(event)
 
     def keyReleaseEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():

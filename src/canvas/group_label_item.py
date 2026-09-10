@@ -18,6 +18,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsObject
 
+from src.app.motion import start_animation
 from src.utils import group_label_render
 
 _DRAG_THRESHOLD_MM = 1.5
@@ -53,9 +54,7 @@ class GroupLabelItem(QGraphicsObject):
 
     def set_band(self, band: QRectF, model) -> None:
         """Update geometry and model. Cheap no-op when nothing changed."""
-        if self._anim is not None:
-            self._anim.stop()
-            self._anim = None
+        self._stop_animation()
         changed = band != self._band
         if changed:
             self.prepareGeometryChange()
@@ -67,19 +66,26 @@ class GroupLabelItem(QGraphicsObject):
 
     def animate_from(self, old_band: QRectF, duration_ms: int = _ANIM_MS) -> None:
         """Tween the displayed band from *old_band* to the current one."""
-        target = QRectF(self._band)
+        target = QRectF(self._anim.endValue() if self._anim is not None else self._band)
+        self._stop_animation()
         if old_band == target or duration_ms <= 0:
+            self._apply_animated_band(target)
             return
-        if self._anim is not None:
-            self._anim.stop()
-        self._anim = QVariantAnimation(self)
-        self._anim.setDuration(duration_ms)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._anim.setStartValue(QRectF(old_band))
-        self._anim.setEndValue(QRectF(target))
-        self._anim.valueChanged.connect(self._apply_animated_band)
-        self._anim.finished.connect(self._animation_done)
-        self._anim.start()
+        anim = QVariantAnimation(self)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(QRectF(old_band))
+        anim.setEndValue(target)
+        anim.valueChanged.connect(self._apply_animated_band)
+        anim.finished.connect(lambda: self._animation_done(anim))
+        self._anim = anim
+        start_animation(anim, duration_ms, spatial=True)
+
+    def _stop_animation(self) -> None:
+        anim = self._anim
+        self._anim = None
+        if anim is not None:
+            anim.stop()
+            anim.deleteLater()
 
     def _apply_animated_band(self, value: QRectF) -> None:
         self.prepareGeometryChange()
@@ -87,8 +93,13 @@ class GroupLabelItem(QGraphicsObject):
         self.setPos(self._band.x(), self._band.y())
         self.update()
 
-    def _animation_done(self) -> None:
+    def _animation_done(self, anim=None) -> None:
+        anim = self._anim if anim is None else anim
+        if anim is None or self._anim is not anim:
+            return
         self._anim = None
+        self._apply_animated_band(anim.endValue())
+        anim.deleteLater()
 
     def band_scene_rect(self) -> QRectF:
         """Band in scene coordinates (a copy, safe to keep)."""

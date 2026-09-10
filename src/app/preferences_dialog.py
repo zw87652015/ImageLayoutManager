@@ -15,6 +15,7 @@ import os
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,6 +24,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -38,6 +40,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.app.i18n import tr
+from src.app.motion import MotionTween, install_button_feedback, set_motion_mode
 from src.app.theme import LIGHT, DARK
 
 
@@ -108,12 +111,23 @@ class PreferencesDialog(QDialog):
         self._apply_btn = btns.button(QDialogButtonBox.StandardButton.Apply)
         self._apply_btn.clicked.connect(self._on_apply)
         self._apply_btn.setEnabled(False)
-        root.addWidget(btns)
+        footer = QHBoxLayout()
+        self._applied_status = QLabel()
+        self._applied_status.setObjectName("preferencesAppliedStatus")
+        self._applied_status.setForegroundRole(QPalette.ColorRole.Text)
+        self._applied_effect = QGraphicsOpacityEffect(self._applied_status)
+        self._applied_status.setGraphicsEffect(self._applied_effect)
+        self._applied_feedback = MotionTween(self)
+        self._applied_feedback.updated.connect(self._applied_effect.setOpacity)
+        footer.addWidget(self._applied_status, 1)
+        footer.addWidget(btns)
+        root.addLayout(footer)
 
         # Any edit to a settings control arms Apply; OK/Apply disarm it again.
         # Wired last so the initial setChecked()/setValue() calls above don't
         # themselves count as user edits.
         self._wire_dirty_tracking()
+        install_button_feedback(self)
 
     def _wire_dirty_tracking(self):
         """Arm the Apply button when any settings control changes value."""
@@ -129,6 +143,7 @@ class PreferencesDialog(QDialog):
             w.textChanged.connect(self._mark_dirty)
 
     def _mark_dirty(self, *_args):
+        self._applied_status.setText("")
         self._apply_btn.setEnabled(True)
 
     # ── Tab builders ──────────────────────────────────────────────────────────
@@ -158,6 +173,20 @@ class PreferencesDialog(QDialog):
         if tidx >= 0:
             self._theme_combo.setCurrentIndex(tidx)
         form.addRow(tr("prefs_theme"), self._theme_combo)
+
+        self._motion_combo = QComboBox()
+        for mode in ("standard", "reduced", "off"):
+            self._motion_combo.addItem(tr("prefs_motion_" + mode), mode)
+        motion_index = self._motion_combo.findData(
+            self._settings.value("ui/motion_mode", "standard")
+        )
+        self._motion_combo.setCurrentIndex(max(0, motion_index))
+        self._motion_combo.setToolTip(tr("prefs_motion_hint"))
+        form.addRow(tr("prefs_motion"), self._motion_combo)
+        motion_hint = QLabel(tr("prefs_motion_hint"))
+        motion_hint.setWordWrap(True)
+        motion_hint.setForegroundRole(QPalette.ColorRole.PlaceholderText)
+        form.addRow("", motion_hint)
 
         # Undo limit
         self._undo_spin = QSpinBox()
@@ -415,6 +444,9 @@ class PreferencesDialog(QDialog):
         self._save()
         self.apply()
         self._apply_btn.setEnabled(False)
+        self._applied_status.setText(tr("prefs_applied"))
+        self._applied_feedback.set_target(0.0, 0)
+        self._applied_feedback.set_target(1.0, 110)
 
     def _save(self):
         s = self._settings
@@ -422,6 +454,7 @@ class PreferencesDialog(QDialog):
         # General
         s.setValue("language", self._lang_combo.currentData())
         s.setValue("theme", self._theme_combo.currentData())
+        s.setValue("ui/motion_mode", self._motion_combo.currentData())
         s.setValue("max_history", self._undo_spin.value())
         s.setValue("autosave_interval_s", self._autosave_spin.value())
         s.setValue("mcp_autostart", self._mcp_autostart_chk.isChecked())
@@ -451,6 +484,7 @@ class PreferencesDialog(QDialog):
 
     def apply(self):
         """Propagate saved settings to the running main window."""
+        set_motion_mode(self._settings.value("ui/motion_mode", "standard"))
         mw = self._mw
         if mw is None:
             return

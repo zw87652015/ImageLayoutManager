@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphi
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QCursor
 from PyQt6.QtCore import Qt, QRectF, QRect, QPointF, pyqtSignal, QVariantAnimation, QEasingCurve, QTimer
 
+from src.app.motion import start_animation
 from src.model.enums import FitMode
 from src.utils.image_proxy import get_image_proxy
 
@@ -1956,6 +1957,7 @@ class CellItem(QGraphicsRectItem):
 
     def begin_ext_drag(self, has_image: bool):
         """Called by CanvasScene when an external image file starts hovering over this cell."""
+        self._stop_pip_animation()
         self._ext_drag_active = True
         self._ext_drag_has_image = has_image
         self._pip_zone_hovered = False
@@ -1967,9 +1969,7 @@ class CellItem(QGraphicsRectItem):
         self._ext_drag_active = False
         self._ext_drag_has_image = False
         self._pip_zone_hovered = False
-        if self._pip_anim is not None:
-            self._pip_anim.stop()
-            self._pip_anim = None
+        self._stop_pip_animation()
         self._pip_drop_indicator_t = 0.0
         self.update()
 
@@ -1982,17 +1982,32 @@ class CellItem(QGraphicsRectItem):
             self._pip_zone_hovered = in_pip
             self._animate_pip_indicator(to_pip=in_pip)
 
+    def _stop_pip_animation(self):
+        anim = self._pip_anim
+        self._pip_anim = None
+        if anim is not None:
+            anim.stop()
+            anim.deleteLater()
+
     def _animate_pip_indicator(self, to_pip: bool):
-        if self._pip_anim is not None:
-            self._pip_anim.stop()
+        self._stop_pip_animation()
         anim = QVariantAnimation()
         anim.setStartValue(float(self._pip_drop_indicator_t))
-        anim.setEndValue(1.0 if to_pip else 0.0)
-        anim.setDuration(160)
+        target = 1.0 if to_pip else 0.0
+        anim.setEndValue(target)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.valueChanged.connect(self._on_pip_anim_value)
-        anim.start()
+
+        def _finished():
+            if self._pip_anim is not anim:
+                return
+            self._pip_anim = None
+            self._on_pip_anim_value(target)
+            anim.deleteLater()
+
+        anim.finished.connect(_finished)
         self._pip_anim = anim
+        start_animation(anim, 160)
 
     def _on_pip_anim_value(self, value):
         self._pip_drop_indicator_t = float(value)

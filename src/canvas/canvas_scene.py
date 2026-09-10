@@ -13,6 +13,7 @@ from src.canvas.drag_manager import DragManager
 from src.canvas.add_button_item import AddButtonItem
 from src.canvas.divider_item import DividerItem, HIT_THICKNESS
 from src.canvas.export_region_item import ExportRegionItem
+from src.app.motion import start_animation
 
 class CanvasScene(QGraphicsScene):
     # Signals
@@ -1504,7 +1505,7 @@ class CanvasScene(QGraphicsScene):
         anim.valueChanged.connect(ghost.setPos)
         anim.finished.connect(self._remove_label_tracer)
         self._label_tracer = (ghost, anim)
-        anim.start()
+        start_animation(anim, 180, spatial=True)
 
     def _remove_label_tracer(self):
         if not self._label_tracer:

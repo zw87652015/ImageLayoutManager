@@ -8,17 +8,22 @@ Right: Detect button + OCR status, region list (checkbox = enabled), per-region
 """
 
 import os
+from copy import deepcopy
+from threading import Event, Lock
 
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton,
     QLabel, QComboBox, QDoubleSpinBox, QCheckBox, QSplitter, QWidget, QScrollArea,
-    QFrame, QSizePolicy, QApplication, QMessageBox,
+    QFrame, QSizePolicy, QMessageBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QRectF, QItemSelectionModel
+from PyQt6.QtCore import (
+    Qt, pyqtSignal, pyqtSlot, QRectF, QItemSelectionModel, QObject, QRunnable, QThreadPool,
+)
 from PyQt6.QtGui import QPainter, QImage, QPen, QColor, QPalette, QTransform
 from PIL import Image
 
 from src.app.i18n import tr
+from src.app.motion import MotionTween, install_button_feedback
 from src.app.text_groups_widget import TextGroupsWidget, section_label
 from src.utils.raster_text_ocr import configured_backend, detect_text, OcrUnavailable, backend_status
 from src.utils.raster_text_utils import (
@@ -38,6 +43,8 @@ class RasterTextPreview(QWidget):
         self._overlays = []
         self._selected = set()
         self._hovered = None
+        self._feedback = {}
+        self._feedback_targets = {}
         self.setMinimumSize(280, 220)
         self.setMouseTracking(True)
         self.setAccessibleName(tr('rastertxt_preview_label'))
@@ -47,10 +54,38 @@ class RasterTextPreview(QWidget):
         self._overlays = overlays
         self._hovered = None
         self.setToolTip('')
-        self.update()
+        self.unsetCursor()
+        ids = {o['id'] for o in overlays}
+        for rid in self._feedback.keys() - ids:
+            self._feedback_targets.pop(rid, None)
+            for tween in self._feedback.pop(rid):
+                tween.updated.disconnect(self._feedback_updated)
+                tween.set_target(tween.value, ms=0)
+                tween.deleteLater()
+        self._sync_feedback()
 
     def set_selected(self, ids):
         self._selected = set(ids)
+        self._sync_feedback()
+
+    @pyqtSlot(float)
+    def _feedback_updated(self, _value):
+        self.update()
+
+    def _sync_feedback(self):
+        for overlay in self._overlays:
+            rid = overlay['id']
+            selected, hovered = rid in self._selected, rid == self._hovered
+            fill = 55 if selected else 40 if hovered else 22 if overlay['enabled'] else 8
+            border = 255 if selected or hovered else 170 if overlay['enabled'] else 85
+            if rid not in self._feedback:
+                self._feedback[rid] = tuple(MotionTween(self, value=value) for value in (fill, border))
+                for tween in self._feedback[rid]:
+                    tween.updated.connect(self._feedback_updated)
+            elif self._feedback_targets.get(rid) != (fill, border):
+                for tween, target in zip(self._feedback[rid], (fill, border)):
+                    tween.set_target(target, ms=100)
+            self._feedback_targets[rid] = (fill, border)
         self.update()
 
     def image_transform(self):
@@ -81,11 +116,11 @@ class RasterTextPreview(QWidget):
         for overlay in sorted(self._overlays, key=lambda o: o['id'] in self._selected):
             selected = overlay['id'] in self._selected
             hovered = overlay['id'] == self._hovered
-            enabled = overlay['enabled']
+            fill_tween, border_tween = self._feedback[overlay['id']]
             fill = QColor(accent)
-            fill.setAlpha(55 if selected else 40 if hovered else 22 if enabled else 8)
+            fill.setAlpha(round(fill_tween.value))
             border = QColor(accent)
-            border.setAlpha(255 if selected or hovered else 170 if enabled else 85)
+            border.setAlpha(round(border_tween.value))
             pen = QPen(border, 3.0 if selected or hovered else 2.0)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             path = transform.map(overlay['path'])
@@ -112,13 +147,14 @@ class RasterTextPreview(QWidget):
             self._hovered = hovered
             self.setToolTip(overlay['tooltip'] if overlay else '')
             self.setCursor(Qt.CursorShape.PointingHandCursor if overlay else Qt.CursorShape.ArrowCursor)
-            self.update()
+            self._sync_feedback()
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
         self._hovered = None
         self.setToolTip('')
-        self.update()
+        self.unsetCursor()
+        self._sync_feedback()
         super().leaveEvent(event)
 
     def mousePressEvent(self, event):
@@ -141,6 +177,48 @@ def _iou(a, b):
     return inter / union if union else 0.0
 
 
+_DETECTION_LOCK = Lock()
+
+
+class _DetectionSignals(QObject):
+    finished = pyqtSignal(object, object, object)
+
+
+class _DetectionTask(QRunnable):
+    def __init__(self, image, backend, context):
+        super().__init__()
+        self.image, self.backend, self.context = image, backend, context
+        self.cancelled = Event()
+        self.signals = _DetectionSignals()
+
+    def run(self):
+        results, error = [], None
+        try:
+            while not self.cancelled.is_set():
+                if not _DETECTION_LOCK.acquire(timeout=0.05):
+                    continue
+                try:
+                    if self.cancelled.is_set():
+                        return
+                    detections = detect_text(self.image, backend=self.backend)
+                finally:
+                    _DETECTION_LOCK.release()
+                if not self.cancelled.is_set():
+                    results = regions_from_detections(self.image, self._remaining(detections))
+                break
+        except Exception as exc:
+            error = exc
+        finally:
+            self.image = None
+            self.signals.finished.emit(self, results, error)
+
+    def _remaining(self, detections):
+        for detection in detections:
+            if self.cancelled.is_set():
+                break
+            yield detection
+
+
 class RasterTextInspectorWindow(QDialog):
     groups_changed = pyqtSignal()
 
@@ -152,6 +230,8 @@ class RasterTextInspectorWindow(QDialog):
         self._cell = cell
         self._report = {}              # region id -> status
         self._updating = False
+        self._detection = None
+        self._closed = False
         self.setWindowTitle(tr("rastertxt_inspector_title"))
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint |
                             Qt.WindowType.WindowMaximizeButtonHint)
@@ -159,6 +239,7 @@ class RasterTextInspectorWindow(QDialog):
         self.resize(1040, 680)
         self._build_ui()
         self._refresh_all()
+        install_button_feedback(self)
 
     # ── UI ──────────────────────────────────────────────────────────────
 
@@ -198,6 +279,10 @@ class RasterTextInspectorWindow(QDialog):
         self._btn_detect = QPushButton(tr("rastertxt_detect_btn"))
         self._btn_detect.clicked.connect(self._on_detect)
         detect_row.addWidget(self._btn_detect)
+        self._btn_cancel = QPushButton(tr('rastertxt_cancel'))
+        self._btn_cancel.clicked.connect(self._cancel_detection)
+        self._btn_cancel.hide()
+        detect_row.addWidget(self._btn_cancel)
         self._ocr_status = QLabel()
         self._ocr_status.setStyleSheet("color: #b07800;")
         self._ocr_status.setWordWrap(True)
@@ -270,13 +355,22 @@ class RasterTextInspectorWindow(QDialog):
         self._refresh_all()
 
     def _refresh_all(self):
-        self._refresh_ocr_status()
+        if self._detection and self._detection.context != self._detection_context():
+            self._cancel_detection()
+        else:
+            self._refresh_ocr_status()
         self._refresh_preview()
         self._refresh_list()
         self._groups_widget.fill_combo(self._group_combo)
         self._groups_widget.refresh()
 
     def _refresh_ocr_status(self):
+        busy = self._detection is not None
+        self._btn_cancel.setVisible(busy)
+        if busy:
+            self._btn_detect.setEnabled(False)
+            self._ocr_status.setText(tr('rastertxt_detecting'))
+            return
         from src.app.preferences_dialog import get_pref
         from src.utils.raster_text_ocr import DEFAULT_BACKEND
         reason = backend_status(get_pref("ocr_backend", DEFAULT_BACKEND), get_pref("ocr_command", ""))
@@ -394,6 +488,8 @@ class RasterTextInspectorWindow(QDialog):
                 item.setSelected(True)
             if region.id == current_id:
                 self._list.setCurrentItem(item, QItemSelectionModel.SelectionFlag.NoUpdate)
+        self._list.itemDelegate().set_regions({r.id: groups.get(r.group_id)
+                                               for r in self._cell.raster_text_regions})
         self._updating = False
         self._sync_region_controls()
 
@@ -419,42 +515,102 @@ class RasterTextInspectorWindow(QDialog):
         self._updating = False
 
     def _changed(self):
+        self._cancel_detection()
         self.groups_changed.emit()
         self._refresh_preview()
         self._refresh_list()
 
     # ── Slots ───────────────────────────────────────────────────────────
 
-    def _on_detect(self):
-        img = self._load_image()
-        if img is None:
-            return
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+    def _detection_context(self):
         try:
-            detections = detect_text(img)
-        except OcrUnavailable as exc:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, tr("rastertxt_inspector_title"), str(exc))
+            stat = os.stat(self.image_path)
+            stamp = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        return (id(self.project), id(self._cell), self.image_path, stamp,
+                id(self.project.find_cell_by_id(self._cell.id)), deepcopy(self._cell.to_dict()))
+
+    def _on_detect(self):
+        if self._closed or self._detection is not None:
             return
+        try:
+            context = self._detection_context()
+            img = self._load_image()
+            if img is None:
+                self._refresh_ocr_status()
+                self._ocr_status.setText(tr('svgtxt_preview_failed'))
+                return
+            backend = configured_backend()
+            if backend is None:
+                raise OcrUnavailable('No OCR backend is configured')
+            if context != self._detection_context():
+                self._ocr_status.setText(tr('rastertxt_detection_cancelled'))
+                return
+            task = _DetectionTask(img, backend, context)
+            task.signals.finished.connect(self._detection_finished, Qt.ConnectionType.QueuedConnection)
+            self.destroyed.connect(lambda _=None, cancelled=task.cancelled: cancelled.set())
+            self._detection = task
+            self._refresh_ocr_status()
+            QThreadPool.globalInstance().start(task)
         except Exception as exc:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, tr("rastertxt_inspector_title"), tr("rastertxt_ocr_failed").format(error=exc))
+            self._detection = None
+            self._refresh_ocr_status()
+            self._detection_error(exc)
+
+    def _detection_error(self, error):
+        message = str(error) if isinstance(error, OcrUnavailable) else tr('rastertxt_ocr_failed').format(error=error)
+        QMessageBox.warning(self, tr('rastertxt_inspector_title'), message)
+
+    def _cancel_detection(self):
+        if self._detection is None:
             return
-        finally:
-            if QApplication.overrideCursor() is not None:
-                QApplication.restoreOverrideCursor()
-        results = regions_from_detections(img, detections)
+        self._detection.cancelled.set()
+        self._detection = None
+        self._refresh_ocr_status()
+        self._ocr_status.setText(tr('rastertxt_detection_cancelled'))
+
+    def done(self, result):
+        self._closed = True
+        self._cancel_detection()
+        super().done(result)
+
+    def closeEvent(self, event):
+        self._closed = True
+        self._cancel_detection()
+        super().closeEvent(event)
+
+    @pyqtSlot(object, object, object)
+    def _detection_finished(self, task, results, error):
+        if self._closed or task is not self._detection:
+            return
+        self._detection = None
+        self._refresh_ocr_status()
+        if task.cancelled.is_set() or task.context != self._detection_context():
+            self._ocr_status.setText(tr('rastertxt_detection_cancelled'))
+            return
+        if error is not None:
+            self._detection_error(error)
+            return
         # Keep regions the user already assigned; refresh the rest. Flagged
         # detections are kept too (unticked) so the user can judge them.
-        kept = [r for r in self._cell.raster_text_regions if r.group_id]
+        existing = self._cell.raster_text_regions
+        kept = [r for r in existing if r.group_id]
+        unmatched = [r for r in existing if not r.group_id]
         for region, _reason in results:
             if any(_iou(region, k) > 0.3 for k in kept):
                 continue
+            match = max(unmatched, key=lambda r: _iou(region, r), default=None)
+            if match is not None and _iou(region, match) > 0.3:
+                unmatched.remove(match)
+                region.id, region.enabled = match.id, match.enabled
+                region.font_size_px, region.anchor = match.font_size_px, match.anchor
+                region.vertical = match.vertical
             kept.append(region)
         self._cell.raster_text_regions = kept
-        if not results:
-            QMessageBox.information(self, tr("rastertxt_inspector_title"), tr("rastertxt_none_found"))
         self._changed()
+        if not results:
+            QMessageBox.information(self, tr('rastertxt_inspector_title'), tr('rastertxt_none_found'))
 
     def _on_item_toggled(self, item):
         if self._updating:
@@ -470,26 +626,21 @@ class RasterTextInspectorWindow(QDialog):
             return
         for r in self._selected_regions():
             r.font_size_px = val
-        self.groups_changed.emit()
-        self._refresh_preview()
-        self._refresh_list()
+        self._changed()
 
     def _on_anchor_changed(self, _idx):
         if self._updating:
             return
         for r in self._selected_regions():
             r.anchor = self._anchor_combo.currentData()
-        self.groups_changed.emit()
-        self._refresh_preview()
-        self._refresh_list()
+        self._changed()
 
     def _on_vertical_toggled(self, on):
         if self._updating:
             return
         for r in self._selected_regions():
             r.vertical = on
-        self.groups_changed.emit()
-        self._refresh_preview()
+        self._changed()
 
     def _on_remove(self):
         ids = {r.id for r in self._selected_regions()}

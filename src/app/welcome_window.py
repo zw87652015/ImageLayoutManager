@@ -11,13 +11,15 @@ hidden (title-bar X or the Close button) quits the app.
 import html
 import os
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtGui import QColor, QPainter, QPalette, QPen
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
     QWidget,
 )
 
 from src.app.i18n import tr
+from src.app.motion import MotionTween, install_button_feedback
 
 _MAX_RECENTS = 6
 
@@ -26,6 +28,8 @@ class WelcomeWindow(QWidget):
     def __init__(self, main_window):
         super().__init__(None)  # no parent: an independent top-level window
         self._mw = main_window
+        self._drop_feedback = MotionTween(self)
+        self._drop_feedback.updated.connect(lambda _value: self.update())
         self.setAcceptDrops(True)
         self.setObjectName("welcomePage")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -38,6 +42,7 @@ class WelcomeWindow(QWidget):
         )
         self.setFixedSize(480, 520)
         self._build_ui()
+        install_button_feedback(self)
         # Centre on the primary screen
         screen = QApplication.primaryScreen().availableGeometry()
         self.move(screen.center() - self.rect().center())
@@ -69,6 +74,7 @@ class WelcomeWindow(QWidget):
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self._title)
         self._drop_hint = QLabel(tr("welcome_drop_project"))
+        self._drop_hint.setObjectName("welcomeDropHint")
         self._drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._drop_hint.setWordWrap(True)
         root.addWidget(self._drop_hint)
@@ -191,8 +197,30 @@ class WelcomeWindow(QWidget):
                 paths.append(path)
         return paths
 
+    def _show_drop_feedback(self, active):
+        self._drop_hint.setText(tr('welcome_release_project' if active else 'welcome_drop_project'))
+        self._drop_feedback.set_target(1.0 if active else 0.0, 100)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._drop_feedback.value <= 0:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        accent = self.palette().color(QPalette.ColorRole.Highlight)
+        border = QColor(accent)
+        border.setAlpha(round(210 * self._drop_feedback.value))
+        fill = QColor(accent)
+        fill.setAlpha(round(8 * self._drop_feedback.value))
+        painter.setPen(QPen(border, 1.5))
+        painter.setBrush(fill)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(8, 8, -8, -8), 8, 8)
+        painter.end()
+
     def dragEnterEvent(self, event):
-        if self._project_drop_paths(event.mimeData()):
+        valid = bool(self._project_drop_paths(event.mimeData()))
+        self._show_drop_feedback(valid)
+        if valid:
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -200,7 +228,12 @@ class WelcomeWindow(QWidget):
     def dragMoveEvent(self, event):
         self.dragEnterEvent(event)
 
+    def dragLeaveEvent(self, event):
+        self._show_drop_feedback(False)
+        event.accept()
+
     def dropEvent(self, event):
+        self._show_drop_feedback(False)
         paths = self._project_drop_paths(event.mimeData())
         if not paths:
             event.ignore()

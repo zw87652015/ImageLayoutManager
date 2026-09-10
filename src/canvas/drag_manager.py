@@ -1,18 +1,20 @@
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsView
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QTransform
 from PyQt6.QtCore import (QObject, QEvent, QTimer, QPointF, QRectF,
                           QElapsedTimer,
                           pyqtSignal, Qt, QVariantAnimation, QEasingCurve)
 
+from src.app.motion import motion_duration, start_animation
+
 
 class DragManager(QObject):
-    """Manages animated drag-and-drop of cells with spring physics.
+    """Manages precise drag-and-drop with restrained presentation feedback.
 
     State machine: IDLE → DRAGGING → ANIMATING → IDLE
-    - Ghost item follows mouse with spring-lag interpolation (~60 fps).
+    - Ghost follows the pointer directly at the original scale and rotation.
     - Drop target highlighted with translucent overlay.
-    - On drop: ghost slides to target then swap is emitted.
-    - On cancel (Escape / invalid target): ghost springs back to origin.
+    - On drop: ghost settles at the target and the swap is emitted once.
+    - On cancel (Escape / invalid target): ghost returns without overshoot.
     - Supports multi-cell drag: N selected cells are moved together.
     """
 
@@ -22,7 +24,7 @@ class DragManager(QObject):
     # Tuning constants
     SPRING_SMOOTH_TIME = 0.07   # seconds; lower = tighter follow
     GHOST_OPACITY = 0.82
-    GHOST_SCALE = 1.05          # Slight lift enlargement (target)
+    GHOST_SCALE = 1.0          # Slight lift enlargement (target)
     GHOST_PX_WIDTH = 300        # Capture resolution
     HIGHLIGHT_FILL = QColor(0, 122, 204, 60)
     HIGHLIGHT_BORDER = QColor(0, 122, 204, 180)
@@ -30,10 +32,10 @@ class DragManager(QObject):
     REJECT_BORDER = QColor(204, 0, 0, 140)
     TICK_MS = 16                # ~60 fps
     DROP_DURATION_MS = 180
-    CANCEL_DURATION_MS = 250
-    LIFT_DURATION_MS = 140      # pickup: scale + opacity fade
+    CANCEL_DURATION_MS = 160
+    LIFT_DURATION_MS = 100      # pickup: scale + opacity fade
     SOURCE_DIM_OPACITY = 0.3
-    ROTATION_MAX_DEG = 5.0
+    ROTATION_MAX_DEG = 0.0
     ROTATION_VELOCITY_SCALE = 0.008   # deg per (px/s)
     ROTATION_SMOOTH_FACTOR = 0.18     # per-tick rotation lerp
     HIGHLIGHT_FADE_MS = 140
@@ -73,9 +75,11 @@ class DragManager(QObject):
         self._highlight_anims: list = []
         self._swap_slide_anims: list = []   # target-cell slide during drop
         self._swap_slide_pairs: list = []   # (item, final_QPointF) to snap on finish
+        self._swap_target_opacities = []
 
         # Target highlight
         self._highlights = []       # list of QGraphicsRectItems
+        self._retiring_highlights = []
         self._target_ids = []
 
         # Spring timer
@@ -102,7 +106,7 @@ class DragManager(QObject):
 
     def start_drag(self, cell_item, scene_pos):
         """Begin a drag operation on *cell_item* (and all other selected cells)."""
-        if self._active or self._animating:
+        if self._active or self._animating or cell_item.rect().isEmpty():
             return
 
         from src.canvas.cell_item import CellItem
@@ -147,13 +151,12 @@ class DragManager(QObject):
             vp = self._view.viewport()
             vp.setMouseTracking(True)
             vp.installEventFilter(self)
+            self._view.installEventFilter(self)
             self._view.setCursor(Qt.CursorShape.ClosedHandCursor)
 
-        self._tick_timer.start()
         self._last_mouse_scene_pos = QPointF(scene_pos)
         self._velocity = QPointF(0.0, 0.0)
         self._current_rotation = 0.0
-        self._timer.start()
 
     # ------------------------------------------------------------------
     # Ghost creation
@@ -221,6 +224,9 @@ class DragManager(QObject):
             self._source_scene_rect.y() - oy * (1.0 - s),
         )
         self._ghost.setPos(self._ghost_scene_pos)
+        self._ghost_grab_offset = QPointF(scene_pos) - self._ghost_scene_pos
+        self._ghost.setRotation(0.0)
+        self._ghost.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
         # Drop shadow
         shadow = QGraphicsDropShadowEffect()
@@ -272,15 +278,7 @@ class DragManager(QObject):
 
     def _start_lift_animations(self):
         # Ghost scale: 1.0 -> GHOST_SCALE
-        scale_anim = QVariantAnimation(self)
-        scale_anim.setDuration(self.LIFT_DURATION_MS)
-        scale_anim.setStartValue(1.0)
-        scale_anim.setEndValue(self.GHOST_SCALE)
-        scale_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-        scale_anim.valueChanged.connect(self._on_lift_scale)
-        scale_anim.finished.connect(lambda a=scale_anim: self._discard_lift_anim(a))
-        scale_anim.start()
-        self._lift_anims.append(scale_anim)
+        self._on_lift_scale(1.0)
 
         # Ghost opacity: 1.0 -> GHOST_OPACITY
         op_anim = QVariantAnimation(self)
@@ -292,8 +290,8 @@ class DragManager(QObject):
             lambda v: self._ghost and self._ghost.setOpacity(float(v))
         )
         op_anim.finished.connect(lambda a=op_anim: self._discard_lift_anim(a))
-        op_anim.start()
         self._lift_anims.append(op_anim)
+        start_animation(op_anim, self.LIFT_DURATION_MS)
 
         # Source cells opacity: 1.0 -> SOURCE_DIM_OPACITY
         for item in self._source_cells:
@@ -306,8 +304,8 @@ class DragManager(QObject):
                 lambda v, it=item: self._safe_set_opacity(it, float(v))
             )
             src_anim.finished.connect(lambda a=src_anim: self._discard_lift_anim(a))
-            src_anim.start()
             self._lift_anims.append(src_anim)
+            start_animation(src_anim, self.LIFT_DURATION_MS)
 
     def _on_lift_scale(self, v):
         if not self._ghost:
@@ -338,47 +336,19 @@ class DragManager(QObject):
             return
 
         # Real dt in seconds (clamped)
-        dt_ms = self._tick_timer.restart()
-        dt = dt_ms / 1000.0
-        if dt <= 0 or dt > 0.1:
-            dt = self.TICK_MS / 1000.0
-
-        target = QPointF(
-            self._mouse_scene_pos.x() - self._ghost_origin_offset.x(),
-            self._mouse_scene_pos.y() - self._ghost_origin_offset.y(),
-        )
+        target = self._mouse_scene_pos - self._ghost_grab_offset
 
         # Critically damped spring (Game Programming Gems 4, Ch 1.10)
-        omega = 2.0 / max(self.SPRING_SMOOTH_TIME, 1e-4)
-        x = omega * dt
-        exp_factor = 1.0 / (1.0 + x + 0.48 * x * x + 0.235 * x * x * x)
-
-        change_x = self._ghost_scene_pos.x() - target.x()
-        change_y = self._ghost_scene_pos.y() - target.y()
-        temp_x = (self._velocity.x() + omega * change_x) * dt
-        temp_y = (self._velocity.y() + omega * change_y) * dt
-
-        new_vx = (self._velocity.x() - omega * temp_x) * exp_factor
-        new_vy = (self._velocity.y() - omega * temp_y) * exp_factor
-        new_x = target.x() + (change_x + temp_x) * exp_factor
-        new_y = target.y() + (change_y + temp_y) * exp_factor
-
-        self._velocity = QPointF(new_vx, new_vy)
-        self._ghost_scene_pos = QPointF(new_x, new_y)
+        self._velocity = QPointF()
+        self._ghost_scene_pos = QPointF(target)
         self._ghost.setPos(self._ghost_scene_pos)
 
         # Mouse velocity (px/s) for tilt
-        mvx = (self._mouse_scene_pos.x() - self._last_mouse_scene_pos.x()) / dt
         self._last_mouse_scene_pos = QPointF(self._mouse_scene_pos)
 
         # Target rotation clamped, smoothed toward target
-        target_rot = mvx * self.ROTATION_VELOCITY_SCALE
-        if target_rot > self.ROTATION_MAX_DEG:
-            target_rot = self.ROTATION_MAX_DEG
-        elif target_rot < -self.ROTATION_MAX_DEG:
-            target_rot = -self.ROTATION_MAX_DEG
-        self._current_rotation += (target_rot - self._current_rotation) * self.ROTATION_SMOOTH_FACTOR
-        self._ghost.setRotation(self._current_rotation)
+        self._current_rotation = 0.0
+        self._ghost.setRotation(0.0)
 
     # ------------------------------------------------------------------
     # Target detection & highlighting
@@ -657,6 +627,7 @@ class DragManager(QObject):
 
         # Fade out old highlights
         for h in self._highlights:
+            self._retiring_highlights.append(h)
             self._fade_highlight(h, h.opacity(), 0.0, remove_on_finish=True)
         self._highlights.clear()
 
@@ -677,7 +648,13 @@ class DragManager(QObject):
             self._fade_highlight(h, 0.0, 1.0, remove_on_finish=False)
 
     def _fade_highlight(self, item, v_from, v_to, remove_on_finish):
+        for previous in list(self._highlight_anims):
+            if previous._highlight_item is item:
+                previous.stop()
+                self._highlight_anims.remove(previous)
+                previous.deleteLater()
         anim = QVariantAnimation(self)
+        anim._highlight_item = item
         anim.setDuration(self.HIGHLIGHT_FADE_MS)
         anim.setStartValue(float(v_from))
         anim.setEndValue(float(v_to))
@@ -689,9 +666,12 @@ class DragManager(QObject):
         def _finish(it=item, a=anim):
             if remove_on_finish:
                 try:
-                    self.scene.removeItem(it)
+                    if it.scene() is self.scene:
+                        self.scene.removeItem(it)
                 except RuntimeError:
                     pass
+                if it in self._retiring_highlights:
+                    self._retiring_highlights.remove(it)
             try:
                 self._highlight_anims.remove(a)
             except ValueError:
@@ -700,14 +680,17 @@ class DragManager(QObject):
 
         anim.finished.connect(_finish)
         self._highlight_anims.append(anim)
-        anim.start()
+        start_animation(anim, self.HIGHLIGHT_FADE_MS)
 
     # ------------------------------------------------------------------
     # Mouse event handlers (called via eventFilter)
     # ------------------------------------------------------------------
 
     def _on_mouse_move(self, scene_pos):
-        self._mouse_scene_pos = scene_pos
+        if not self._active or self._animating:
+            return
+        self._mouse_scene_pos = QPointF(scene_pos)
+        self._spring_tick()
         targets, valid = self._find_target_cells(scene_pos)
         if targets:
             self._update_highlights(targets, valid)
@@ -716,14 +699,15 @@ class DragManager(QObject):
             self._update_highlights([], True)
 
     def _on_mouse_release(self, scene_pos):
+        if not self._active or self._animating:
+            return
+        self._mouse_scene_pos = QPointF(scene_pos)
+        self._spring_tick()
         self._timer.stop()
         self._animating = True
 
         # Remove highlights immediately
-        for h in self._highlights:
-            self.scene.removeItem(h)
-        self._highlights.clear()
-        self._target_ids = []
+        self._clear_highlights()
 
         targets, valid = self._find_target_cells(scene_pos)
         if valid and targets:
@@ -734,6 +718,18 @@ class DragManager(QObject):
     # ------------------------------------------------------------------
     # Drop / cancel animations (QVariantAnimation on QPointF)
     # ------------------------------------------------------------------
+
+    def _clear_highlights(self):
+        for anim in self._highlight_anims:
+            anim.stop()
+            anim.deleteLater()
+        self._highlight_anims.clear()
+        for item in self._highlights + self._retiring_highlights:
+            if item.scene() is self.scene:
+                self.scene.removeItem(item)
+        self._highlights.clear()
+        self._retiring_highlights.clear()
+        self._target_ids = []
 
     def _animate_drop(self, target_cells):
         first_target_cell = target_cells[0]
@@ -757,10 +753,16 @@ class DragManager(QObject):
         # place — the ghost represents them visually until drop finishes.
         self._swap_slide_anims = []
         self._swap_slide_pairs = []
-        for src_cell, tgt_cell in zip(self._source_cells, target_cells):
+        pairs = zip(self._source_cells, target_cells) if motion_duration(self.DROP_DURATION_MS, spatial=True) else ()
+        for src_cell, tgt_cell in pairs:
+            snapshot = self._target_snapshot(tgt_cell)
+            if snapshot is None:
+                continue
             start_pos = QPointF(tgt_cell.pos())
             end_pos = QPointF(src_cell.pos())
-            self._swap_slide_pairs.append((tgt_cell, end_pos))
+            self._swap_slide_pairs.append((snapshot, end_pos))
+            self._swap_target_opacities.append((tgt_cell, tgt_cell.opacity()))
+            tgt_cell.setOpacity(self.SOURCE_DIM_OPACITY)
 
             slide = QVariantAnimation(self)
             slide.setDuration(self.DROP_DURATION_MS)
@@ -768,12 +770,12 @@ class DragManager(QObject):
             slide.setEndValue(1.0)
             slide.setEasingCurve(QEasingCurve.Type.OutCubic)
             slide.valueChanged.connect(
-                lambda v, it=tgt_cell, s=start_pos, e=end_pos:
+                lambda v, it=snapshot, s=start_pos, e=end_pos:
                 self._safe_set_pos(it, s.x() + (e.x() - s.x()) * float(v),
                                        s.y() + (e.y() - s.y()) * float(v))
             )
-            slide.start()
             self._swap_slide_anims.append(slide)
+            start_animation(slide, self.DROP_DURATION_MS, spatial=True)
 
         if self._ghost:
             self._ghost.setRotation(0.0)
@@ -784,8 +786,39 @@ class DragManager(QObject):
         self._anim.setDuration(self.DROP_DURATION_MS)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_anim_value)
-        self._anim.finished.connect(lambda: self._on_drop_finished(source_ids, target_ids))
-        self._anim.start()
+        self._anim.finished.connect(
+            lambda a=self._anim: self._on_drop_finished(source_ids, target_ids)
+            if self._anim is a else None
+        )
+        start_animation(self._anim, self.DROP_DURATION_MS, spatial=True)
+
+    def _target_snapshot(self, item):
+        rect = item.rect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return None
+        width = self.GHOST_PX_WIDTH
+        height = max(1, round(width * rect.height() / rect.width()))
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        if self._ghost:
+            self._ghost.setVisible(False)
+        try:
+            self.scene.render(painter, QRectF(0, 0, width, height),
+                              QRectF(item.pos(), rect.size()),
+                              Qt.AspectRatioMode.IgnoreAspectRatio)
+        finally:
+            painter.end()
+            if self._ghost:
+                self._ghost.setVisible(True)
+        snapshot = QGraphicsPixmapItem(pixmap)
+        snapshot.setTransform(QTransform.fromScale(rect.width() / width,
+                                                  rect.height() / height))
+        snapshot.setPos(item.pos())
+        snapshot.setZValue(998)
+        snapshot.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.scene.addItem(snapshot)
+        return snapshot
 
     @staticmethod
     def _safe_set_pos(item, x, y):
@@ -808,10 +841,10 @@ class DragManager(QObject):
         self._anim.setStartValue(0.0)
         self._anim.setEndValue(1.0)
         self._anim.setDuration(self.CANCEL_DURATION_MS)
-        self._anim.setEasingCurve(QEasingCurve.Type.OutBack)
+        self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_anim_value)
-        self._anim.finished.connect(self._cleanup)
-        self._anim.start()
+        self._anim.finished.connect(lambda a=self._anim: self._cleanup() if self._anim is a else None)
+        start_animation(self._anim, self.CANCEL_DURATION_MS, spatial=True)
 
     def _on_anim_value(self, t):
         if self._ghost:
@@ -820,6 +853,8 @@ class DragManager(QObject):
             self._ghost.setPos(x, y)
 
     def _on_drop_finished(self, source_ids, target_ids):
+        if not self._active or not self._animating:
+            return
         view = self._view
         viewport = view.viewport() if view else None
         if viewport:
@@ -869,18 +904,26 @@ class DragManager(QObject):
             a.stop()
             a.deleteLater()
         self._swap_slide_anims.clear()
+        for item, _ in self._swap_slide_pairs:
+            if item.scene() is self.scene:
+                self.scene.removeItem(item)
         self._swap_slide_pairs.clear()
+        for item, opacity in self._swap_target_opacities:
+            self._safe_set_opacity(item, opacity)
+        self._swap_target_opacities.clear()
 
         if self._ghost:
             self.scene.removeItem(self._ghost)
             self._ghost = None
 
-        for h in self._highlights:
+        for h in self._highlights + self._retiring_highlights:
             try:
-                self.scene.removeItem(h)
+                if h.scene() is self.scene:
+                    self.scene.removeItem(h)
             except RuntimeError:
                 pass
         self._highlights.clear()
+        self._retiring_highlights.clear()
 
         # Restore opacity on all source cells
         for item in self._source_cells:
@@ -892,6 +935,7 @@ class DragManager(QObject):
         if self._view:
             vp = self._view.viewport()
             vp.removeEventFilter(self)
+            self._view.removeEventFilter(self)
             self._view.unsetCursor()
             if self._saved_drag_mode is not None:
                 self._view.setDragMode(self._saved_drag_mode)
@@ -925,14 +969,14 @@ class DragManager(QObject):
 
         if etype == QEvent.Type.MouseMove:
             if self._view:
-                scene_pos = self._view.mapToScene(event.position().toPoint())
+                scene_pos = self._view.viewportTransform().inverted()[0].map(event.position())
                 self._on_mouse_move(scene_pos)
             return True
 
         if etype == QEvent.Type.MouseButtonRelease:
             if event.button() == Qt.MouseButton.LeftButton:
                 if self._view:
-                    scene_pos = self._view.mapToScene(event.position().toPoint())
+                    scene_pos = self._view.viewportTransform().inverted()[0].map(event.position())
                     self._on_mouse_release(scene_pos)
                 return True
 
@@ -940,10 +984,7 @@ class DragManager(QObject):
             if event.key() == Qt.Key.Key_Escape:
                 self._timer.stop()
                 self._animating = True
-                for h in self._highlights:
-                    self.scene.removeItem(h)
-                self._highlights.clear()
-                self._target_ids = []
+                self._clear_highlights()
                 self._animate_cancel()
                 return True
 

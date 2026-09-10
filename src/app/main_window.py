@@ -12,13 +12,17 @@ from PyQt6.QtWidgets import (
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
     QSizePolicy, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation
 from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack, QPalette
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
 from src.app.i18n import tr, set_language, current_language
 from src.app.history_timeline import HistoryTimeline
 from src.app.welcome_window import WelcomeWindow
+from src.app.motion import (
+    install_button_feedback, motion_duration, set_motion_mode, show_layout_transition,
+    start_animation,
+)
 
 # Try importing QOpenGLWidget for GPU acceleration
 try:
@@ -42,7 +46,7 @@ from src.app.commands import (
     PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, MultiSwapCellsCommand,
     DropImageCommand, ChangeRowCountCommand, InsertRowCommand, InsertCellCommand,
     DeleteRowCommand, DeleteCellCommand,
-    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, ChangeLabelSchemeCommand,
+    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, AutoLayoutFreeformCommand, ChangeLabelSchemeCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
     FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand,
@@ -125,13 +129,13 @@ class _CollapseHandle(QSplitterHandle):
     def _toggle(self):
         sp = self.splitter()
         pi = self._panel_idx()
-        sizes = list(sp.sizes())
+        sizes = sp.target_sizes()
         if sizes[pi] > 0:
             self._saved[pi] = sizes[pi]
             sizes[pi] = 0
         else:
             sizes[pi] = self._saved.get(pi, 200)
-        sp.setSizes(sizes)   # CollapsibleSplitter.setSizes refreshes all arrows
+        sp.animate_sizes(sizes)   # CollapsibleSplitter.setSizes refreshes all arrows
 
     def refresh_arrow(self):
         sp = self.splitter()
@@ -149,6 +153,10 @@ class _CollapseHandle(QSplitterHandle):
     # Keep old name as alias so the splitterMoved lambda still works
     _refresh_arrow = refresh_arrow
 
+    def mousePressEvent(self, event):
+        self.splitter().finish_transition()
+        super().mousePressEvent(event)
+
     def showEvent(self, event):
         super().showEvent(event)
         self._refresh_arrow()
@@ -157,8 +165,66 @@ class _CollapseHandle(QSplitterHandle):
 class CollapsibleSplitter(QSplitter):
     """QSplitter whose handles each carry a small collapse/expand bookmark button."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._panel_animation = None
+        self._panel_target = None
+        self._saved_constraints = []
+
     def createHandle(self) -> _CollapseHandle:
         return _CollapseHandle(self.orientation(), self)
+
+    def target_sizes(self):
+        return list(self._panel_target if self._panel_target is not None else self.sizes())
+
+    def finish_transition(self):
+        if self._panel_animation is not None:
+            self._panel_animation.setCurrentTime(self._panel_animation.duration())
+
+    def animate_sizes(self, targets):
+        start = list(self.sizes())
+        if self._panel_animation is not None:
+            self._panel_animation.stop()
+            self._panel_animation.deleteLater()
+        self._panel_target = list(targets)
+        if not self._saved_constraints:
+            for i in range(self.count()):
+                widget = self.widget(i)
+                self._saved_constraints.append((widget, widget.minimumWidth(), widget.sizePolicy()))
+                policy = widget.sizePolicy()
+                policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+                widget.setMinimumWidth(0)
+                widget.setSizePolicy(policy)
+        view = self.widget(1).currentWidget() if self.count() > 1 and isinstance(self.widget(1), QTabWidget) else None
+        focus = view.mapToScene(view.viewport().rect().center()) if hasattr(view, 'mapToScene') else None
+        animation = QVariantAnimation(self)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+
+        def update(value):
+            self.setSizes([round(a + (b - a) * value) for a, b in zip(start, targets)])
+            if focus is not None:
+                view.centerOn(focus)
+
+        def finish():
+            if self._panel_animation is not animation:
+                return
+            self._panel_animation = None
+            self._panel_target = None
+            for widget, minimum, policy in self._saved_constraints:
+                widget.setMinimumWidth(minimum)
+                widget.setSizePolicy(policy)
+            self._saved_constraints = []
+            self.setSizes(targets)
+            if focus is not None:
+                view.centerOn(focus)
+            animation.deleteLater()
+
+        animation.valueChanged.connect(update)
+        animation.finished.connect(finish)
+        self._panel_animation = animation
+        start_animation(animation, 180, spatial=True)
 
     def setSizes(self, sizes: list[int]) -> None:
         super().setSizes(sizes)
@@ -341,6 +407,7 @@ class MainWindow(QMainWindow):
 
         # Persistent settings
         self._settings = QSettings("AcademicFigureLayout", "ImageLayoutManager")
+        set_motion_mode(self._settings.value('ui/motion_mode', 'standard'))
 
         # Tab management — these attributes always reflect the active tab
         self._tabs: list[ProjectTabState] = []
@@ -412,14 +479,16 @@ class MainWindow(QMainWindow):
 
         # UI Components (tab_widget, layers panel, inspector created here)
         self._setup_ui()
+        install_button_feedback(self.toolbar)
+        install_button_feedback(self.inspector)
 
         # Connect inspector / layers panel signals (once, not per-tab)
         self._connect_static_signals()
 
-        # Theme-switch fade overlay (covers the whole window briefly)
-        self._theme_overlay = QWidget(self)
+        # Theme-switch fade overlay (toolbar only; never covers the figure)
+        self._theme_overlay = QWidget(self.toolbar)
         self._theme_overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self._theme_overlay.setStyleSheet("background-color: rgba(0,0,0,1);")
+        self._theme_overlay.setStyleSheet(f"background-color: {get_tokens(LIGHT)['accent']};")
         self._theme_overlay.hide()
         self._overlay_fx = QGraphicsOpacityEffect(self._theme_overlay)
         self._overlay_fx.setOpacity(0.0)
@@ -529,8 +598,8 @@ class MainWindow(QMainWindow):
         self._act_font_zoom_in = QAction(tr("action_font_zoom_in"), self)
         # ZoomIn covers Ctrl/Cmd + and Ctrl/Cmd =
         self._act_font_zoom_in.setShortcuts([
-            QKeySequence.StandardKey.ZoomIn,
-            QKeySequence("Ctrl+="),
+            QKeySequence("Ctrl+Alt++"),
+            QKeySequence("Ctrl+Alt+="),
         ])
         self._act_font_zoom_in.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self._act_font_zoom_in.triggered.connect(lambda: self._adjust_font_scale(+1))
@@ -538,15 +607,14 @@ class MainWindow(QMainWindow):
 
         self._act_font_zoom_out = QAction(tr("action_font_zoom_out"), self)
         self._act_font_zoom_out.setShortcuts([
-            QKeySequence.StandardKey.ZoomOut,
-            QKeySequence("Ctrl+-"),
+            QKeySequence("Ctrl+Alt+-"),
         ])
         self._act_font_zoom_out.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self._act_font_zoom_out.triggered.connect(lambda: self._adjust_font_scale(-1))
         self._view_menu.addAction(self._act_font_zoom_out)
 
         self._act_font_zoom_reset = QAction(tr("action_font_zoom_reset"), self)
-        self._act_font_zoom_reset.setShortcut(QKeySequence("Ctrl+0"))
+        self._act_font_zoom_reset.setShortcut(QKeySequence("Ctrl+Alt+0"))
         self._act_font_zoom_reset.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
         self._act_font_zoom_reset.triggered.connect(self._reset_font_scale)
         self._view_menu.addAction(self._act_font_zoom_reset)
@@ -1300,18 +1368,18 @@ class MainWindow(QMainWindow):
         self._activate_tab(new_idx)
 
     def _on_toggle_layers_panel(self):
-        sizes = self.splitter.sizes()
+        sizes = self.splitter.target_sizes()
         if sizes[0] > 0:
             self._layers_panel_saved_width = sizes[0]
             sizes[1] += sizes[0]
             sizes[0] = 0
-            self.splitter.setSizes(sizes)
+            self.splitter.animate_sizes(sizes)
             self._act_toggle_layers.setChecked(False)
         else:
             w = getattr(self, '_layers_panel_saved_width', 200)
             sizes[1] = max(0, sizes[1] - w)
             sizes[0] = w
-            self.splitter.setSizes(sizes)
+            self.splitter.animate_sizes(sizes)
             self._act_toggle_layers.setChecked(True)
 
     def _on_toggle_theme(self):
@@ -1356,27 +1424,30 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "_theme_overlay"):
             return
         overlay = self._theme_overlay
-        overlay.resize(self.size())
-        overlay.raise_()
-        overlay.show()
-        self._overlay_fx.setOpacity(0.28)
-
         if self._overlay_anim is not None:
             self._overlay_anim.stop()
-
+            self._overlay_anim.deleteLater()
+            self._overlay_anim = None
+        if motion_duration(140) == 0:
+            overlay.hide()
+            return
+        overlay.setStyleSheet(f"background-color: {get_tokens(self._current_theme)['accent']};")
+        overlay.resize(self.toolbar.size())
+        overlay.raise_()
+        overlay.show()
+        self._overlay_fx.setOpacity(0.12)
         anim = QPropertyAnimation(self._overlay_fx, b"opacity", self)
-        anim.setDuration(220)
-        anim.setStartValue(0.28)
+        anim.setStartValue(0.12)
         anim.setEndValue(0.0)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.finished.connect(overlay.hide)
-        anim.start()
         self._overlay_anim = anim
+        start_animation(anim, 140)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, "_theme_overlay") and self._theme_overlay.isVisible():
-            self._theme_overlay.resize(self.size())
+            self._theme_overlay.resize(self.toolbar.size())
 
     # ------------------------------------------------------------------
     # Themed toolbar icon helpers
@@ -1702,6 +1773,15 @@ class MainWindow(QMainWindow):
                 if (r.index, col_idx) not in existing_map:
                     new_cell = Cell(row_index=r.index, col_index=col_idx, is_placeholder=True)
                     self.project.cells.append(new_cell)
+
+    def _refresh_with_layout_transition(self):
+        previous = getattr(self.scene, '_last_layout_result', None)
+        before = dict(previous.cell_rects) if previous else {}
+        self._refresh_and_update()
+        current = getattr(self.scene, '_last_layout_result', None)
+        if current is not None:
+            show_layout_transition(self.view, before, current.cell_rects)
+            self.statusBar().showMessage(tr('status_layout_updated'), 2200)
 
     def _refresh_and_update(self):
         self._sync_svg_overrides()  # apply any stored SVG overrides
@@ -3921,7 +4001,7 @@ class MainWindow(QMainWindow):
         if not ok:
             return
         cmd = SplitCellCommand(self.project, cell_id, direction, count=count,
-                               update_callback=self._refresh_and_update)
+                               update_callback=self._refresh_with_layout_transition)
         self.undo_stack.push(cmd)
 
     def _ctx_insert_subcell(self, cell_id: str, position: str):
@@ -4023,10 +4103,10 @@ class MainWindow(QMainWindow):
 
     def _on_auto_layout(self):
         if getattr(self.project, 'layout_mode', 'grid') == 'freeform':
-            cmd = AutoLayoutFreeformCommand(self.project, self._refresh_and_update)
+            cmd = AutoLayoutFreeformCommand(self.project, self._refresh_with_layout_transition)
             self.undo_stack.push(cmd)
         else:
-            cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
+            cmd = AutoLayoutCommand(self.project, self._refresh_with_layout_transition)
             self.undo_stack.push(cmd)
 
     # ------------------------------------------------------------------
@@ -4783,7 +4863,7 @@ class MainWindow(QMainWindow):
             self._set_project(project, None)
         else:
             self._create_tab(project, None)
-        cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
+        cmd = AutoLayoutCommand(self.project, self._refresh_with_layout_transition)
         self.undo_stack.push(cmd)
         self._tabs[self._active_tab_idx].assets_dirty = True
         self._check_image_resolution()
@@ -5202,7 +5282,7 @@ class MainWindow(QMainWindow):
         project = self._build_project_from_images(collect_importable_images(paths) or paths)
         self._set_project(project, None)
 
-        cmd = AutoLayoutCommand(self.project, self._refresh_and_update)
+        cmd = AutoLayoutCommand(self.project, self._refresh_with_layout_transition)
         self.undo_stack.push(cmd)
 
     def _on_reload_images(self):

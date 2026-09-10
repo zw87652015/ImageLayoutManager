@@ -1,6 +1,8 @@
 import sys
 import os
 
+_DLL_DIRECTORY_HANDLES = []
+
 # --- DLL Path Fix for PyInstaller + PyQt6 on Windows ---
 # PyInstaller's dependency scanner can bundle DLLs (like icuuc.dll) that
 # shadow the system copies with an ABI-incompatible version, causing
@@ -25,7 +27,7 @@ if getattr(sys, "frozen", False) and sys.platform == "win32":
     if hasattr(os, "add_dll_directory"):
         for d in existing:
             try:
-                os.add_dll_directory(d)
+                _DLL_DIRECTORY_HANDLES.append(os.add_dll_directory(d))
             except Exception:
                 pass
 # -------------------------------------------------------

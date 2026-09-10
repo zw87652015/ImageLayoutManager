@@ -5,9 +5,9 @@ from PyQt6.QtWidgets import (
     QScrollArea, QColorDialog, QFrame
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtGui import QColor, QPainter
 from typing import Optional
-import math
+from src.app.motion import start_animation
 from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
@@ -21,22 +21,21 @@ MIXED = object()
 
 
 class LockButton(QToolButton):
-    """QToolButton that plays a brief radial-burst animation when locked."""
+    """QToolButton that acknowledges locking with a brief accent tint."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._burst = 0.0
         self._burst_color = QColor("#888888")
         self._anim = QPropertyAnimation(self, b"burst", self)
-        self._anim.setDuration(320)
         self._anim.setStartValue(0.0)
         self._anim.setEndValue(1.0)
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def play_lock_burst(self, color: QColor):
-        self._burst_color = color
+        self._burst_color = QColor(color)
         self._anim.stop()
-        self._anim.start()
+        start_animation(self._anim, 160)
 
     @pyqtProperty(float)
     def burst(self) -> float:
@@ -49,35 +48,23 @@ class LockButton(QToolButton):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if self._burst <= 0.0:
+        if self._burst <= 0.0 or self._burst >= 1.0:
             return
         # Burst lines radiate from just above the icon centre (shackle area)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cx = self.width() / 2
-        cy = self.height() / 2 - self.height() * 0.12  # slightly above centre
+        # slightly above centre
         # opacity: full for first 40%, then fade out
         t = self._burst
         opacity = (1.0 - (t - 0.4) / 0.6) if t > 0.4 else 1.0
         opacity = max(0.0, min(1.0, opacity))
         # line length grows then shrinks
-        max_r = self.width() * 0.55
-        inner = max_r * 0.18 + max_r * 0.22 * t
-        outer = inner + max_r * 0.35 * min(t * 2, 1.0)
         color = QColor(self._burst_color)
-        color.setAlphaF(opacity * 0.85)
-        pen = QPen(color, 1.4)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        n_lines = 6
-        angle_offset = -15  # degrees, so lines don't land on icon edges
-        for i in range(n_lines):
-            angle = math.radians(angle_offset + i * 360 / n_lines)
-            x1 = cx + inner * math.cos(angle)
-            y1 = cy + inner * math.sin(angle)
-            x2 = cx + outer * math.cos(angle)
-            y2 = cy + outer * math.sin(angle)
-            painter.drawLine(int(x1), int(y1), int(x2), int(y2))
+        color.setAlphaF(opacity * 0.12)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        # degrees, so lines don't land on icon edges
+        painter.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 4.0, 4.0)
         painter.end()
 
 
@@ -281,14 +268,13 @@ class CollapsibleSection(QWidget):
         if anim is None:
             return
         try:
-            anim.finished.disconnect()
             anim.stop()
+            anim.deleteLater()
         except RuntimeError:
             pass  # already deleted
-        anim.deleteLater()
 
     def set_collapsed(self, collapsed: bool, animate: bool = True) -> None:
-        if self._collapsed == collapsed:
+        if self._collapsed == collapsed and animate:
             return
         self._collapsed = collapsed
         self._chevron.setText("▸" if collapsed else "▾")
@@ -299,31 +285,33 @@ class CollapsibleSection(QWidget):
             self._body.setMaximumHeight(0 if collapsed else 16777215)
             return
 
+        start_h = 0 if self._body.isHidden() else self._body.height()
         if collapsed:
-            end_h, on_done = 0, lambda: self._body.setVisible(False)
+            end_h = 0
         else:
             self._body.setVisible(True)
             end_h = self._body.sizeHint().height()
-            on_done = lambda: self._body.setMaximumHeight(16777215)
         # Reverse smoothly from wherever a previous animation left off:
         # height() already reflects the shrunken maxHeight mid-flight.
-        start_h = self._body.height()
+        start_h = min(start_h, self._body.maximumHeight())
         self._body.setMaximumHeight(start_h)
 
         anim = QPropertyAnimation(self._body, b"maximumHeight", self)
-        anim.setDuration(180)
         anim.setStartValue(start_h)
         anim.setEndValue(end_h)
         anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
 
-        def _finished(anim=anim, on_done=on_done):
-            if self._anim is anim:
-                self._anim = None
-            on_done()
+        def _finished(anim=anim):
+            if self._anim is not anim:
+                return
+            self._anim = None
+            self._body.setMaximumHeight(0 if self._collapsed else 16777215)
+            self._body.setVisible(not self._collapsed)
+            anim.deleteLater()
 
         anim.finished.connect(_finished)
         self._anim = anim
-        anim.start()
+        start_animation(anim, 180, spatial=True)
 
 
 class Inspector(QWidget):

@@ -318,6 +318,7 @@ _QSS_TEMPLATE = """
        follow importance: modest title, small actions, tiny hints. */
     QWidget#welcomePage { background: %(panel)s; }
     QLabel#welcomeTitle { font-size: 13pt; font-weight: 600; color: %(text)s; }
+    QLabel#welcomeDropHint { font-size: 10px; color: %(text_tert)s; }
     QLabel#welcomeHeader {
         font-size: 10px; font-weight: 600; color: %(text_tert)s;
     }
