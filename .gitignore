@@ -35,3 +35,4 @@ plan.md
 /.vscode
 .DS_Store
 _smoke_gui_out.txt
+/test_*.py

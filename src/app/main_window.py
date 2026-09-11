@@ -4287,16 +4287,24 @@ class MainWindow(QMainWindow):
                 new_order = [pid for pid in pip_ids if pid != dragged_id]
                 target_idx = new_order.index(target_id)
                 new_order.insert(target_idx + 1 if place_above else target_idx, dragged_id)
-                cmd = ReorderPipItemsCommand(cell, new_order, self._refresh_and_update)
-                self.undo_stack.push(cmd)
+                if new_order != pip_ids:
+                    cmd = ReorderPipItemsCommand(cell, new_order, self._refresh_and_update)
+                    self.undo_stack.push(cmd)
                 return
 
+        # Cell z-stacking only exists in freeform mode (cells can't overlap
+        # in a grid), so the Layers panel only emits cell reorders there.
+        if getattr(self.project, 'layout_mode', 'grid') != 'freeform':
+            return
         dragged_cell = self.project.find_cell_by_id(dragged_id)
         target_cell = self.project.find_cell_by_id(target_id)
         if dragged_cell and target_cell and dragged_cell is not target_cell:
             cmd = ReorderZIndexCommand(
                 self.project, dragged_id, target_id, place_above, self._refresh_and_update)
-            self.undo_stack.push(cmd)
+            # A drop that lands the cell exactly where it already sits in the
+            # stack renumbers to the same values — don't clutter undo history.
+            if cmd.new_values != cmd.old_values:
+                self.undo_stack.push(cmd)
 
     def _get_selected_cell_ids(self):
         """Return list of selected non-label cell IDs from the scene."""

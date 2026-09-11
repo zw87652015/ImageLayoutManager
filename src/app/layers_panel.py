@@ -31,15 +31,32 @@ class _BranchlessTree(QTreeWidget):
     """QTreeWidget with branch lines/decorators suppressed, plus restricted
     drag-and-drop for reordering the Z-stack.
 
-    This is deliberately *not* Qt's generic internal-move reparenting: rows
-    stay in their existing row/column grouping (that grouping is a stable
-    structural identity, unrelated to draw order — see AGENTS.md), and a
+    This is deliberately *not* Qt's generic internal-move reparenting: a
     drag never moves an item to a new parent. It only ever emits
     ``reorder_requested`` so the caller can push an undoable command that
     changes ``z_index`` (cells) or list order (PiP insets); the tree is
     then rebuilt by the normal ``refresh()`` path.
+
+    Photoshop-style interaction: the pointer's vertical half inside a row
+    picks the boundary above or below it and a line is drawn at that
+    boundary (no "drop on row" highlight). ``place_above`` in the signal
+    always means "in front of the target in the stack" — in freeform mode
+    the list itself is the stack (top row = frontmost), so visual
+    above == z above. Dropping in the empty space below the last cell row
+    sends the dragged cell to the back of the stack.
+
+    Cell-level z reordering is only meaningful when cells can overlap,
+    so ``cells_reorderable`` is set by ``LayersPanel.refresh()`` from
+    ``project.layout_mode == 'freeform'``. PiP insets always overlap
+    their host cell, so their reorder stays enabled in both modes.
     """
     reorder_requested = pyqtSignal(str, str, bool)  # dragged_id, target_id, place_above
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.cells_reorderable = True     # LayersPanel.refresh() sets this
+        self.accent_color = QColor("#0891B2")
+        self._drop_marker = None          # (QTreeWidgetItem, place_above)
 
     def drawBranches(self, painter, rect, index):
         pass  # prevent Qt native style from drawing connecting lines
@@ -56,39 +73,100 @@ class _BranchlessTree(QTreeWidget):
         kind = self._drag_kind(dragged)
         if kind is None or kind != self._drag_kind(target):
             return False
+        if kind == "cell" and not self.cells_reorderable:
+            return False
         # PiP insets only make sense stacked against insets of the *same*
         # cell; leaf cells reorder against any other leaf cell in the project.
         return kind == "cell" or dragged.parent() is target.parent()
 
+    def _insertion_at(self, pos, dragged):
+        """Resolve a drag position into (target_item, place_above) or None."""
+        kind = self._drag_kind(dragged)
+        if kind is None:
+            return None
+        item = self.itemAt(pos)
+        if kind == "pip":
+            if item is None or not self._compatible_target(dragged, item):
+                return None
+            above = pos.y() < self.visualItemRect(item).center().y()
+            return (item, above)
+        # kind == "cell"
+        if not self.cells_reorderable:
+            return None
+        if item is None:
+            # Empty space below the rows → the back of the stack, like
+            # dropping a layer below the last row in Photoshop.
+            cells = [self.topLevelItem(i) for i in range(self.topLevelItemCount())]
+            cells = [c for c in cells if self._drag_kind(c) == "cell"]
+            if cells and cells[-1] is not dragged \
+                    and pos.y() > self.visualItemRect(cells[-1]).bottom():
+                return (cells[-1], False)
+            return None
+        if item is dragged:
+            return None
+        if self._drag_kind(item) == "cell":
+            above = pos.y() < self.visualItemRect(item).center().y()
+            return (item, above)
+        if self._drag_kind(item) == "pip":
+            # A cell can't sit between a cell and its own insets, so hovering
+            # another cell's expanded inset rows maps to "behind that cell".
+            parent = item.parent()
+            if parent is not None and parent is not dragged:
+                return (parent, False)
+        return None
+
     def dragMoveEvent(self, event):
-        target = self.itemAt(event.position().toPoint())
-        if self._compatible_target(self.currentItem(), target):
-            super().dragMoveEvent(event)
+        # Let the base class run its drag bookkeeping (autoscroll etc.)
+        # first, then override the accept decision with our insertion point.
+        super().dragMoveEvent(event)
+        self._drop_marker = self._insertion_at(
+            event.position().toPoint(), self.currentItem())
+        if self._drop_marker is not None:
+            event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
         else:
             event.ignore()
+        self.viewport().update()
 
     def dropEvent(self, event):
         dragged = self.currentItem()
-        target = self.itemAt(event.position().toPoint())
-        if not self._compatible_target(dragged, target):
+        marker = self._insertion_at(event.position().toPoint(), dragged)
+        self._drop_marker = None
+        self.viewport().update()
+        if marker is None:
             event.ignore()
             return
-        pos = self.dropIndicatorPosition()
-        place_above = pos != QAbstractItemView.DropIndicatorPosition.BelowItem
+        target, place_above = marker
         dragged_id = dragged.data(0, _ROLE_ID)
         target_id = target.data(0, _ROLE_ID)
         # Never let Qt perform its own reparenting move — we only reorder
-        # z-stack data and rely on refresh() to redraw the (unchanged) tree.
+        # z-stack data and rely on refresh() to redraw the (rebuilt) tree.
         event.setDropAction(Qt.DropAction.IgnoreAction)
         event.accept()
         if dragged_id and target_id:
             self.reorder_requested.emit(dragged_id, target_id, place_above)
 
+    def dragLeaveEvent(self, event):
+        self._drop_marker = None
+        self.viewport().update()
+        super().dragLeaveEvent(event)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._drop_marker is not None:
+            item, above = self._drop_marker
+            r = self.visualItemRect(item)
+            y = r.top() if above else r.bottom()
+            painter = QPainter(self.viewport())
+            painter.setPen(QPen(self.accent_color, 2))
+            painter.drawLine(r.left() + 2, y, self.viewport().width() - 4, y)
+            painter.end()
+
     def mouseMoveEvent(self, event):
         # Open-hand cursor hints that a row can be picked up and dropped
-        # onto another one to reorder the z-stack.
-        item = self.itemAt(event.position().toPoint())
-        if self._drag_kind(item) is not None:
+        # to reorder the z-stack.
+        kind = self._drag_kind(self.itemAt(event.position().toPoint()))
+        if kind == "pip" or (kind == "cell" and self.cells_reorderable):
             self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
         else:
             self.viewport().unsetCursor()
@@ -350,10 +428,12 @@ class LayersPanel(QWidget):
 
         # Drag-and-drop reordering of the Z-stack (panels) / PiP insets —
         # an alternative to Bring to Front / Send to Back for the common
-        # "grab this and put it where I want" case. See _BranchlessTree.
+        # "grab this and put it where I want" case. The insertion line is
+        # drawn by _BranchlessTree.paintEvent, so Qt's own indicator (which
+        # only knows whole-row / above / below thirds) is disabled.
         self.tree.setDragEnabled(True)
         self.tree.setAcceptDrops(True)
-        self.tree.setDropIndicatorShown(True)
+        self.tree.setDropIndicatorShown(False)
         self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.tree.reorder_requested.connect(self.reorder_requested.emit)
 
@@ -372,6 +452,7 @@ class LayersPanel(QWidget):
         # Apply initial theme (visual only — public API sets the real theme)
         self._apply_tree_stylesheet(LIGHT)
         self._delegate.apply_tokens(get_tokens(LIGHT))
+        self.tree.accent_color = QColor(get_tokens(LIGHT).get("accent", "#0891B2"))
 
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -388,6 +469,7 @@ class LayersPanel(QWidget):
         self._delegate.apply_tokens(tokens)
         theme = "dark" if tokens.get("canvas_bg", "").startswith("#1") else "light"
         self._apply_tree_stylesheet(theme)
+        self.tree.accent_color = QColor(tokens.get("accent", "#0891B2"))
         self.tree.update()
 
     def _apply_tree_stylesheet(self, theme: str) -> None:
@@ -407,21 +489,16 @@ class LayersPanel(QWidget):
         self._is_updating = True
         self.tree.clear()
 
-        for r in sorted(self._project.rows, key=lambda r: r.index):
-            cells_in_row = sorted(
-                [c for c in self._project.cells if c.row_index == r.index],
-                key=lambda c: c.col_index
-            )
-            row_item = QTreeWidgetItem(self.tree, [f"{tr('layers_row')} {r.index + 1}"])
-            row_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-            row_item.setData(0, _ROLE_TYPE, "row")
-            n = len(cells_in_row)
-            row_item.setData(0, _ROLE_META, f"{n} {'cell' if n == 1 else 'cells'}")
+        # Cell z-stacking only matters when cells can overlap, so the
+        # Photoshop-style reorderable layer list exists in freeform mode
+        # only; grid mode keeps the structural row/column grouping.
+        self.tree.cells_reorderable = (
+            getattr(self._project, 'layout_mode', 'grid') == 'freeform')
 
-            for c in cells_in_row:
-                self._add_cell_tree_item(row_item, c, col_label=f"C{c.col_index + 1}")
-
-            row_item.setExpanded(True)
+        if self.tree.cells_reorderable:
+            self._refresh_freeform_layers()
+        else:
+            self._refresh_grid_rows()
 
         global_texts = [t for t in self._project.text_items if t.scope == "global"]
         if global_texts:
@@ -440,7 +517,41 @@ class LayersPanel(QWidget):
 
         self._is_updating = False
 
-    def _add_cell_tree_item(self, parent_item, cell, col_label=""):
+    def _refresh_freeform_layers(self):
+        """Photoshop-style flat layer list for freeform mode: the list *is*
+        the z-stack — top row = frontmost (highest z_index, then creation
+        order, which is the canvas's tie-break for equal zValues)."""
+        tagged = []
+        for i, top in enumerate(self._project.cells):
+            for j, leaf in enumerate(top.get_all_leaves()):
+                tag = f"P{i + 1}" if leaf is top else f"P{i + 1}.{j + 1}"
+                tagged.append((leaf, tag))
+        ordered = sorted(
+            enumerate(tagged),
+            key=lambda pair: (pair[1][0].z_index, pair[0]),
+            reverse=True,
+        )
+        for _orig, (cell, tag) in ordered:
+            self._add_cell_tree_item(self.tree, cell, col_label=tag, freeform=True)
+
+    def _refresh_grid_rows(self):
+        for r in sorted(self._project.rows, key=lambda r: r.index):
+            cells_in_row = sorted(
+                [c for c in self._project.cells if c.row_index == r.index],
+                key=lambda c: c.col_index
+            )
+            row_item = QTreeWidgetItem(self.tree, [f"{tr('layers_row')} {r.index + 1}"])
+            row_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            row_item.setData(0, _ROLE_TYPE, "row")
+            n = len(cells_in_row)
+            row_item.setData(0, _ROLE_META, f"{n} {'cell' if n == 1 else 'cells'}")
+
+            for c in cells_in_row:
+                self._add_cell_tree_item(row_item, c, col_label=f"C{c.col_index + 1}")
+
+            row_item.setExpanded(True)
+
+    def _add_cell_tree_item(self, parent_item, cell, col_label="", freeform=False):
         if cell.split_direction != "none" and cell.children:
             split_label = tr("layers_split_v") if cell.split_direction == "vertical" else tr("layers_split_h")
             node = QTreeWidgetItem(parent_item, [f"{col_label}  {split_label}"])
@@ -462,21 +573,32 @@ class LayersPanel(QWidget):
             tree_item = QTreeWidgetItem(parent_item, [label])
             tree_item.setData(0, _ROLE_ID, cell.id)
             tree_item.setData(0, _ROLE_TYPE, itype)
-            # Explicit drag/drop flags: a leaf cell can be dragged onto any
-            # other leaf cell (anywhere in the tree) to reorder the global
-            # z-stack — see _BranchlessTree._compatible_target.
-            tree_item.setFlags(
-                tree_item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
-            )
+            # Drag/drop flags only exist in freeform mode, where the flat
+            # layer list *is* the z-stack — in grid mode cells can't overlap
+            # so reordering them would change nothing visible.
+            if self.tree.cells_reorderable:
+                tree_item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+                )
+            else:
+                tree_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            # The Z chip exists so a grid-mode list (ordered structurally,
+            # not by stack) can show when a cell was pulled out of default
+            # order. In freeform the row's position already *is* its stack
+            # rank, so the chip would just be noise.
             z_index = getattr(cell, 'z_index', 0)
-            if z_index:
+            if z_index and not freeform:
                 tree_item.setData(0, _ROLE_ZIDX, z_index)
             if itype == "cell_filled":
                 tree_item.setData(0, _ROLE_IMG, cell.image_path)
                 tree_item.setData(0, _ROLE_META, image_format_name(cell.image_path))
 
             pip_items = getattr(cell, 'pip_items', [])
-            for pip in pip_items:
+            # PiP list order is the inset stack (last = frontmost). In the
+            # freeform Photoshop-style list the top row is frontmost, so
+            # insets are shown reversed to match their parent's ordering.
+            for pip in (reversed(pip_items) if freeform else pip_items):
                 if pip.pip_type == "zoom":
                     pip_label = f"  \u2295 {tr('layers_zoom_inset')}"
                     pip_img = cell.image_path
