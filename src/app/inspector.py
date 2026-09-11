@@ -6,6 +6,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
 from PyQt6.QtGui import QColor, QPainter
+import os
 from typing import Optional
 from src.app.motion import start_animation
 from src.model.enums import FitMode
@@ -321,7 +322,7 @@ class Inspector(QWidget):
     row_property_changed = pyqtSignal(dict) # {property: value}
     project_property_changed = pyqtSignal(dict) # {property: value}
     corner_label_changed = pyqtSignal(dict) # {"anchor": str, "text": str}
-    apply_color_to_group = pyqtSignal(str, str) # (subtype, color_hex) - apply color to all labels in group
+    apply_style_to_group = pyqtSignal(str, dict) # (subtype, style) - push the selected label's style to its group
     label_text_changed = pyqtSignal(str, str) # (text_item_id, new_text)
     subcell_ratio_changed = pyqtSignal(str, float) # (cell_id, new_ratio) - change a sub-cell's size ratio
     pip_property_changed = pyqtSignal(dict) # {property: value} for selected PiP
@@ -562,6 +563,15 @@ class Inspector(QWidget):
         self.fit_mode_combo.currentTextChanged.connect(
             lambda t: self.cell_property_changed.emit({"fit_mode": t})
         )
+        # Read-only source-format readout: tells the user which file type a
+        # panel came from (and whether it is vector) without opening the file.
+        self.format_value = QLabel("")
+        self.format_value.setObjectName("cellFormatValue")
+        self.format_value.setWordWrap(True)
+        self.format_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._format_row_label = self._fl("lbl_image_format")
+        self.cell_layout.addRow(self._format_row_label, self.format_value)
+
         self.cell_layout.addRow(self._fl("lbl_fit_mode"), self.fit_mode_combo)
         
         self.rotation_combo = QComboBox()
@@ -1305,19 +1315,17 @@ class Inspector(QWidget):
         self.text_layout.addRow("", self.is_bold)
         
         # Color control for individual text item
-        color_row = QHBoxLayout()
         self.text_color = ColorPickerWidget()
         self.text_color.colorChanged.connect(self._on_text_color_changed)
-        color_row.addWidget(self.text_color)
-        
-        self.apply_color_btn = QPushButton(tr("btn_apply_all"))
-        self.apply_color_btn.setToolTip(tr("tip_apply_all"))
-        self.apply_color_btn.clicked.connect(self._on_apply_color_to_group)
-        color_row.addWidget(self.apply_color_btn)
-        
-        color_widget = QWidget()
-        color_widget.setLayout(color_row)
-        self.text_layout.addRow(self._fl("lbl_color"), color_widget)
+        self.text_layout.addRow(self._fl("lbl_color"), self.text_color)
+
+        # Every control above edits the selected label only. This button is
+        # the single explicit way to push that whole style onto the group, so
+        # font, size, weight and colour all behave the same way.
+        self.apply_style_btn = QPushButton(tr("btn_apply_all"))
+        self.apply_style_btn.setToolTip(tr("tip_apply_all"))
+        self.apply_style_btn.clicked.connect(self._on_apply_style_to_group)
+        self.text_layout.addRow("", self.apply_style_btn)
         
         # Store current text item subtype for apply-to-group
         self._current_text_subtype = None
@@ -1461,6 +1469,12 @@ class Inspector(QWidget):
         self.freeform_section_label.setText(tr("sec_freeform"))
         self._sec_grid_override.setText(tr("sec_grid_override"))
         self._sec_padding.setText(tr("sec_padding"))
+        # Pre-existing gap: this divider kept the startup language because it
+        # was never re-read here.
+        self._sec_size_group.setText(tr("sec_size_group"))
+        # The format readout is composed text, so rebuild it in the new
+        # language instead of waiting for the next selection change.
+        self._populate_format_row(getattr(self, "_format_row_data", None))
         self.label_item_group.set_title(tr("grp_label_item"))
         self.group_label_group.set_title(tr("grp_group_label"))
         self.scale_bar_group.set_title(tr("grp_scale_bar"))
@@ -1520,8 +1534,8 @@ class Inspector(QWidget):
 
         self.label_item_lock_chk.setText(tr("chk_style_lock"))
         self.label_item_rotate_btn.setText(tr("btn_rotate_label"))
-        self.apply_color_btn.setText(tr("btn_apply_all"))
-        self.apply_color_btn.setToolTip(tr("tip_apply_all"))
+        self.apply_style_btn.setText(tr("btn_apply_all"))
+        self.apply_style_btn.setToolTip(tr("tip_apply_all"))
         self.label_sub_prefix_chk.setText(tr("chk_sub_prefix"))
         self.title_label_bold.setText(tr("chk_bold"))
         self.gl_bold_chk.setText(tr("chk_bold"))
@@ -1559,11 +1573,11 @@ class Inspector(QWidget):
         # Refresh dynamic apply-button text if a text item is currently selected
         if self.text_group.isVisible():
             if self._current_text_subtype == "corner":
-                self.apply_color_btn.setText(tr("btn_apply_all_corner"))
+                self.apply_style_btn.setText(tr("btn_apply_all_corner"))
             else:
-                self.apply_color_btn.setText(tr("btn_apply_all_numbering"))
+                self.apply_style_btn.setText(tr("btn_apply_all_numbering"))
         else:
-            self.apply_color_btn.setText(tr("btn_apply_all"))
+            self.apply_style_btn.setText(tr("btn_apply_all"))
 
     def _emit_project_margins(self):
         self.project_property_changed.emit({
@@ -1997,9 +2011,14 @@ class Inspector(QWidget):
         """Handle individual text item color change."""
         self.text_property_changed.emit({"color": color_hex or self.text_color.get_color()})
 
-    def _on_apply_color_to_group(self):
-        """Apply current color to all labels in the same group (numbering or corner)."""
-        self.apply_color_to_group.emit(self._current_text_subtype or "numbering", self.text_color.get_color())
+    def _on_apply_style_to_group(self):
+        """Push the selected label's whole style onto its group."""
+        self.apply_style_to_group.emit(self._current_text_subtype or "numbering", {
+            "font_family": self.font_family.currentText(),
+            "font_size_pt": self.font_size.value(),
+            "font_weight": "bold" if self.is_bold.isChecked() else "normal",
+            "color": self.text_color.get_color(),
+        })
 
     def _on_label_text_edited(self):
         """Handle label text edit in the Label Cell Settings panel."""
@@ -2259,6 +2278,7 @@ class Inspector(QWidget):
             
             # Block signals to prevent feedback loop
             self.blockSignals(True)
+            self._populate_format_row(data)
             self.fit_mode_combo.setCurrentText(data.get("fit_mode", "contain"))
             self.rotation_combo.setCurrentText(str(data.get("rotation", 0)))
             self._set_alignment_buttons(
@@ -2350,9 +2370,9 @@ class Inspector(QWidget):
             
             # Update apply button text based on subtype
             if self._current_text_subtype == "corner":
-                self.apply_color_btn.setText(tr("btn_apply_all_corner"))
+                self.apply_style_btn.setText(tr("btn_apply_all_corner"))
             else:
-                self.apply_color_btn.setText(tr("btn_apply_all_numbering"))
+                self.apply_style_btn.setText(tr("btn_apply_all_numbering"))
             
             # Show offset controls only for cell-scoped labels;
             # show floating-text controls only for global-scoped items.
@@ -2418,7 +2438,7 @@ class Inspector(QWidget):
                 self._pip_border_style_values.index(_style)
                 if _style in self._pip_border_style_values else 0)
             self.pip_border_width.setValue(float(data.get("border_width_pt", 1.5)))
-            self.pip_border_color.set_color(data.get("border_color", "#FFFFFF"))
+            self.pip_border_color.set_color(data.get("border_color", "#000000"))
             self.pip_content_padding.setValue(float(data.get("content_padding_pt", 0.0)))
 
             self.scale_bar_offset_y.setValue(data.get("scale_bar_offset_y", 2.0))
@@ -2507,6 +2527,45 @@ class Inspector(QWidget):
             else:
                 self.project_group.hide()
                 self.no_selection_label.show()
+    def _populate_format_row(self, data: dict) -> None:
+        """Describe the selected panel's source file type.
+
+        Vector sources are called out because they stay sharp at any export
+        size; raster sources report their pixel dimensions so the user can
+        judge whether the panel has enough detail for the final figure.
+        """
+        from src.utils.image_proxy import image_format_name, is_vector_image
+        self._format_row_data = data
+        path = (data or {}).get("image_path") or ""
+        placeholder = (data or {}).get("is_placeholder", False)
+
+        def show(caption, tip=""):
+            self.format_value.setText(caption)
+            self.format_value.setToolTip(tip)
+            label = getattr(self, "_format_row_label", None)
+            if label:
+                label.setToolTip(tip)
+
+        if not path or placeholder:
+            show(tr("fmt_none"))
+            return
+        name = image_format_name(path)
+        if is_vector_image(path):
+            show(tr("fmt_vector").format(name=name), tr("fmt_vector_tip"))
+            return
+        if not os.path.isfile(path):
+            show(tr("fmt_missing").format(name=name), tr("fmt_missing_tip"))
+            return
+        try:
+            from PIL import Image
+            with Image.open(path) as img:
+                width, height = img.size
+        except Exception:
+            show(tr("fmt_raster_unknown").format(name=name))
+            return
+        show(tr("fmt_raster").format(name=name, w=width, h=height),
+             tr("fmt_raster_tip").format(w=width, h=height))
+
     def _populate_svg_normalize_section(self, data: dict) -> None:
         """Show/populate the SVG text normalization group; hide it for non-SVG cells."""
         if not data:

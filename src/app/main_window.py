@@ -49,9 +49,9 @@ from src.app.commands import (
     AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, AutoLayoutFreeformCommand, ChangeLabelSchemeCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
-    FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand,
+    FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand, ReorderZIndexCommand,
     DividerDragCommand,
-    AddPiPItemCommand, SetPiPGeometryCommand, SetPiPOriginCommand,
+    AddPiPItemCommand, SetPiPGeometryCommand, SetPiPOriginCommand, ReorderPipItemsCommand,
     CreateSizeGroupCommand, DeleteSizeGroupCommand, SizeGroupPropertyChangeCommand,
     SetExportRegionCommand, ClearExportRegionCommand,
     AddGroupLabelCommand, DeleteGroupLabelCommand, GroupLabelPropertyChangeCommand,
@@ -420,6 +420,7 @@ class MainWindow(QMainWindow):
         # toggle. ``None`` means the server has never been started in this
         # session. See src/agent/server.py.
         self._agent_server_controller = None
+        self._tutorial_controller = None
 
         # Hot reload: watch source image files for external edits (Illustrator,
         # MATLAB, etc.) and refresh the canvas automatically when they change.
@@ -639,6 +640,9 @@ class MainWindow(QMainWindow):
         self._help_guide_action.setMenuRole(QAction.MenuRole.NoRole)
         self._help_guide_action.triggered.connect(self._on_show_help)
         help_menu.addAction(self._help_guide_action)
+        self._tutorial_action = QAction(tr('tutorials_title'), self)
+        self._tutorial_action.triggered.connect(self._on_show_tutorials)
+        help_menu.addAction(self._tutorial_action)
 
         # ── Undo / Redo ──
         self._undo_action = QAction(tr("action_undo"), self)
@@ -1059,7 +1063,7 @@ class MainWindow(QMainWindow):
         self.inspector.pip_property_changed.connect(self._on_pip_property_changed)
         self.inspector.pip_delete_requested.connect(self._on_inspector_pip_delete)
         self.inspector.corner_label_changed.connect(self._on_corner_label_changed)
-        self.inspector.apply_color_to_group.connect(self._on_apply_color_to_group)
+        self.inspector.apply_style_to_group.connect(self._on_apply_style_to_group)
         self.inspector.label_text_changed.connect(self._on_label_text_changed)
         self.inspector.subcell_ratio_changed.connect(self._on_subcell_ratio_changed)
         self.inspector.size_group_create_requested.connect(self._on_size_group_create_from_selection)
@@ -1071,6 +1075,7 @@ class MainWindow(QMainWindow):
         self.inspector.group_label_delete_requested.connect(self._on_group_label_delete)
         self.layers_panel.items_selected.connect(self._select_cells_by_ids)
         self.layers_panel.context_menu_requested.connect(self._on_layers_context_menu)
+        self.layers_panel.reorder_requested.connect(self._on_layers_reorder_requested)
 
     def _connect_tab_signals(self, tab: ProjectTabState):
         """Connect per-tab scene/view/undostack signals.
@@ -1192,7 +1197,7 @@ class MainWindow(QMainWindow):
     def _tab_title(self, tab: ProjectTabState) -> str:
         if tab.path:
             return os.path.basename(tab.path)
-        return "Untitled"
+        return getattr(tab, 'tutorial_title', "Untitled")
 
     def _create_tab(self, project: Project, path: Optional[str] = None,
                      bundle_workdir: Optional[WorkingDir] = None) -> ProjectTabState:
@@ -1593,6 +1598,7 @@ class MainWindow(QMainWindow):
             self._act_clear_export_region.setText(tr("action_clear_export_region"))
         self._about_action.setText(tr("action_about"))
         self._help_guide_action.setText(tr("action_user_guide"))
+        self._tutorial_action.setText(tr('tutorials_title'))
         self._export_button.setText(tr("toolbar_export"))
 
         # Language toggle shows what you'd switch TO
@@ -2478,7 +2484,11 @@ class MainWindow(QMainWindow):
             if cell:
                 info = f"  {self._cell_path_label(cell)}"
                 if cell.image_path and not cell.is_placeholder:
+                    from src.utils.image_proxy import image_format_name
                     info += f"  |  {os.path.basename(cell.image_path)}"
+                    fmt = image_format_name(cell.image_path)
+                    if fmt:
+                        info += f"  |  {fmt}"
                 self.selection_info_label.setText(info)
             else:
                 self.selection_info_label.setText("")
@@ -3119,38 +3129,21 @@ class MainWindow(QMainWindow):
         style_changes = {k: v for k, v in changes.items() if k in style_keys}
         other_changes = {k: v for k, v in changes.items() if k not in style_keys}
 
-        # Cell-scoped labels: style edits propagate globally to the project's label style settings.
-        if text_obj.scope == "cell" and style_changes:
-            project_style_changes = {}
+        # Every property edited here applies to the selected item only —
+        # font, size and weight behave exactly like colour did. Use
+        # "Apply Style to All" to push a style onto the whole group.
+        if style_changes and text_obj.scope == "cell":
+            # A per-label font would be silently reverted the next time the
+            # tier-wide style is synced, so record the intent by locking it.
+            # The Selected Label panel's checkbox reflects (and can undo) this.
+            style_changes = dict(style_changes, style_locked=True)
 
-            prefix = "label_"
-            if text_obj.subtype == "corner":
-                prefix = "corner_label_"
-            elif getattr(text_obj, 'label_tier', 'panel') == "title":
-                prefix = "title_label_"
-
-            if "font_family" in style_changes:
-                project_style_changes[f"{prefix}font_family"] = style_changes["font_family"]
-            if "font_size_pt" in style_changes:
-                project_style_changes[f"{prefix}font_size"] = style_changes["font_size_pt"]
-            if "font_weight" in style_changes:
-                project_style_changes[f"{prefix}font_weight"] = style_changes["font_weight"]
-
-            if project_style_changes:
-                callback = self._refresh_and_sync_labels
-                if text_obj.subtype == "corner":
-                    callback = self._refresh_and_sync_corner_labels
-                cmd = PropertyChangeCommand(
-                    self.project, project_style_changes, callback, "Change Label Style"
-                )
-                self.undo_stack.push(cmd)
-
-        # Floating (global) text items: style changes apply directly to the item.
-        elif text_obj.scope == "global" and style_changes:
-            cmd = PropertyChangeCommand(text_obj, style_changes, self._refresh_and_update, "Change Text Style")
+        if style_changes:
+            cmd = PropertyChangeCommand(
+                text_obj, style_changes, self._refresh_and_update, "Change Text Style")
             self.undo_stack.push(cmd)
 
-        # Non-style changes (color, position, content, etc.) always apply per-item.
+        # Non-style changes (color, position, content, etc.) also apply per-item.
         if other_changes:
             cmd = PropertyChangeCommand(text_obj, other_changes, self._refresh_and_update, "Change Text Property")
             self.undo_stack.push(cmd)
@@ -3259,42 +3252,83 @@ class MainWindow(QMainWindow):
         self._refresh_and_update()
 
     def _refresh_and_sync_corner_labels(self):
-        """Refresh and also sync all cell-scoped corner labels to project settings."""
+        """Refresh and also sync all cell-scoped corner labels to project settings.
+
+        Style-locked labels are skipped, matching the numbering sync, so a
+        corner label edited on its own keeps that style.
+        """
         for text_item in self.project.text_items:
             if text_item.scope == "cell" and text_item.subtype == "corner":
+                if getattr(text_item, 'style_locked', False):
+                    continue
                 text_item.font_family = self.project.corner_label_font_family
                 text_item.font_size_pt = self.project.corner_label_font_size
                 text_item.font_weight = self.project.corner_label_font_weight
                 text_item.color = self.project.corner_label_color
         self._refresh_and_update()
 
-    def _on_apply_color_to_group(self, subtype: str, color_hex: str):
-        """Apply color to all labels in the same group (numbering or corner)
-        as an undoable operation."""
-        targets = []
-        for text_item in self.project.text_items:
-            if text_item.scope != "cell":
-                continue
-            if subtype == "corner" and text_item.subtype == "corner":
-                targets.append(text_item)
-            elif subtype == "numbering" and text_item.subtype != "corner":
-                targets.append(text_item)
+    def _on_apply_style_to_group(self, subtype: str, style: dict):
+        """Push one label's style onto its whole group, as a single undo step.
 
+        Per-label edits stay local, so this is the deliberate "make them all
+        match" action. It also becomes the group's default: the project-level
+        style is updated so new labels are created to match and the tier-wide
+        sync no longer fights the change, and the members' style locks are
+        released because they are uniform again.
+        """
+        # Panel letters and panel titles are separate tiers with their own
+        # project defaults, so "all" means the selected label's own tier.
+        items = self.scene.selectedItems()
+        selected = None
+        if items and hasattr(items[0], 'text_item_id'):
+            selected = next((t for t in self.project.text_items
+                             if t.id == items[0].text_item_id), None)
+        tier = getattr(selected, 'label_tier', 'panel') if selected else 'panel'
+        corner = subtype == "corner"
+        targets = [
+            item for item in self.project.text_items
+            if item.scope == "cell"
+            and (item.subtype == "corner") == corner
+            and (corner or getattr(item, 'label_tier', 'panel') == tier)
+        ]
         if not targets:
             return
 
-        # Skip no-ops: all targets already have this color.
-        if all(t.color == color_hex for t in targets):
+        item_changes = {
+            "font_family": style.get("font_family"),
+            "font_size_pt": style.get("font_size_pt"),
+            "font_weight": style.get("font_weight"),
+            "color": style.get("color"),
+            "style_locked": False,
+        }
+        item_changes = {k: v for k, v in item_changes.items() if v is not None}
+        prefix = "corner_label_" if corner else ("title_label_" if tier == "title" else "label_")
+        project_changes = {}
+        for key, project_key in (("font_family", "font_family"),
+                                 ("font_size_pt", "font_size"),
+                                 ("font_weight", "font_weight"),
+                                 ("color", "color")):
+            if style.get(key) is not None:
+                project_changes[f"{prefix}{project_key}"] = style[key]
+
+        already_uniform = all(
+            all(getattr(item, k) == v for k, v in item_changes.items()) for item in targets
+        )
+        if already_uniform and all(
+                getattr(self.project, k) == v for k, v in project_changes.items()):
             return
 
-        desc = f"Apply color to {len(targets)} {subtype} label(s)"
-        cmd = MultiPropertyChangeCommand(
-            targets,
-            {"color": color_hex},
-            self._refresh_and_update,
-            desc,
-        )
-        self.undo_stack.push(cmd)
+        label = "corner" if corner else tier
+        self.undo_stack.beginMacro(f"Apply style to {len(targets)} {label} label(s)")
+        try:
+            if project_changes:
+                self.undo_stack.push(PropertyChangeCommand(
+                    self.project, project_changes, None, "Set Label Style Default"))
+            self.undo_stack.push(MultiPropertyChangeCommand(
+                targets, item_changes, self._refresh_and_update,
+                f"Apply style to {len(targets)} {label} label(s)"))
+        finally:
+            self.undo_stack.endMacro()
 
     def _on_add_text(self):
         """Create a floating (canvas-anchored) text item. Position is in mm,
@@ -4240,6 +4274,30 @@ class MainWindow(QMainWindow):
             cmd = ZIndexChangeCommand(cells, -1, self._refresh_and_update, "Send to Back")
             self.undo_stack.push(cmd)
 
+    def _on_layers_reorder_requested(self, dragged_id: str, target_id: str, place_above: bool):
+        """Drag-and-drop reorder from the Layers panel: an alternative to
+        clicking Bring to Front / Send to Back one step at a time. Handles
+        two independent stacks — a cell's PiP insets (list order is the
+        stack) and the project-wide leaf-cell z_index — depending on what
+        was actually dragged.
+        """
+        for cell in self.project.get_all_leaf_cells():
+            pip_ids = [p.id for p in getattr(cell, 'pip_items', [])]
+            if dragged_id in pip_ids and target_id in pip_ids:
+                new_order = [pid for pid in pip_ids if pid != dragged_id]
+                target_idx = new_order.index(target_id)
+                new_order.insert(target_idx + 1 if place_above else target_idx, dragged_id)
+                cmd = ReorderPipItemsCommand(cell, new_order, self._refresh_and_update)
+                self.undo_stack.push(cmd)
+                return
+
+        dragged_cell = self.project.find_cell_by_id(dragged_id)
+        target_cell = self.project.find_cell_by_id(target_id)
+        if dragged_cell and target_cell and dragged_cell is not target_cell:
+            cmd = ReorderZIndexCommand(
+                self.project, dragged_id, target_id, place_above, self._refresh_and_update)
+            self.undo_stack.push(cmd)
+
     def _get_selected_cell_ids(self):
         """Return list of selected non-label cell IDs from the scene."""
         from src.canvas.cell_item import CellItem
@@ -4415,7 +4473,22 @@ class MainWindow(QMainWindow):
 
     def _on_show_help(self):
         dlg = HelpDialog(self)
+
+        def launch_tutorial(lesson):
+            dlg.accept()
+            QTimer.singleShot(0, lambda: self._on_show_tutorials(lesson))
+
+        dlg.tutorial_requested.connect(launch_tutorial)
         dlg.exec()
+
+    def _on_show_tutorials(self, lesson=''):
+        if self._tutorial_controller is None:
+            from src.app.tutorials import TutorialController
+            self._tutorial_controller = TutorialController(self)
+        if lesson:
+            self._tutorial_controller.start(lesson)
+        else:
+            self._tutorial_controller.show_center()
 
     # ── Agent integration ────────────────────────────────────────────────
 
@@ -4534,6 +4607,8 @@ class MainWindow(QMainWindow):
                     if not self._on_save_project():
                         event.ignore()
                         return
+        if self._tutorial_controller is not None:
+            self._tutorial_controller.stop()
         # Shut down the agent server before tearing down anything else, so
         # any in-flight tool call has a chance to complete cleanly.
         if self._agent_server_controller is not None:

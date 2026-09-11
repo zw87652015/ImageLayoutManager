@@ -1230,7 +1230,7 @@ _PIP_FIELDS = {
 def pip_add(ctx: ToolContext, cell_id: str,
             pip_type: str = "external",
             image_path: Optional[str] = None,
-            x: float = 0.62, y: float = 0.62,
+            x: float = 0.62, y: float = 0.05,
             w: float = 0.33, h: float = 0.33) -> Dict[str, Any]:
     """Add a Picture-in-Picture inset to a cell.
 

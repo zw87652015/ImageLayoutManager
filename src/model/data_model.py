@@ -97,11 +97,11 @@ class PiPItem:
     crop_right: float = 0.30
     crop_bottom: float = 0.30
     x: float = 0.62
-    y: float = 0.62
+    y: float = 0.05
     w: float = 0.33
     h: float = 0.33
     border_enabled: bool = True
-    border_color: str = "#FFFFFF"
+    border_color: str = "#000000"
     border_width_pt: float = 1.5
     border_style: str = "solid"   # "solid" | "dashed"
     content_padding_pt: float = 0.0  # inner padding between border and image

@@ -22,6 +22,28 @@ def is_supported_image(path: str) -> bool:
     return ext in VECTOR_EXTENSIONS or ext in RASTER_EXTENSIONS
 
 
+# Display names for the file extensions the app imports. Keyed by the
+# extension so ".jpg"/".jpeg" and ".tif"/".tiff" report one canonical name.
+_FORMAT_NAMES = {
+    '.svg': 'SVG', '.pdf': 'PDF', '.eps': 'EPS',
+    '.png': 'PNG', '.jpg': 'JPEG', '.jpeg': 'JPEG',
+    '.tif': 'TIFF', '.tiff': 'TIFF', '.bmp': 'BMP',
+    '.gif': 'GIF', '.webp': 'WebP',
+}
+
+
+def image_format_name(path: str) -> str:
+    """Short uppercase format name for *path* ("SVG", "TIFF", ...).
+
+    Falls back to the bare extension so an unsupported or unknown file is
+    still described honestly instead of being mislabelled as a known format.
+    """
+    if not path:
+        return ""
+    ext = os.path.splitext(path)[1].lower()
+    return _FORMAT_NAMES.get(ext) or ext.lstrip('.').upper()
+
+
 def _natural_key(path: str):
     import re
     return [int(tok) if tok.isdigit() else tok.lower()

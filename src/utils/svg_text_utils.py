@@ -89,14 +89,18 @@ def _register_all_namespaces(svg_path: str):
     ET.register_namespace('xlink', 'http://www.w3.org/1999/xlink')
 
 
-def _set_font_size(elem, font_size_pt: float):
+def _set_font_size(elem, font_size: float, unit: str = 'pt'):
     """Write font-size into the element's inline style="" attribute.
 
     Inline style has the highest CSS specificity (beats class selectors and SVG
     presentation attributes), so the change is guaranteed to take effect even
     when the original SVG uses CSS classes to set font sizes.
+
+    ``unit`` is ``'px'`` (SVG user units) for sizes already converted to the
+    document's coordinate system, which avoids depending on the renderer's
+    pt→px factor. See ``get_svg_override_bytes_for_cell``.
     """
-    new_size = f'{font_size_pt}pt'
+    new_size = f'{font_size}{unit}'
     style = elem.get('style', '')
     if style and 'font-size' in style:
         new_style = re.sub(r'font-size\s*:\s*[^;]+', f'font-size:{new_size}', style)
@@ -215,7 +219,7 @@ def _matrix_effective_scale(matrix: list) -> float:
     return max(s, 1e-9)
 
 
-def _walk_normalize(elem, acc: list, target_pt: float) -> None:
+def _walk_normalize(elem, acc: list, target_pt: float, unit: str = 'pt') -> None:
     """Recursively walk *elem*, accumulating the CTM, normalising <text>/<tspan>."""
     local = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
 
@@ -235,17 +239,17 @@ def _walk_normalize(elem, acc: list, target_pt: float) -> None:
     if local == 'text':
         effective_scale = _matrix_effective_scale(new_acc)
         adjusted = target_pt / effective_scale
-        _set_font_size(elem, adjusted)
+        _set_font_size(elem, adjusted, unit)
         # Normalise all <tspan> descendants to the same visual size.
         # tspan cannot carry its own transform, so effective_scale is the same.
         for desc in elem.iter():
             desc_local = desc.tag.split('}')[-1] if '}' in desc.tag else desc.tag
             if desc_local == 'tspan' and desc is not elem:
-                _set_font_size(desc, adjusted)
+                _set_font_size(desc, adjusted, unit)
         return  # no need to recurse further into text children
 
     for child in elem:
-        _walk_normalize(child, new_acc, target_pt)
+        _walk_normalize(child, new_acc, target_pt, unit)
 
 
 def _register_all_namespaces_from_bytes(svg_bytes: bytes) -> None:
@@ -304,7 +308,7 @@ def normalize_svg_text(svg_bytes: bytes, target_pt: float) -> bytes:
 
 
 def apply_svg_font_overrides_from_bytes(
-    svg_bytes: bytes, overrides: dict
+    svg_bytes: bytes, overrides: dict, unit: str = 'pt'
 ) -> Optional[bytes]:
     """Like ``apply_svg_font_overrides`` but takes already-loaded bytes."""
     if not overrides:
@@ -314,7 +318,7 @@ def apply_svg_font_overrides_from_bytes(
         root = ET.fromstring(svg_bytes)
     except Exception:
         return None
-    if not _apply_group_font_sizes(root, overrides):
+    if not _apply_group_font_sizes(root, overrides, unit):
         return None
     try:
         return ET.tostring(root, encoding='unicode').encode('utf-8')
@@ -322,7 +326,7 @@ def apply_svg_font_overrides_from_bytes(
         return None
 
 
-def _apply_group_font_sizes(root, overrides):
+def _apply_group_font_sizes(root, overrides, unit: str = 'pt'):
     parents = {child: parent for parent in root.iter() for child in parent}
     modified = False
     for elem, key, _idx in _iter_text_elements(root):
@@ -334,12 +338,18 @@ def _apply_group_font_sizes(root, overrides):
             transforms.append(parent.get('transform', ''))
             parent = parents.get(parent)
         acc = _parse_transform_matrix(' '.join(reversed(transforms)))
-        _walk_normalize(elem, acc, overrides[key])
+        _walk_normalize(elem, acc, overrides[key], unit)
         modified = True
     return modified
 
 
-def _svg_panel_scale(project, cell, svg_bytes, layout_result, content_size_mm):
+def svg_mm_per_unit(project, cell, svg_bytes, layout_result=None, content_size_mm=None):
+    """Millimetres on the page covered by one SVG user unit of *cell*.
+
+    ``panel_mm_per_unit`` works in the renderer's default-size pixels, so the
+    viewBox-to-default-size scale is folded in here to land on user units —
+    the coordinate system font sizes are written in.
+    """
     from PyQt6.QtCore import QByteArray
     from PyQt6.QtSvg import QSvgRenderer
     from src.utils.panel_scale import panel_mm_per_unit
@@ -355,7 +365,7 @@ def _svg_panel_scale(project, cell, svg_bytes, layout_result, content_size_mm):
     image_w, image_h = size.width(), size.height()
     ratio = panel_mm_per_unit(project, cell, image_w, image_h, layout_result, content_size_mm)
     view_scale = math.sqrt(image_w / view_box.width() * image_h / view_box.height())
-    return ratio * view_scale * 96.0 / 25.4
+    return max(ratio * view_scale, 1e-9)
 
 
 def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
@@ -387,8 +397,14 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         return None
 
     if overrides:
-        panel_scale = _svg_panel_scale(project, cell, base_bytes, layout_result, content_size_mm)
-        overrides = {key: size / panel_scale for key, size in overrides.items()}
+        # A group size is points in the final figure, so convert it to the
+        # SVG's own user units and write it as "px" (1 px = 1 user unit).
+        # Writing "pt" instead would re-enter the renderer's pt→px factor:
+        # QtSvg resolves pt at ~1.24 px/pt rather than the 96/72 the page
+        # maths assumes, which rendered synced text ~7% too small and left
+        # it inconsistent with raster panels in the same group.
+        mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result, content_size_mm)
+        overrides = {key: (size * 25.4 / 72.0) / mm_per_unit for key, size in overrides.items()}
 
     # Step 1 — normalise
     if do_normalize:
@@ -397,7 +413,7 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
 
     # Step 2 — per-element group overrides on top of (possibly normalised) bytes
     if overrides:
-        result = apply_svg_font_overrides_from_bytes(base_bytes, overrides)
+        result = apply_svg_font_overrides_from_bytes(base_bytes, overrides, unit='px')
         if result:
             return result
 

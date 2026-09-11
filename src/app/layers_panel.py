@@ -2,6 +2,7 @@ import os
 
 from src.app.i18n import tr
 from src.app.theme import get_layers_tree_stylesheet, get_tokens, LIGHT
+from src.utils.image_proxy import image_format_name
 
 from PyQt6.QtCore import Qt, QSize, QRect, QRectF, pyqtSignal
 from PyQt6.QtGui import (
@@ -11,20 +12,91 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QTreeWidget, QTreeWidgetItem,
     QTreeWidgetItemIterator, QStyledItemDelegate, QStyleOptionViewItem,
-    QApplication, QStyle,
+    QApplication, QStyle, QAbstractItemView,
 )
-
-class _BranchlessTree(QTreeWidget):
-    """QTreeWidget with branch lines and decorators completely suppressed."""
-    def drawBranches(self, painter, rect, index):
-        pass  # prevent Qt native style from drawing connecting lines
-
 
 # ── Data roles stored on every QTreeWidgetItem ──────────────────────────────
 _ROLE_ID   = Qt.ItemDataRole.UserRole          # cell/text id
-_ROLE_TYPE = Qt.ItemDataRole.UserRole + 1      # "row"|"split"|"text_group"|"cell_filled"|"cell_empty"|"text_leaf"
-_ROLE_IMG  = Qt.ItemDataRole.UserRole + 2      # image path (cell_filled only)
+_ROLE_TYPE = Qt.ItemDataRole.UserRole + 1      # "row"|"split"|"text_group"|"cell_filled"|"cell_empty"|"text_leaf"|"pip_item"
+_ROLE_IMG  = Qt.ItemDataRole.UserRole + 2      # image path (cell_filled/pip_item only)
 _ROLE_META = Qt.ItemDataRole.UserRole + 3      # right-side meta string (e.g. "2 cells")
+_ROLE_ZIDX = Qt.ItemDataRole.UserRole + 4      # cell.z_index, only set when non-default (cell_filled/cell_empty)
+
+# Item types that participate in drag-to-reorder, and which "kind" of
+# z-stack they reorder within (see _BranchlessTree._compatible_target).
+_DRAG_KINDS = {"cell_filled": "cell", "cell_empty": "cell", "pip_item": "pip"}
+
+
+class _BranchlessTree(QTreeWidget):
+    """QTreeWidget with branch lines/decorators suppressed, plus restricted
+    drag-and-drop for reordering the Z-stack.
+
+    This is deliberately *not* Qt's generic internal-move reparenting: rows
+    stay in their existing row/column grouping (that grouping is a stable
+    structural identity, unrelated to draw order — see AGENTS.md), and a
+    drag never moves an item to a new parent. It only ever emits
+    ``reorder_requested`` so the caller can push an undoable command that
+    changes ``z_index`` (cells) or list order (PiP insets); the tree is
+    then rebuilt by the normal ``refresh()`` path.
+    """
+    reorder_requested = pyqtSignal(str, str, bool)  # dragged_id, target_id, place_above
+
+    def drawBranches(self, painter, rect, index):
+        pass  # prevent Qt native style from drawing connecting lines
+
+    @staticmethod
+    def _drag_kind(item):
+        if item is None:
+            return None
+        return _DRAG_KINDS.get(item.data(0, _ROLE_TYPE))
+
+    def _compatible_target(self, dragged, target):
+        if dragged is None or target is None or dragged is target:
+            return False
+        kind = self._drag_kind(dragged)
+        if kind is None or kind != self._drag_kind(target):
+            return False
+        # PiP insets only make sense stacked against insets of the *same*
+        # cell; leaf cells reorder against any other leaf cell in the project.
+        return kind == "cell" or dragged.parent() is target.parent()
+
+    def dragMoveEvent(self, event):
+        target = self.itemAt(event.position().toPoint())
+        if self._compatible_target(self.currentItem(), target):
+            super().dragMoveEvent(event)
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        dragged = self.currentItem()
+        target = self.itemAt(event.position().toPoint())
+        if not self._compatible_target(dragged, target):
+            event.ignore()
+            return
+        pos = self.dropIndicatorPosition()
+        place_above = pos != QAbstractItemView.DropIndicatorPosition.BelowItem
+        dragged_id = dragged.data(0, _ROLE_ID)
+        target_id = target.data(0, _ROLE_ID)
+        # Never let Qt perform its own reparenting move — we only reorder
+        # z-stack data and rely on refresh() to redraw the (unchanged) tree.
+        event.setDropAction(Qt.DropAction.IgnoreAction)
+        event.accept()
+        if dragged_id and target_id:
+            self.reorder_requested.emit(dragged_id, target_id, place_above)
+
+    def mouseMoveEvent(self, event):
+        # Open-hand cursor hints that a row can be picked up and dropped
+        # onto another one to reorder the z-stack.
+        item = self.itemAt(event.position().toPoint())
+        if self._drag_kind(item) is not None:
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+        else:
+            self.viewport().unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self.viewport().unsetCursor()
+        super().leaveEvent(event)
 
 
 class LayersDelegate(QStyledItemDelegate):
@@ -128,9 +200,65 @@ class LayersDelegate(QStyledItemDelegate):
         else:
             self._draw_empty_thumb(painter, thumb_r, ph_c)
 
+        # format badge — right-aligned chip naming the source file type, so a
+        # mixed-format figure is readable without opening each panel.
+        badge = index.data(_ROLE_META) or ""
+        badge_reserved = 0
+        if badge and itype in ("cell_filled", "pip_item"):
+            badge_font = QFont(painter.font())
+            badge_font.setPointSizeF(max(6.5, badge_font.pointSizeF() * 0.78))
+            badge_font.setWeight(QFont.Weight.DemiBold)
+            badge_fm = QFontMetrics(badge_font)
+            badge_w = badge_fm.horizontalAdvance(badge) + 10
+            badge_h = badge_fm.height() + 2
+            badge_r = QRect(r.right() - badge_w - 6, r.top() + (r.height() - badge_h) // 2, badge_w, badge_h)
+            badge_col = QColor(accent if is_sel else text_sec)
+            fill = QColor(badge_col)
+            fill.setAlpha(26)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(badge_r, 3, 3)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            badge_col.setAlpha(210)
+            painter.setPen(badge_col)
+            painter.setFont(badge_font)
+            painter.drawText(badge_r, Qt.AlignmentFlag.AlignCenter, badge)
+            badge_reserved = badge_w + 10
+
+        # stacking-order chip — a cell's position in *this* list reflects
+        # row/column, not z-order (see AGENTS.md), so dragging a row to
+        # reorder its z-stack needs its own feedback. Shown only once the
+        # cell has actually been moved out of the default stacking order
+        # (drag or Bring to Front/Send to Back), so plain non-overlapping
+        # grids stay uncluttered.
+        z_val = index.data(_ROLE_ZIDX)
+        z_reserved = 0
+        if z_val is not None and itype in ("cell_filled", "cell_empty"):
+            z_text = f"Z{z_val:+d}"
+            z_font = QFont(painter.font())
+            z_font.setPointSizeF(max(6.5, z_font.pointSizeF() * 0.78))
+            z_font.setWeight(QFont.Weight.DemiBold)
+            z_fm = QFontMetrics(z_font)
+            z_w = z_fm.horizontalAdvance(z_text) + 10
+            z_h = z_fm.height() + 2
+            z_r = QRect(r.right() - badge_reserved - z_w - 6,
+                        r.top() + (r.height() - z_h) // 2, z_w, z_h)
+            z_col = QColor(accent if is_sel else text_sec)
+            fill = QColor(z_col)
+            fill.setAlpha(26)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(z_r, 3, 3)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            z_col.setAlpha(210)
+            painter.setPen(z_col)
+            painter.setFont(z_font)
+            painter.drawText(z_r, Qt.AlignmentFlag.AlignCenter, z_text)
+            z_reserved = z_w + 10
+
         # text
         text_x  = tx + self.THUMB + self.PAD
-        text_rect = QRect(text_x, r.top(), r.right() - text_x - 4, r.height())
+        text_rect = QRect(text_x, r.top(), r.right() - text_x - 4 - badge_reserved - z_reserved, r.height())
         col = accent if is_sel else (text_c if itype in ("cell_filled", "pip_item", "text_leaf") else text_sec)
         painter.setPen(col)
         fnt = QFont(painter.font())
@@ -192,6 +320,7 @@ class LayersDelegate(QStyledItemDelegate):
 class LayersPanel(QWidget):
     items_selected        = pyqtSignal(list)         # [cell_id, …]
     context_menu_requested = pyqtSignal(list, object) # ([cell_ids], QPoint)
+    reorder_requested       = pyqtSignal(str, str, bool)  # dragged_id, target_id, place_above
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -218,6 +347,15 @@ class LayersPanel(QWidget):
         self.tree.setUniformRowHeights(False)
         self.tree.viewport().setMouseTracking(True)
         self.tree.setMouseTracking(True)
+
+        # Drag-and-drop reordering of the Z-stack (panels) / PiP insets —
+        # an alternative to Bring to Front / Send to Back for the common
+        # "grab this and put it where I want" case. See _BranchlessTree.
+        self.tree.setDragEnabled(True)
+        self.tree.setAcceptDrops(True)
+        self.tree.setDropIndicatorShown(True)
+        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.tree.reorder_requested.connect(self.reorder_requested.emit)
 
         # Custom delegate
         self._delegate = LayersDelegate(self.tree, self.tree)
@@ -295,6 +433,9 @@ class LayersPanel(QWidget):
                 t_item = QTreeWidgetItem(text_root, [f'"{preview}"'])
                 t_item.setData(0, _ROLE_ID, t.id)
                 t_item.setData(0, _ROLE_TYPE, "text_leaf")
+                # Global text always draws above every cell (fixed Z), so it
+                # doesn't participate in z-stack drag-and-drop.
+                t_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             text_root.setExpanded(True)
 
         self._is_updating = False
@@ -321,8 +462,18 @@ class LayersPanel(QWidget):
             tree_item = QTreeWidgetItem(parent_item, [label])
             tree_item.setData(0, _ROLE_ID, cell.id)
             tree_item.setData(0, _ROLE_TYPE, itype)
+            # Explicit drag/drop flags: a leaf cell can be dragged onto any
+            # other leaf cell (anywhere in the tree) to reorder the global
+            # z-stack — see _BranchlessTree._compatible_target.
+            tree_item.setFlags(
+                tree_item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+            )
+            z_index = getattr(cell, 'z_index', 0)
+            if z_index:
+                tree_item.setData(0, _ROLE_ZIDX, z_index)
             if itype == "cell_filled":
                 tree_item.setData(0, _ROLE_IMG, cell.image_path)
+                tree_item.setData(0, _ROLE_META, image_format_name(cell.image_path))
 
             pip_items = getattr(cell, 'pip_items', [])
             for pip in pip_items:
@@ -336,8 +487,15 @@ class LayersPanel(QWidget):
                 pip_tree_item = QTreeWidgetItem(tree_item, [pip_label])
                 pip_tree_item.setData(0, _ROLE_ID, pip.id)
                 pip_tree_item.setData(0, _ROLE_TYPE, "pip_item")
+                # PiP list order *is* the stacking order (last = frontmost),
+                # so dragging one onto a sibling under the same cell directly
+                # reorders cell.pip_items — see _BranchlessTree._compatible_target.
+                pip_tree_item.setFlags(
+                    pip_tree_item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+                )
                 if pip_img:
                     pip_tree_item.setData(0, _ROLE_IMG, pip_img)
+                    pip_tree_item.setData(0, _ROLE_META, image_format_name(pip_img))
             if pip_items:
                 tree_item.setExpanded(True)
 

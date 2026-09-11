@@ -36,8 +36,66 @@ from PIL import Image
 
 from src.model.data_model import RasterTextRegion
 
-# Fraction of the em size occupied by a capital letter (typical Latin fonts).
-CAP_HEIGHT_RATIO = 0.72
+# Ink-height fractions of the em size, measured on Arial, MS YaHei and SimSun.
+# A label's ink box height depends on which characters it contains, so the em
+# can only be recovered by asking what the *text* should reach: "Response"
+# spans cap-height plus a descender (~0.92 em) while "concentration" is only
+# x-height (~0.54 em). Dividing every label by one constant biased the
+# estimate by up to 30%, which then de-synced raster panels from SVG panels
+# sharing the same text group.
+CAP_HEIGHT_RATIO = 0.72     # capitals/digits; also the fallback for unknown text
+X_HEIGHT_RATIO = 0.54       # lowercase without ascenders or descenders
+ASCENDER_RATIO = 0.73       # b d f h k l t, i/j dots, brackets
+DESCENDER_RATIO = 0.205     # added below the baseline by g j p q y, brackets
+CJK_RATIO = 0.94            # CJK glyphs nearly fill their em box
+
+_CAP_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+_ASCENDER_CHARS = set("bdfhkltij([{)]}|/\\!?\"'#$&*@£€§")
+_DESCENDER_CHARS = set("gjpqy,;([{)]}|/\\@_$")
+_X_HEIGHT_CHARS = set("acemnorsuvwxz")
+
+
+def _is_wide_script(char: str) -> bool:
+    """True for CJK and other full-width glyphs that fill the em box."""
+    return any(start <= ord(char) <= end for start, end in (
+        (0x1100, 0x11FF), (0x2E80, 0xA4CF), (0xA960, 0xA97F),
+        (0xAC00, 0xD7FF), (0xF900, 0xFAFF), (0xFE30, 0xFE4F),
+        (0xFF00, 0xFF60), (0xFFE0, 0xFFE6), (0x20000, 0x3FFFF),
+    ))
+
+
+def ink_ratio_for_text(text: str) -> float:
+    """Expected ink-box height as a fraction of the em for *text*.
+
+    Falls back to the capital-height ratio when the text is unknown or has no
+    recognised characters, which matches the previous behaviour rather than
+    inventing a size. Still an estimate — the exact value depends on the
+    font, which the pixels do not record — so the inspector keeps the
+    resulting size editable.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return CAP_HEIGHT_RATIO
+    if any(_is_wide_script(char) for char in stripped):
+        return CJK_RATIO
+    top = 0.0
+    bottom = 0.0
+    for char in stripped:
+        if char in _ASCENDER_CHARS:
+            top = max(top, ASCENDER_RATIO)
+        elif char in _CAP_CHARS:
+            top = max(top, CAP_HEIGHT_RATIO)
+        elif char in _X_HEIGHT_CHARS:
+            top = max(top, X_HEIGHT_RATIO)
+        if char in _DESCENDER_CHARS:
+            bottom = DESCENDER_RATIO
+    if top <= 0.0:
+        # Punctuation-only or an unrecognised alphabet: keep the old constant
+        # instead of guessing from marks that may sit anywhere on the line.
+        return CAP_HEIGHT_RATIO
+    return top + bottom
+
+
 # Max channel difference from the background that still counts as background.
 BG_TOLERANCE = 40
 # Channel difference at which a pixel is treated as fully opaque foreground.
@@ -440,7 +498,7 @@ def regions_from_detections(image: Image.Image, detections) -> List[Tuple[Raster
             glyph_h = gw if vertical else gh
         region = RasterTextRegion(
             x=x, y=y, w=w, h=h, text=det.text, vertical=vertical,
-            font_size_px=round(glyph_h / CAP_HEIGHT_RATIO, 2),
+            font_size_px=round(glyph_h / ink_ratio_for_text(det.text), 2),
             background=info["bg"], enabled=info["reason"] is None,
             warning=info["reason"], foreign_excluded=info["foreign_excluded"],
             chars=chars,
@@ -460,7 +518,8 @@ def reanalyze_region(image: Image.Image, region: RasterTextRegion) -> Optional[s
     region.foreign_excluded = info["foreign_excluded"]
     if info["glyph_box"]:
         gx, gy, gw, gh = info["glyph_box"]
-        region.font_size_px = round((gw if region.vertical else gh) / CAP_HEIGHT_RATIO, 2)
+        region.font_size_px = round(
+            (gw if region.vertical else gh) / ink_ratio_for_text(region.text), 2)
     return info["reason"]
 
 

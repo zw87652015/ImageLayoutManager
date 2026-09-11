@@ -9,7 +9,7 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
-    ("3.3.6", "2026-09-10", [
+    ("3.4.0", "2026-09-11", [
         {"en": "Match selected text sizes across SVG and raster panels without changing the source files.",
          "zh": "无需修改源文件，即可统一 SVG 和位图面板中所选文字的大小。"},
         {"en": "Drop several images or a folder onto the app to create an automatically arranged layout.",
@@ -20,6 +20,12 @@ CHANGELOG = [
          "zh": "旧版工程文件现在会通过更安全、带版本的升级流程打开。"},
         {"en": "Choose Standard, Reduced, or Off motion in Preferences for calmer interactions.",
          "zh": "可在“首选项”中选择标准、减少或关闭动效，让交互更从容。"},
+        {"en": "Tutorial lessons are now available.",
+         "zh": "新增引导教程。"},
+        {"en": "Drag a panel or PiP inset in the Layers panel to reorder overlapping layers.",
+         "zh": "在图层面板中拖动面板或画中画，即可调整重叠图层的前后顺序。"},
+        {"en": "Providing tutorial lessons for new users.",
+         "zh": "为新用户提供了教学模式。"},
     ]),
     ("3.3.5", "2026-08-21", [
         {"en": "New shared labels are numbered automatically: Label 1, Label 2, and so on.",

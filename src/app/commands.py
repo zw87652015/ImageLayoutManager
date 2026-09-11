@@ -310,6 +310,51 @@ class ZIndexChangeCommand(QUndoCommand):
         if self.update_callback:
             self.update_callback()
 
+
+class ReorderZIndexCommand(QUndoCommand):
+    """Drag-and-drop equivalent of Bring to Front / Send to Back: move one
+    cell directly above or below another in the project-wide z-stack in a
+    single step, instead of nudging z_index one click at a time.
+
+    Every leaf cell's z_index is renumbered to its rank in the resulting
+    order (0 = back-most) so the stack stays compact and deterministic
+    rather than drifting from repeated +1/-1 clicks.
+    """
+    def __init__(self, project, dragged_id: str, target_id: str, place_above: bool,
+                 update_callback=None):
+        super().__init__("Reorder Z-Stack")
+        self.update_callback = update_callback
+
+        cells = project.get_all_leaf_cells()
+        self.cells = cells
+        self.old_values = {cell.id: cell.z_index for cell in cells}
+
+        ordered = [c for _, c in sorted(
+            enumerate(cells), key=lambda pair: (pair[1].z_index, pair[0])
+        )]
+        remaining = [c for c in ordered if c.id != dragged_id]
+        dragged = next((c for c in ordered if c.id == dragged_id), None)
+        target_idx = next((i for i, c in enumerate(remaining) if c.id == target_id), None)
+        if dragged is None or target_idx is None:
+            self.new_values = dict(self.old_values)  # nothing to do; redo/undo are no-ops
+        else:
+            insert_idx = target_idx + 1 if place_above else target_idx
+            remaining.insert(insert_idx, dragged)
+            self.new_values = {c.id: i for i, c in enumerate(remaining)}
+
+    def redo(self):
+        for cell in self.cells:
+            cell.z_index = self.new_values[cell.id]
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for cell in self.cells:
+            cell.z_index = self.old_values[cell.id]
+        if self.update_callback:
+            self.update_callback()
+
+
 class PropertyChangeCommand(QUndoCommand):
     def __init__(self, target, changes: dict, update_callback=None, description="Change Property"):
         super().__init__(description)
@@ -1708,6 +1753,33 @@ class RemovePiPItemCommand(QUndoCommand):
     def undo(self):
         if self.pip_item not in self.cell.pip_items:
             self.cell.pip_items.append(self.pip_item)
+        if self.update_callback:
+            self.update_callback()
+
+
+class ReorderPipItemsCommand(QUndoCommand):
+    """Reorder a cell's PiP insets by drag-and-drop in the Layers panel.
+
+    ``cell.pip_items`` list order is the PiP z-stack (last drawn = frontmost;
+    see CellItem._draw_pip_items / _pip_hit_test), so this just replays the
+    list in the new order the user dropped it into.
+    """
+    def __init__(self, cell: Cell, new_order_ids: list, update_callback=None):
+        super().__init__("Reorder PiP Insets")
+        self.cell = cell
+        self.update_callback = update_callback
+        self.old_order = list(cell.pip_items)
+        by_id = {p.id: p for p in cell.pip_items}
+        self.new_order = [by_id[pid] for pid in new_order_ids if pid in by_id]
+
+    def redo(self):
+        if len(self.new_order) == len(self.old_order):
+            self.cell.pip_items = list(self.new_order)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.cell.pip_items = list(self.old_order)
         if self.update_callback:
             self.update_callback()
 

@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QLabel, QScrollArea, QPushButton, QTableWidget, QTableWidgetItem,
     QHeaderView, QSizePolicy
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
 from src.app.i18n import tr, current_language
 
@@ -135,6 +135,8 @@ def _shortcuts_page() -> QWidget:
 
 _GETTING_STARTED_HTML_EN = """
 <h2 style="margin-top:0">Your First Figure</h2>
+<p>Prefer hands-on learning? Use <b>Guided Tutorials…</b> below or in the Help menu.
+Choose a lesson to practice in a separate sample tab. You can exit and replay anytime.</p>
 <ol>
   <li>At the welcome window, choose <b>New Project</b> to reveal the initial 2×2 grid,
       or <b>Open Project…</b> to resume work. Recent projects are listed below the buttons.</li>
@@ -171,6 +173,8 @@ its version fields manually.</p>
 
 _GETTING_STARTED_HTML_ZH = """
 <h2 style="margin-top:0">制作第一张组合图</h2>
+<p>希望边做边学？点击下方或帮助菜单中的<b>引导教程…</b>，选择一个教程，
+在独立示例标签页中练习。可随时退出或重新学习。</p>
 <ol>
   <li>在欢迎窗口选择<b>新建工程</b>，进入初始的 2×2 网格；或选择<b>打开工程…</b>继续工作。
       按钮下方列出了最近打开的工程。</li>
@@ -288,7 +292,8 @@ Check the result and undo if it is not appropriate. Set the page dimensions and 
 <h3>Freeform Positioning</h3>
 <p><b>Layout → Convert Grid → Freeform</b> starts from the current grid geometry and enables direct positioning.
 Use the Inspector's X, Y, width, and height fields for precise dimensions in millimetres.
-<b>Bring to Front</b> and <b>Send to Back</b> control overlapping cells.</p>
+<b>Bring to Front</b> and <b>Send to Back</b> control overlapping cells; in the <b>Layers</b> panel you can
+also drag a panel directly onto another one to place it precisely above or below it in one step.</p>
 <p><b>Layout → Switch to Grid Mode</b> returns to grid-based positioning; do not expect arbitrary freeform
 positions to remain visually unchanged. Save a copy before major rearrangements.</p>
 <h3>Selection and Consistent Sizes</h3>
@@ -315,7 +320,8 @@ _CELLS_HTML_ZH = """
 <h3>自由定位</h3>
 <p><b>布局 → 网格转自由布局</b>保留当前网格几何位置作为起点，并允许自由定位。
 使用检查器中的 X、Y、宽度和高度字段，以毫米为单位精确调整。
-<b>置于顶层</b>和<b>置于底层</b>控制单元格的重叠顺序。</p>
+<b>置于顶层</b>和<b>置于底层</b>控制单元格的重叠顺序；也可以在<b>图层</b>面板中直接把一个面板拖到另一个面板上，
+一步将它精确放到对方的上方或下方。</p>
 <p><b>布局 → 切换至网格模式</b>会恢复网格定位；任意自由布局的位置不一定保持视觉不变。
 重大调整前建议另存副本。</p>
 <h3>选择与尺寸一致性</h3>
@@ -599,6 +605,8 @@ def _html(en: str, zh: str) -> str:
 
 
 class HelpDialog(QDialog):
+    tutorial_requested = pyqtSignal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("help_title"))
@@ -625,6 +633,12 @@ class HelpDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(12, 0, 12, 0)
+        tutorials_btn = QPushButton(tr('tutorials_title'))
+        tutorials_btn.clicked.connect(lambda: self.tutorial_requested.emit(''))
+        btn_row.addWidget(tutorials_btn)
+        text_lesson_btn = QPushButton(tr('tutorials_try_text'))
+        text_lesson_btn.clicked.connect(lambda: self.tutorial_requested.emit('text_sizes'))
+        btn_row.addWidget(text_lesson_btn)
         btn_row.addStretch()
         close_btn = QPushButton(tr("help_close"))
         close_btn.setDefault(True)

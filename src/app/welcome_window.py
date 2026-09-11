@@ -93,6 +93,11 @@ class WelcomeWindow(QWidget):
         self._btn_open.clicked.connect(self._mw._on_open_project)
         btn_col.addWidget(self._btn_open)
 
+        self._btn_learn = QPushButton(tr('tutorials_welcome'))
+        self._btn_learn.setFlat(True)
+        self._btn_learn.clicked.connect(self._mw._on_show_tutorials)
+        btn_col.addWidget(self._btn_learn)
+
         self._btn_close = QPushButton(tr("welcome_close"))
         self._btn_close.setObjectName("welcomeGhost")
         self._btn_close.setFlat(True)
@@ -175,6 +180,7 @@ class WelcomeWindow(QWidget):
         self.setWindowTitle(tr("about_app_name"))
         self._btn_new.setText(tr("welcome_new"))
         self._btn_open.setText(tr("welcome_open_project"))
+        self._btn_learn.setText(tr('tutorials_welcome'))
         self._btn_close.setText(tr("welcome_close"))
         self._recent_header.setText(tr("welcome_recent"))
         self._drop_hint.setText(tr("welcome_drop_project"))
