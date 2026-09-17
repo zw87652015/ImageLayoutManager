@@ -1454,7 +1454,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'mcp_status_label'):
             self._update_mcp_status()
         if getattr(self, 'welcome_window', None) is not None:
-            self.welcome_window._refresh_recent()  # accent colour follows theme
+            self.welcome_window.apply_theme()  # logo + accent colour follow theme
 
         # Recolour toolbar icons to match the new theme.
         self._refresh_toolbar_icons()

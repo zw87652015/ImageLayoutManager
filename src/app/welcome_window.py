@@ -11,8 +11,9 @@ hidden (title-bar X or the Close button) quits the app.
 import html
 import os
 
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QByteArray, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPalette, QPen
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
     QWidget,
@@ -20,8 +21,59 @@ from PyQt6.QtWidgets import (
 
 from src.app.i18n import tr
 from src.app.motion import MotionTween, install_button_feedback
+from src.app.theme import _assets_dir, get_tokens
 
 _MAX_RECENTS = 6
+
+
+class WelcomeLogo(QWidget):
+    """ILM wordmark rendered from ``assets/logo_ilm.svg``; its placeholder
+    colours are swapped for theme tokens so it follows light/dark."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(300, 106)
+        self.setAccessibleName(tr('about_app_name'))
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        with open(os.path.join(_assets_dir(), "logo_ilm.svg"),
+                  'r', encoding='utf-8') as handle:
+            self._svg_text = handle.read()
+        self._theme_name = None
+        self._renderers = {}
+
+    def set_theme(self, name):
+        self._theme_name = name
+        if name not in self._renderers:
+            self._renderers[name] = QSvgRenderer(
+                QByteArray(self._themed_svg(name).encode('utf-8')))
+            self._renderers[name].setAspectRatioMode(
+                Qt.AspectRatioMode.KeepAspectRatio)
+        self.update()
+
+    def _themed_svg(self, theme_name):
+        tokens = get_tokens(theme_name)
+        accent = QColor(tokens["accent"])
+        surface = QColor(tokens["surface"])
+        tint = QColor(
+            round(surface.red() * 0.88 + accent.red() * 0.12),
+            round(surface.green() * 0.88 + accent.green() * 0.12),
+            round(surface.blue() * 0.88 + accent.blue() * 0.12),
+        ).name()
+        return (self._svg_text
+                .replace("#1E2433", tokens["text"])
+                .replace("#0891B2", tokens["accent"])
+                .replace("#F5F7FA", tokens["surface"])
+                .replace("#6B7280", tokens["text_sec"])
+                .replace("#E6F4F8", tint))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        renderer = self._renderers.get(self._theme_name)
+        if renderer is not None:
+            renderer.render(painter, QRectF(self.rect()))
+        painter.end()
 
 
 class WelcomeWindow(QWidget):
@@ -40,7 +92,7 @@ class WelcomeWindow(QWidget):
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.MSWindowsFixedSizeDialogHint
         )
-        self.setFixedSize(480, 520)
+        self.setFixedSize(480, 600)
         self._build_ui()
         install_button_feedback(self)
         # Centre on the primary screen
@@ -69,15 +121,15 @@ class WelcomeWindow(QWidget):
 
         root.addStretch(3)
 
+        self._logo = WelcomeLogo(self)
+        self._logo.set_theme(self._mw._current_theme)
+        root.addWidget(self._logo, 0, Qt.AlignmentFlag.AlignHCenter)
+        root.addSpacing(10)
+
         self._title = QLabel(tr("about_app_name"))
         self._title.setObjectName("welcomeTitle")
         self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self._title)
-        self._drop_hint = QLabel(tr("welcome_drop_project"))
-        self._drop_hint.setObjectName("welcomeDropHint")
-        self._drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._drop_hint.setWordWrap(True)
-        root.addWidget(self._drop_hint)
         root.addSpacing(18)
 
         # Action buttons, centred fixed-width column
@@ -138,6 +190,12 @@ class WelcomeWindow(QWidget):
 
         root.addStretch(4)
 
+        # Drop hint, bottom-right corner
+        self._drop_hint = QLabel(tr("welcome_drop_project"))
+        self._drop_hint.setObjectName("welcomeDropHint")
+        self._drop_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+        root.addWidget(self._drop_hint, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+
         self._refresh_recent()
 
     # ------------------------------------------------------------------
@@ -173,6 +231,10 @@ class WelcomeWindow(QWidget):
             link.linkActivated.connect(self._mw._open_path_dispatch)
             self._recent_list.addWidget(link)
         self._recent_box.setVisible(bool(recents))
+
+    def apply_theme(self):
+        self._logo.set_theme(self._mw._current_theme)
+        self._refresh_recent()
 
     def retranslate(self):
         self._btn_about.setText(tr("welcome_about"))

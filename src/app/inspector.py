@@ -763,6 +763,10 @@ class Inspector(QWidget):
         self.scale_bar_length.setRange(1e-9, 1e9)
         self.scale_bar_length.setDecimals(6)
         self.scale_bar_length.setSingleStep(1.0)
+        # The 1e9 / 6-decimal range makes Qt's size hint ~200 px wide (it
+        # measures the longest possible value text); that alone pushed the
+        # section past the default Inspector width. The field still grows.
+        self.scale_bar_length.setMinimumWidth(60)
         self.scale_bar_length.valueChanged.connect(self._emit_scale_bar)
         length_row.addWidget(self.scale_bar_length, stretch=1)
 
@@ -1230,6 +1234,9 @@ class Inspector(QWidget):
             s.setDecimals(1)
             s.setSingleStep(0.5)
             s.setSuffix(" %")
+            # Two of these share one form row; let them shrink below Qt's
+            # text-width hint so the pair fits the default Inspector width.
+            s.setMinimumWidth(56)
             s.valueChanged.connect(
                 lambda v, k=emit_key: self.pip_property_changed.emit({k: v / 100.0})
             )

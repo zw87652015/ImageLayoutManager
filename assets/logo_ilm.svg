@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 416" width="1180" height="416">
+  <!--
+    ILM wordmark built from figure panels.
+      I = panels a (top) + b (bottom, accent, with a scale bar)
+      L = panels c (tall) + d (wide)
+      M = panels e + g (tall) with a folded sheet f between them
+    Colours are placeholders swapped at runtime by welcome_window.py:
+      #1E2433 ink, #0891B2 accent, #F5F7FA panel fill, #E6F4F8 accent tint,
+      #6B7280 panel letters.
+  -->
+  <g stroke-width="6" stroke-linejoin="round" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="30">
+    <!-- I -->
+    <rect x="10" y="10" width="140" height="177" rx="6" fill="#F5F7FA" stroke="#1E2433"/>
+    <text x="28" y="50" fill="#6B7280">a</text>
+    <rect x="10" y="216" width="140" height="190" rx="6" fill="#E6F4F8" stroke="#0891B2"/>
+    <text x="28" y="256" fill="#0891B2">b</text>
+    <line x1="66" y1="370" x2="128" y2="370" stroke="#1E2433" stroke-width="6" stroke-linecap="round"/>
+
+    <!-- L -->
+    <rect x="267" y="10" width="137" height="258" rx="6" fill="#F5F7FA" stroke="#1E2433"/>
+    <text x="285" y="50" fill="#6B7280">c</text>
+    <rect x="267" y="287" width="353" height="119" rx="6" fill="#F5F7FA" stroke="#1E2433"/>
+    <text x="285" y="327" fill="#6B7280">d</text>
+
+    <!-- M -->
+    <rect x="737" y="10" width="130" height="396" rx="6" fill="#F5F7FA" stroke="#1E2433"/>
+    <text x="755" y="50" fill="#6B7280">e</text>
+    <polygon points="882,10 952,160 952,286 882,141" fill="#E6F4F8" stroke="#0891B2"/>
+    <polygon points="1022,10 952,160 952,286 1022,141" fill="#F5F7FA" stroke="#1E2433"/>
+    <text x="928" y="70" fill="#0891B2">f</text>
+    <rect x="1040" y="10" width="130" height="396" rx="6" fill="#F5F7FA" stroke="#1E2433"/>
+    <text x="1058" y="50" fill="#6B7280">g</text>
+  </g>
+</svg>

@@ -1,10 +1,11 @@
 import ctypes
 import sys
+import time
 import weakref
 
 from PyQt6.QtCore import (
     QAbstractAnimation, QCoreApplication, QEasingCurve, QObject, QSettings,
-    QVariantAnimation, pyqtSignal,
+    QTimer, Qt, QVariantAnimation, pyqtSignal,
 )
 
 
@@ -46,7 +47,7 @@ class MotionPolicy(QObject):
         self.system_reduced = system_reduced
         for animation in list(self._animations):
             try:
-                if animation.state() == QAbstractAnimation.State.Running and animation.totalDuration() >= 0:
+                if animation.state() != QAbstractAnimation.State.Stopped and animation.totalDuration() >= 0:
                     animation.setCurrentTime(animation.totalDuration())
             except RuntimeError:
                 self._animations.discard(animation)
@@ -81,12 +82,167 @@ def motion_duration(milliseconds, spatial=False):
     return policy.duration(milliseconds, spatial) if policy is not None else 0
 
 
+def screen_refresh_rate() -> float:
+    """Refresh rate (Hz) of the screen showing the app's window."""
+    from PyQt6.QtGui import QGuiApplication
+    try:
+        window = QGuiApplication.focusWindow()
+    except RuntimeError:
+        window = None
+    if window is None:
+        for candidate in QGuiApplication.topLevelWindows():
+            try:
+                if candidate.isVisible():
+                    window = candidate
+                    break
+            except RuntimeError:
+                continue
+    screen = None
+    if window is not None:
+        try:
+            screen = window.screen()
+        except RuntimeError:
+            screen = None
+    if screen is None:
+        screen = QGuiApplication.primaryScreen()
+    rate = screen.refreshRate() if screen is not None else 60.0
+    if rate <= 0:
+        rate = 60.0
+    return max(30.0, min(250.0, rate))
+
+
+class FrameClock(QObject):
+    """Steps Paused animations at the display's refresh rate.
+
+    Qt's unified timer ticks Running animations at a fixed 16 ms. A Paused
+    animation is detached from it, yet setCurrentTime() still updates values
+    and finishes normally — so a precise QTimer can drive playback at the
+    real refresh rate. The timer idles at zero when nothing is driven.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._timer = QTimer(self)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.timeout.connect(self._tick)
+        self._entries = []            # [animation, start perf_counter]
+        self._interval_ms = 16
+        self._refresh_rate = 60.0
+        self._last_tick = 0.0
+        self._slow_ticks = 0
+
+    @property
+    def interval_ms(self) -> int:
+        return self._interval_ms
+
+    @property
+    def refresh_rate(self) -> float:
+        return self._refresh_rate
+
+    def is_active(self) -> bool:
+        return self._timer.isActive()
+
+    def _start_clock(self) -> None:
+        self._refresh_rate = screen_refresh_rate()
+        self._interval_ms = max(4, min(33, int(1000 // self._refresh_rate)))
+        self._slow_ticks = 0
+        self._last_tick = 0.0
+        self._timer.setInterval(self._interval_ms)
+        self._timer.start()
+
+    def _drop_animation(self, animation) -> None:
+        for entry in list(self._entries):
+            if entry[0] is animation:
+                self._drop(entry)
+
+    def _drop(self, entry) -> None:
+        if entry in self._entries:
+            self._entries.remove(entry)
+            try:
+                entry[0].stateChanged.disconnect(entry[2])
+            except (TypeError, RuntimeError):
+                pass
+        if not self._entries:
+            self._timer.stop()
+
+    def drive(self, animation) -> None:
+        for entry in self._entries:
+            if entry[0] is animation:
+                entry[1] = time.perf_counter()
+                return
+        connection = animation.stateChanged.connect(
+            lambda new, _old, a=animation: (
+                self._drop_animation(a)
+                if new == QAbstractAnimation.State.Stopped else None))
+        self._entries.append([animation, time.perf_counter(), connection])
+        if not self._timer.isActive():
+            self._start_clock()
+
+    def release(self, animation) -> None:
+        for entry in list(self._entries):
+            if entry[0] is animation:
+                self._drop(entry)
+
+    def _tick(self) -> None:
+        tick_start = time.perf_counter()
+        if self._last_tick and tick_start - self._last_tick < self._interval_ms / 2000.0:
+            return
+        self._last_tick = tick_start
+        for entry in list(self._entries):
+            animation, start, _connection = entry
+            try:
+                state = animation.state()
+            except RuntimeError:
+                self._drop(entry)
+                continue
+            if state != QAbstractAnimation.State.Paused:
+                self._drop(entry)
+                continue
+            total = animation.totalDuration()
+            animation.setCurrentTime(min(int((tick_start - start) * 1000), total))
+        if not self._entries:
+            self._timer.stop()
+        cost = time.perf_counter() - tick_start
+        if cost > self._interval_ms / 1000.0:
+            self._slow_ticks += 1
+            if self._slow_ticks >= 3:
+                self._interval_ms = min(16, self._interval_ms * 2)
+                self._timer.setInterval(self._interval_ms)
+                self._slow_ticks = 0
+        else:
+            self._slow_ticks = 0
+
+
+def frame_clock() -> FrameClock:
+    app = QCoreApplication.instance()
+    if app is None:
+        return None
+    clock = getattr(app, '_ilm_frame_clock', None)
+    if clock is None:
+        clock = FrameClock(app)
+        app._ilm_frame_clock = clock
+    return clock
+
+
+def hold_animation(animation) -> None:
+    """Stop driving *animation* but keep it Paused so setCurrentTime() can
+    step it deterministically."""
+    clock = frame_clock()
+    if clock is not None:
+        clock.release(animation)
+
+
 def start_animation(animation, milliseconds, spatial=False):
     policy = motion_policy()
     animation.setDuration(motion_duration(milliseconds, spatial))
     if policy is not None:
         policy._animations.add(animation)
     animation.start()
+    if animation.state() == QAbstractAnimation.State.Running:
+        animation.pause()
+        clock = frame_clock()
+        if clock is not None:
+            clock.drive(animation)
     return animation
 
 
@@ -109,7 +265,7 @@ class MotionTween(QObject):
 
     def set_target(self, target, ms=100, spatial=False):
         target = float(target)
-        if target == self._target and ms > 0 and self._animation.state() == QAbstractAnimation.State.Running:
+        if target == self._target and ms > 0 and self._animation.state() != QAbstractAnimation.State.Stopped:
             return
         self._target = target
         self._animation.stop()

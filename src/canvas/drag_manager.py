@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsDropShadowEffect, QGraphicsView
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QTransform
-from PyQt6.QtCore import (QObject, QEvent, QTimer, QPointF, QRectF,
+from PyQt6.QtCore import (QObject, QEvent, QPointF, QRectF,
                           QElapsedTimer,
                           pyqtSignal, Qt, QVariantAnimation, QEasingCurve)
 
@@ -30,7 +30,6 @@ class DragManager(QObject):
     HIGHLIGHT_BORDER = QColor(0, 122, 204, 180)
     REJECT_FILL = QColor(204, 0, 0, 40)
     REJECT_BORDER = QColor(204, 0, 0, 140)
-    TICK_MS = 16                # ~60 fps
     DROP_DURATION_MS = 180
     CANCEL_DURATION_MS = 160
     LIFT_DURATION_MS = 100      # pickup: scale + opacity fade
@@ -81,11 +80,6 @@ class DragManager(QObject):
         self._highlights = []       # list of QGraphicsRectItems
         self._retiring_highlights = []
         self._target_ids = []
-
-        # Spring timer
-        self._timer = QTimer(self)
-        self._timer.setInterval(self.TICK_MS)
-        self._timer.timeout.connect(self._spring_tick)
 
         # Drop / cancel animation
         self._anim = None
@@ -703,7 +697,6 @@ class DragManager(QObject):
             return
         self._mouse_scene_pos = QPointF(scene_pos)
         self._spring_tick()
-        self._timer.stop()
         self._animating = True
 
         # Remove highlights immediately
@@ -880,8 +873,6 @@ class DragManager(QObject):
     # ------------------------------------------------------------------
 
     def _cleanup(self):
-        self._timer.stop()
-
         if self._anim:
             self._anim.stop()
             self._anim.deleteLater()
@@ -982,7 +973,6 @@ class DragManager(QObject):
 
         if etype == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Escape:
-                self._timer.stop()
                 self._animating = True
                 self._clear_highlights()
                 self._animate_cancel()

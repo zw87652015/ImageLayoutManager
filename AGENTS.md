@@ -37,6 +37,20 @@
   `maximumHeight` changes cannot redistribute spare height above the header during deferred
   ancestor relayout (visible as a header ghost mid-fold). `test_ui_motion` covers anchored
   headers, mid-flight reversal, and the reduced/off modes.
+- Animations are driven by `motion.FrameClock`, not Qt's unified timer (fixed 16 ms; PyQt6 has no
+  `QAnimationDriver`). `start_animation()` calls `start()` then `pause()` and steps the Paused
+  animation with `setCurrentTime()` from one `PreciseTimer` at the window's screen refresh rate
+  (`screen_refresh_rate()`, interval `1000 // rate` clamped 4–33 ms, re-read each idle→start; three
+  consecutive slow ticks double the interval up to 16 ms). A Paused animation still updates
+  values/properties and emits `finished` at the end; Stopped-driving would not update
+  `QPropertyAnimation` targets. Never call `.pause()`/`.start()` directly on ILM animations — always
+  `start_animation()`; check `state() != Stopped`, not `== Running`. Tests that step an animation by
+  hand must call `hold_animation(anim)` first so the clock stops advancing it.
+- The Welcome window logo is `assets/logo_ilm.svg` (I·L·M built from figure panels a–g, after
+  `src/Logo_ref.png`), painted by `welcome_window.WelcomeLogo` at 300×106 above the title. The SVG
+  carries placeholder colours (`#1E2433` ink, `#0891B2` accent, `#F5F7FA` panel, `#6B7280` letters,
+  `#E6F4F8` tint) that `_themed_svg` swaps for theme tokens; keep those literal hex values when
+  editing the SVG. `MainWindow._apply_theme` calls `welcome_window.apply_theme()`.
 - Byte-compile check: `python -m compileall -q src main.py cli_main.py`.
 
 ## Project compatibility
