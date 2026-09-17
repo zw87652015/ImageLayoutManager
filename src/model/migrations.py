@@ -7,12 +7,13 @@ All loaders validate and upgrade copied data before constructing a Project.
 """
 
 import copy
+import math
 import re
 from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
 
 
 class ProjectMigrationError(ValueError):
@@ -66,7 +67,55 @@ def _records(data, key):
     return records
 
 
+def validate_plot_area(data):
+    if not isinstance(data, dict):
+        raise ProjectMigrationError('Invalid plot_area: expected an object.')
+    values = [data.get(key, default) for key, default in
+              (('left', 0.0), ('top', 0.0), ('right', 1.0), ('bottom', 1.0))]
+    if any(type(value) not in (int, float) or not 0.0 <= value <= 1.0
+           or not math.isfinite(value) for value in values):
+        raise ProjectMigrationError('Invalid plot_area: coordinates must be finite numbers from zero to one.')
+    left, top, right, bottom = values
+    if right <= left or bottom <= top:
+        raise ProjectMigrationError('Invalid plot_area: select a box with positive width and height.')
+    digest = data.get('source_digest', '')
+    if not isinstance(digest, str) or (digest and not re.fullmatch(r'[0-9a-fA-F]{64}', digest)):
+        raise ProjectMigrationError('Invalid plot_area source_digest: expected a SHA256 hex digest or an empty string.')
+
+
+def validate_plot_alignment_group(data):
+    if not isinstance(data, dict):
+        raise ProjectMigrationError('Invalid plot alignment group: expected an object.')
+    if 'id' in data and (not isinstance(data['id'], str) or not data['id']):
+        raise ProjectMigrationError('Invalid plot alignment group id: expected a nonempty string.')
+    if not isinstance(data.get('name', 'Plot alignment'), str):
+        raise ProjectMigrationError('Invalid plot alignment group name: expected a string.')
+    members = data.get('cell_ids', [])
+    if (not isinstance(members, list) or not members
+            or any(not isinstance(cid, str) or not cid for cid in members)):
+        raise ProjectMigrationError('Invalid plot alignment cell_ids: select a nonempty list of cell IDs.')
+    if len(members) != len(set(members)):
+        raise ProjectMigrationError('Invalid plot alignment cell_ids: each member must be unique.')
+    reference = data.get('reference_id', '')
+    if not isinstance(reference, str) or reference not in members:
+        raise ProjectMigrationError('Invalid plot alignment reference_id: select a declared member.')
+    if data.get('sizing_mode', 'reference') not in ('reference', 'fit'):
+        raise ProjectMigrationError('Invalid plot alignment sizing_mode: choose reference or fit.')
+    baseline = data.get('baseline_mode', 'grid_rows')
+    if baseline not in ('grid_rows', 'single', 'custom'):
+        raise ProjectMigrationError('Invalid plot alignment baseline_mode: choose grid_rows, single or custom.')
+    rows = data.get('row_groups', {})
+    if (not isinstance(rows, dict)
+            or any(not isinstance(cid, str) or type(row) is not int or row < 0
+                   for cid, row in rows.items())):
+        raise ProjectMigrationError('Invalid plot alignment row_groups: use cell IDs and nonnegative integer rows.')
+    if baseline == 'custom' and any(cid not in rows for cid in members):
+        raise ProjectMigrationError('Invalid plot alignment row_groups: assign every member to a row.')
+
+
 def _validate_structure(data):
+    for group in _records(data, 'plot_alignment_groups'):
+        validate_plot_alignment_group(group)
     for key in ('rows', 'size_groups', 'text_items', 'group_labels'):
         _records(data, key)
     for group in _records(data, 'svg_text_groups'):
@@ -79,6 +128,8 @@ def _validate_structure(data):
         stack.extend(_records(cell, 'children'))
         _records(cell, 'pip_items')
         _records(cell, 'raster_text_regions')
+        if cell.get('plot_area') is not None:
+            validate_plot_area(cell['plot_area'])
 
 
 def _migrate_schema_0_to_1(data):
@@ -142,7 +193,17 @@ def _migrate_schema_0_to_1(data):
     return data
 
 
-SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1}
+def _migrate_schema_1_to_2(data):
+    data.setdefault('plot_alignment_groups', [])
+    stack = list(data.get('cells', []))
+    while stack:
+        cell = stack.pop()
+        cell.setdefault('plot_area', None)
+        stack.extend(cell.get('children', []))
+    return data
+
+
+SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2}
 
 
 def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:

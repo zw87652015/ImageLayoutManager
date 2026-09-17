@@ -2,7 +2,7 @@ from PyQt6.QtGui import QUndoCommand
 import copy
 import uuid
 import time
-from src.model.data_model import RowTemplate, Cell, PiPItem
+from src.model.data_model import RowTemplate, Cell, PiPItem, PlotArea, PlotAlignmentGroup
 
 # Commands that occur within this window (seconds) on the same property are merged.
 MERGE_TIMEOUT = 5.0
@@ -36,6 +36,36 @@ def _restore_cells_inplace(project, snapshot: list) -> None:
         else:
             result.append(copy.deepcopy(snap_cell))
     project.cells[:] = result
+
+
+class SetPlotAlignmentCommand(QUndoCommand):
+    def __init__(self, project, plot_areas: dict[str, PlotArea | None],
+                 groups: list[PlotAlignmentGroup], update_callback=None):
+        super().__init__('Set Plot Alignment')
+        self.project = project
+        self.update_callback = update_callback
+        self.old_areas = {
+            cid: copy.deepcopy(cell.plot_area) if (cell := project.find_cell_by_id(cid)) is not None else None
+            for cid in plot_areas
+        }
+        self.old_groups = copy.deepcopy(project.plot_alignment_groups)
+        self.new_areas = copy.deepcopy(plot_areas)
+        self.new_groups = copy.deepcopy(groups)
+
+    def _apply(self, areas, groups):
+        for cid, area in areas.items():
+            cell = self.project.find_cell_by_id(cid)
+            if cell is not None:
+                cell.plot_area = copy.deepcopy(area)
+        self.project.plot_alignment_groups = copy.deepcopy(groups)
+        if self.update_callback:
+            self.update_callback()
+
+    def redo(self):
+        self._apply(self.new_areas, self.new_groups)
+
+    def undo(self):
+        self._apply(self.old_areas, self.old_groups)
 
 
 class FreeformGeometryCommand(QUndoCommand):

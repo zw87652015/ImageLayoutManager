@@ -103,7 +103,7 @@ class ExportRegionItem(QGraphicsRectItem):
         badge_h = 16
         pad_x = 6
         # Crude width estimate using font metrics; refined via actual font below.
-        font = QFont("Arial")
+        font = QFont()
         font.setPixelSize(10)
         font.setBold(True)
         painter.save()

@@ -303,6 +303,32 @@ class _BundleOpenWorker(QThread):
             self.failed.emit(str(e))
 
 
+class _SourceImagesExportWorker(QThread):
+    progress = pyqtSignal(int, int, str)
+    finished_ok = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, sources, output_dir: str, parent=None):
+        super().__init__(parent)
+        self._sources = tuple(sources)
+        self._output_dir = output_dir
+        self._cancel_flag = False
+
+    def cancel(self):
+        self._cancel_flag = True
+
+    def run(self):
+        try:
+            result = ImageExporter.export_source_images(
+                self._sources, self._output_dir,
+                progress=self.progress.emit,
+                cancel=lambda: self._cancel_flag,
+            )
+            self.finished_ok.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class _BundlePackWorker(QThread):
     """Runs figpack.pack_project() off the UI thread.
 
@@ -727,6 +753,11 @@ class MainWindow(QMainWindow):
         file_menu.addAction(reload_images_action)
         self._act_reload = reload_images_action
 
+        self._act_export_sources = QAction(tr("action_export_sources"), self)
+        self._act_export_sources.setToolTip(tr("tooltip_export_sources"))
+        self._act_export_sources.triggered.connect(self._on_export_source_images)
+        file_menu.addAction(self._act_export_sources)
+
         file_menu.addSeparator()
 
         # File menu — export
@@ -830,6 +861,9 @@ class MainWindow(QMainWindow):
         auto_layout_action.triggered.connect(self._on_auto_layout)
         edit_menu.addAction(auto_layout_action)
         self._act_auto_layout = auto_layout_action
+        self._act_align_plots = QAction(tr("action_align_plots"), self)
+        self._act_align_plots.setToolTip(tr("tooltip_align_plots"))
+        self._act_align_plots.triggered.connect(lambda: self._on_align_plot_areas())
 
         edit_menu.addSeparator()
         pref_action = QAction(tr("action_preferences"), self)
@@ -842,6 +876,8 @@ class MainWindow(QMainWindow):
         self._layout_menu_ref = QMenu(tr("menu_layout"), self)
         self.menuBar().insertMenu(self._view_menu.menuAction(), self._layout_menu_ref)
         layout_menu = self._layout_menu_ref
+        layout_menu.addAction(self._act_align_plots)
+        layout_menu.addSeparator()
 
         bake_action = QAction(tr("action_bake"), self)
         bake_action.triggered.connect(self._on_bake_to_freeform)
@@ -915,7 +951,15 @@ class MainWindow(QMainWindow):
         outcell_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toolbar.addWidget(outcell_btn)
 
-        self.toolbar.addAction(auto_layout_action)
+        self._auto_layout_button = QToolButton(self)
+        self._auto_layout_button.setDefaultAction(auto_layout_action)
+        self._auto_layout_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self._auto_layout_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._auto_layout_menu = QMenu(self)
+        self._auto_layout_menu.addAction(auto_layout_action)
+        self._auto_layout_menu.addAction(self._act_align_plots)
+        self._auto_layout_button.setMenu(self._auto_layout_menu)
+        self.toolbar.addWidget(self._auto_layout_button)
         self.toolbar.addSeparator()
 
         # ── Right-aligned toolbar group ─────────────────────────────────
@@ -1070,6 +1114,7 @@ class MainWindow(QMainWindow):
         self.inspector.size_group_pinned_changed.connect(self._on_size_group_pinned_changed)
         self.inspector.size_group_rename_requested.connect(self._on_size_group_rename)
         self.inspector.size_group_delete_requested.connect(self._on_size_group_delete)
+        self.inspector.plot_alignment_edit_requested.connect(lambda cid: self._on_align_plot_areas([cid]))
         self.inspector.label_item_property_changed.connect(self._on_label_item_property_changed)
         self.inspector.group_label_property_changed.connect(self._on_group_label_property_changed)
         self.inspector.group_label_delete_requested.connect(self._on_group_label_delete)
@@ -1540,6 +1585,15 @@ class MainWindow(QMainWindow):
         self._file_menu.setTitle(tr("menu_file"))
         self._edit_menu.setTitle(tr("menu_edit"))
         self._layout_menu_ref.setTitle(tr("menu_layout"))
+        self._act_placement_menu.setTitle(tr("menu_label_placement"))
+        for value, key in (
+            ("in_cell", "placement_in_cell"),
+            ("label_row_above", "placement_row_above"),
+            ("label_row_below", "placement_row_below"),
+            ("label_col_left", "placement_col_left"),
+            ("label_col_right", "placement_col_right"),
+        ):
+            self._placement_actions[value].setText(tr(key))
         self._view_menu.setTitle(tr("menu_view"))
         if hasattr(self, "_tools_menu"):
             self._tools_menu.setTitle(tr("menu_tools"))
@@ -1564,6 +1618,8 @@ class MainWindow(QMainWindow):
         self._act_import.setText(tr("action_import"))
         self._act_open_grid.setText(tr("action_open_grid"))
         self._act_reload.setText(tr("action_reload"))
+        self._act_export_sources.setText(tr("action_export_sources"))
+        self._act_export_sources.setToolTip(tr("tooltip_export_sources"))
         self._act_export_pdf.setText(tr("action_export_pdf"))
         self._act_export_tiff.setText(tr("action_export_tiff"))
         self._act_export_jpg.setText(tr("action_export_jpg"))
@@ -1588,6 +1644,8 @@ class MainWindow(QMainWindow):
             self._act_group_label_hint.setText(
                 tr("hint_group_label_select_cells"))
         self._act_auto_layout.setText(tr("action_auto_layout"))
+        self._act_align_plots.setText(tr("action_align_plots"))
+        self._act_align_plots.setToolTip(tr("tooltip_align_plots"))
         self._act_bake.setText(tr("action_bake"))
         self._act_grid_mode.setText(tr("action_grid_mode"))
         self._act_bring_front.setText(tr("action_bring_front"))
@@ -1787,7 +1845,8 @@ class MainWindow(QMainWindow):
         current = getattr(self.scene, '_last_layout_result', None)
         if current is not None:
             show_layout_transition(self.view, before, current.cell_rects)
-            self.statusBar().showMessage(tr('status_layout_updated'), 2200)
+            if not getattr(self, '_plot_alignment_status', ''):
+                self.statusBar().showMessage(tr('status_layout_updated'), 2200)
 
     def _refresh_and_update(self):
         self._sync_svg_overrides()  # apply any stored SVG overrides
@@ -1806,6 +1865,33 @@ class MainWindow(QMainWindow):
             if any(getattr(c, 'image_path', None)
                    for c in self.project.get_all_leaf_cells()):
                 self._dismiss_welcome()
+        self._update_plot_alignment_status()
+
+    def _update_plot_alignment_status(self):
+        from src.utils.plot_alignment import resolve_image_placements
+        from src.app.plot_alignment_dialog import alignment_issues_text
+        previous = getattr(self, '_plot_alignment_status', '')
+        result = getattr(self.scene, '_image_placements', None)
+        if result is None:
+            result = resolve_image_placements(self.project, strict=False)
+        active_issues = [issue for issue in result.issues if issue.group_id or not issue.cell_id]
+        notices = getattr(result, 'notices', [])
+        if active_issues:
+            self._plot_alignment_status = tr('plot_attention').format(
+                issues=alignment_issues_text(active_issues, self.project, 2).replace('\n', ' · '))
+        elif notices:
+            names = {g.id: g.name for g in self.project.plot_alignment_groups}
+            self._plot_alignment_status = tr('plot_notice').format(issues=' · '.join(
+                tr('plot_issue_reduced_to_fit').format(
+                    name=names.get(notice.group_id, ''),
+                    height=f"{result.group_heights.get(notice.group_id, 0):.2f}")
+                for notice in notices[:2]))
+        else:
+            self._plot_alignment_status = ''
+        if self._plot_alignment_status:
+            self.statusBar().showMessage(self._plot_alignment_status)
+        elif previous and self.statusBar().currentMessage() == previous:
+            self.statusBar().clearMessage()
 
     def _dismiss_welcome(self):
         """Close the launcher window and reveal the main window."""
@@ -1914,6 +2000,7 @@ class MainWindow(QMainWindow):
         # Trigger a canvas refresh so proxy.get_pixmap re-loads from disk
         if self.scene is not None:
             self.scene.refresh_layout()
+            self._update_plot_alignment_status()
 
     def _on_undo_clean_changed(self, clean: bool):
         self.setWindowModified(not clean)
@@ -2580,6 +2667,9 @@ class MainWindow(QMainWindow):
                 cell_dict = cell.to_dict()
                 cell_dict["layout_mode"] = getattr(self.project, 'layout_mode', 'grid')
                 cell_dict["_size_groups"] = self._size_groups_payload()
+                alignment = next((g for g in self.project.plot_alignment_groups if cell.id in g.cell_ids), None)
+                cell_dict["_plot_alignment"] = None if alignment is None else {
+                    "id": alignment.id, "name": alignment.name, "member_count": len(alignment.cell_ids)}
                 cell_dict["_image_aspect_ratio"] = self._cell_image_aspect_ratio(cell)
                 corner_labels = {}
                 for t in self.project.text_items:
@@ -3642,6 +3732,12 @@ class MainWindow(QMainWindow):
         if has_image:
             delete_img_action = menu.addAction(tr("action_delete_img"))
             delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
+            if cell.is_leaf:
+                selected = [c.id for c in self._selected_leaf_cells() if c.image_path and not c.is_placeholder]
+                scope = tuple(selected if cell_id in selected else [cell_id])
+                align_action = menu.addAction(tr("action_align_plots"))
+                align_action.setToolTip(tr("tooltip_align_plots"))
+                align_action.triggered.connect(lambda checked=False, ids=scope: self._on_align_plot_areas(list(ids)))
 
         menu.addSeparator()
 
@@ -3857,8 +3953,7 @@ class MainWindow(QMainWindow):
         # WrapAndInsertCommand handles both cases:
         #   - If parent already splits in the requested direction → insert sibling
         #   - Otherwise → wrap this cell in a new split container
-        insert_menu.addSeparator()
-        sub_menu = insert_menu.addMenu(tr("ctx_split_subcell"))
+        sub_menu = menu.addMenu(tr("ctx_split_subcell"))
         act_sub_above = sub_menu.addAction(tr("ctx_cell_above"))
         act_sub_above.triggered.connect(
             lambda: self._ctx_wrap_and_insert(cell_id, "vertical", "before"))
@@ -4135,6 +4230,37 @@ class MainWindow(QMainWindow):
         cmd = AutoLabelOutCellCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
+    def _on_align_plot_areas(self, cell_ids=None):
+        from src.app.plot_alignment_dialog import PlotAlignmentDialog
+        from src.app.commands import SetPlotAlignmentCommand
+        project = self.project
+        tab = next((tab for tab in self._tabs if tab.project is project), None)
+        if tab is None:
+            return
+        selected_ids = list(cell_ids) if cell_ids is not None else [
+            cell.id for cell in self._selected_leaf_cells()
+            if cell.image_path and not cell.is_placeholder
+        ]
+        dialog = PlotAlignmentDialog(project, selected_ids, parent=self)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            if tab not in self._tabs or tab.project is not project:
+                return
+
+            def refresh():
+                if tab not in self._tabs or tab.project is not project:
+                    return
+                if self.project is project:
+                    self._refresh_and_update()
+                else:
+                    tab.scene.refresh_layout()
+
+            tab.undo_stack.push(SetPlotAlignmentCommand(
+                project, dialog.plot_areas, dialog.alignment_groups, refresh))
+        finally:
+            dialog.deleteLater()
+
     def _on_auto_layout(self):
         if getattr(self.project, 'layout_mode', 'grid') == 'freeform':
             cmd = AutoLayoutFreeformCommand(self.project, self._refresh_with_layout_transition)
@@ -4335,7 +4461,127 @@ class MainWindow(QMainWindow):
         if self._settings.value("export_dir_policy", "project") == "last":
             self._settings.setValue("export_dir_last", os.path.dirname(path))
 
+    def _show_source_export_message(self, text, *, warning=False, details=""):
+        box = QMessageBox(self)
+        box.setWindowTitle(tr("dlg_export_sources"))
+        box.setIcon(QMessageBox.Icon.Warning if warning else QMessageBox.Icon.Information)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(text)
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        if details:
+            box.setDetailedText(details)
+        box.exec()
+        box.deleteLater()
+
+    def _on_export_source_images(self):
+        if not (0 <= self._active_tab_idx < len(self._tabs)):
+            return
+        tab = self._tabs[self._active_tab_idx]
+        project = tab.project
+        path = tab.path
+        bundle_dir = tab.bundle_workdir.path if tab.bundle_workdir is not None else None
+        try:
+            project_dir = os.path.dirname(os.path.abspath(path)) if path else None
+            sources = ImageExporter.collect_source_images(
+                project, project_dir=project_dir, bundle_dir=bundle_dir,
+            )
+        except (OSError, ValueError) as e:
+            self._show_source_export_message(
+                tr("msg_export_sources_failed").format(error=e), warning=True,
+            )
+            return
+        if not sources:
+            self._show_source_export_message(tr("msg_export_sources_empty"))
+            return
+        output_dir = QFileDialog.getExistingDirectory(
+            self, tr("dlg_export_sources_folder"), self._get_export_default_dir(),
+        )
+        if not output_dir:
+            return
+
+        dlg = QProgressDialog("", tr("btn_cancel"), 0, len(sources), self)
+        label = QLabel(tr("dlg_copying_source").format(filename=sources[0].filename), dlg)
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        dlg.setLabel(label)
+        dlg.setWindowTitle(tr("dlg_export_sources"))
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+        worker = _SourceImagesExportWorker(sources, output_dir, parent=self)
+        outcome = {}
+        names = {source.reference: source.filename for source in sources}
+
+        def on_progress(completed, total, reference):
+            dlg.setMaximum(total)
+            label.setText(tr("dlg_copying_source").format(
+                filename=names.get(reference, os.path.basename(reference)),
+            ))
+            dlg.setValue(completed)
+
+        def on_ok(result):
+            outcome["result"] = result
+            dlg.done(QDialog.DialogCode.Accepted)
+
+        def on_fail(message):
+            outcome["error"] = message
+            dlg.done(QDialog.DialogCode.Rejected)
+
+        worker.progress.connect(on_progress)
+        worker.finished_ok.connect(on_ok)
+        worker.failed.connect(on_fail)
+        dlg.canceled.connect(worker.cancel)
+        worker.start()
+        while not outcome:
+            dlg.exec()
+            if not outcome:
+                worker.cancel()
+        worker.wait()
+        worker.deleteLater()
+        dlg.deleteLater()
+
+        if "error" in outcome:
+            self._show_source_export_message(
+                tr("msg_export_sources_failed").format(error=outcome["error"]), warning=True,
+            )
+            return
+        result = outcome["result"]
+        count = len(result.copied)
+        if count and self._settings.value("export_dir_policy", "project") == "last":
+            self._settings.setValue("export_dir_last", output_dir)
+        if result.cancelled:
+            key = "msg_export_sources_cancelled"
+        elif result.failures:
+            key = "msg_export_sources_partial"
+        else:
+            key = "msg_export_sources_done"
+        self._show_source_export_message(
+            tr(key).format(count=count, failed=len(result.failures), folder=output_dir),
+            warning=bool(result.failures),
+            details="\n".join(f"{reference}: {reason}" for reference, reason in result.failures),
+        )
+
+    def _check_plot_alignment_for_export(self):
+        from src.utils.plot_alignment import PlotAlignmentError, resolve_image_placements
+        from src.app.plot_alignment_dialog import alignment_issues_text
+        try:
+            resolve_image_placements(self.project, strict=True)
+        except PlotAlignmentError as error:
+            message = QMessageBox(self)
+            message.setIcon(QMessageBox.Icon.Warning)
+            message.setWindowTitle(tr("action_align_plots"))
+            message.setTextFormat(Qt.TextFormat.PlainText)
+            message.setText(tr("plot_export_blocked"))
+            message.setInformativeText(alignment_issues_text(error.issues, self.project))
+            message.setDetailedText(alignment_issues_text(error.issues, self.project, 100))
+            message.exec()
+            return False
+        return True
+
     def _on_export_pdf(self):
+        if not self._check_plot_alignment_for_export():
+            return
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_pdf"), default_dir, "PDF Files (*.pdf)")
         if path:
@@ -4343,6 +4589,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_export_tiff(self):
+        if not self._check_plot_alignment_for_export():
+            return
         default_dir = self._get_export_default_dir()
         rgb_filter = "TIFF – RGB / sRGB (*.tiff *.tif)"
         cmyk_filter = "TIFF – CMYK (print) (*.tiff *.tif)"
@@ -4400,6 +4648,8 @@ class MainWindow(QMainWindow):
         )
 
     def _on_export_png(self):
+        if not self._check_plot_alignment_for_export():
+            return
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_png"), default_dir, "PNG Files (*.png)")
         if path:
@@ -4409,6 +4659,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_export_jpg(self):
+        if not self._check_plot_alignment_for_export():
+            return
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_jpg"), default_dir, "JPEG Files (*.jpg *.jpeg)")
         if not path:
@@ -4417,6 +4669,8 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_export_svg(self):
+        if not self._check_plot_alignment_for_export():
+            return
         from src.export.svg_exporter import SvgExporter
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_svg"), default_dir, "SVG Files (*.svg)")

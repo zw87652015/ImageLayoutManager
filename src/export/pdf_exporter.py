@@ -7,10 +7,15 @@ import os
 from src.model.data_model import Project, Cell
 from src.model.enums import FitMode
 from src.model.layout_engine import LayoutEngine
+from src.export.image_exporter import ImageExporter
+from src.utils.plot_alignment import resolve_image_placements, content_rect as cell_content_rect, clipped_source
+from dataclasses import replace
 
 class PdfExporter:
     @staticmethod
     def export(project: Project, output_path: str):
+        layout_result = LayoutEngine.calculate_layout(project)
+        layout_result._image_placements = resolve_image_placements(project, layout_result, strict=True)
         writer = QPdfWriter(output_path)
         
         # Set Resolution FIRST to avoid resetting layout later
@@ -18,7 +23,7 @@ class PdfExporter:
         writer.setCreator("Image Layout Manager")
 
         # Calculate Layout (mm)
-        layout_result = LayoutEngine.calculate_layout(project)
+        placements = layout_result._image_placements
 
         # Determine output page size & translation. If a user-defined export
         # region is set, the PDF page becomes the region's size and all content
@@ -95,40 +100,32 @@ class PdfExporter:
                 )
 
                 # Apply Padding
-                p_top = cell.padding_top * scale
-                p_right = cell.padding_right * scale
-                p_bottom = cell.padding_bottom * scale
-                p_left = cell.padding_left * scale
-                content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
+                content_rect = QRectF(*(v * scale for v in cell_content_rect(
+                    cell, (x_mm, y_mm, w_mm, h_mm), project.layout_mode)))
+                placement = placements.placements.get(cell.id)
 
                 if content_rect.width() <= 0 or content_rect.height() <= 0:
                     continue
 
-                if cell.image_path and os.path.exists(cell.image_path):
+                if placement is not None:
                     ext = os.path.splitext(cell.image_path)[1].lower()
                     if ext in ('.pdf', '.eps'):
                         # Skip in Pass 1 — will be stamped as vector in Pass 2
-                        content_x_mm = (content_rect.x()) / scale
-                        content_y_mm = (content_rect.y()) / scale
-                        content_w_mm = content_rect.width() / scale
-                        content_h_mm = content_rect.height() / scale
-                        pdf_source_cells.append((cell, (content_x_mm, content_y_mm, content_w_mm, content_h_mm)))
+                        pdf_source_cells.append((cell, placement))
                     else:
-                        rotation = getattr(cell, 'rotation', 0)
-                        crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
-                                getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
                         from src.utils.text_overrides import overrides_for_cell
                         svg_override, raster_override = overrides_for_cell(
                             project, cell, layout_result,
                             (content_rect.width() / scale, content_rect.height() / scale))
-                        PdfExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop,
-                                                svg_override, raster_override)
+                        ImageExporter._draw_placed_image(painter, cell, placement, scale,
+                                                         svg_override, raster_override)
 
                         # Draw scale bar if enabled
-                        if getattr(cell, 'scale_bar_enabled', False):
-                            PdfExporter._draw_scale_bar(painter, cell, content_rect, scale)
+                    if getattr(cell, 'scale_bar_enabled', False):
+                        ImageExporter._draw_scale_bar(painter, cell,
+                            QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain')
 
-                PdfExporter._draw_pip_items(painter, project, cell, content_rect, scale)
+                PdfExporter._draw_pip_items(painter, project, cell, content_rect, scale, placement)
 
             # 1b. Draw Label Cells (labels living in their own reserved strip)
             PdfExporter._draw_label_cells(painter, project, layout_result, scale)
@@ -156,8 +153,12 @@ class PdfExporter:
         if pdf_source_cells:
             if region_dx_mm != 0.0 or region_dy_mm != 0.0:
                 shifted = [
-                    (cell, (cx - region_dx_mm, cy - region_dy_mm, cw, ch))
-                    for cell, (cx, cy, cw, ch) in pdf_source_cells
+                    (cell, replace(placement,
+                        rect=(placement.rect[0] - region_dx_mm, placement.rect[1] - region_dy_mm,
+                              *placement.rect[2:]),
+                        clip_rect=(placement.clip_rect[0] - region_dx_mm, placement.clip_rect[1] - region_dy_mm,
+                                   *placement.clip_rect[2:])))
+                    for cell, placement in pdf_source_cells
                 ]
             else:
                 shifted = pdf_source_cells
@@ -250,20 +251,23 @@ class PdfExporter:
             mm_to_pt_x = actual_w_pt / page_w_mm
             mm_to_pt_y = actual_h_pt / page_h_mm
 
-            for cell, (cx_mm, cy_mm, cw_mm, ch_mm) in pdf_source_cells:
+            for cell, placement in reversed(pdf_source_cells):
+                visible = clipped_source(placement)
+                if visible is None:
+                    continue
+                (cx_mm, cy_mm, cw_mm, ch_mm), crop = visible
                 src_path = cell.image_path
                 if not src_path or not os.path.exists(src_path):
                     continue
 
-                crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
-                        getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
-                fit_mode_str = getattr(cell, 'fit_mode', 'contain')
-                rotation = getattr(cell, 'rotation', 0)
+                rotation = (-placement.rotation) % 360
                 cl, ct, cr, cb = crop
 
                 try:
                     src_doc = fitz.open(src_path)
                     src_page = src_doc[0]
+                    if src_page.rotation:
+                        src_page.remove_rotation()
                     src_w_pt = src_page.rect.width
                     src_h_pt = src_page.rect.height
 
@@ -310,7 +314,7 @@ class PdfExporter:
             print(f"Failed in PDF vector post-processing: {e}")
 
     @staticmethod
-    def _draw_pip_items(painter: QPainter, project, cell, content_rect: QRectF, scale: float):
+    def _draw_pip_items(painter: QPainter, project, cell, content_rect: QRectF, scale: float, image_placement=None):
         """Draw all PiP insets for a cell onto the given content_rect."""
         from PyQt6.QtGui import QPen
         pip_items = getattr(cell, 'pip_items', [])
@@ -353,7 +357,8 @@ class PdfExporter:
                 
                 # PiP zoom type is STRETCH, external is CONTAIN
                 pip_fit = "stretch" if pip.pip_type == "zoom" else "contain"
-                PdfExporter._draw_scale_bar(painter, pip, img_rect, scale, fit_mode_override=pip_fit)
+                ImageExporter._draw_scale_bar(painter, pip, img_rect, scale, fit_mode_override=pip_fit,
+                    source_path_override=cell.image_path if pip.pip_type == 'zoom' else None)
                 
                 # Restore
                 pip.scale_bar_um_per_px = old_um
@@ -375,6 +380,9 @@ class PdfExporter:
                     (pip.crop_right - pip.crop_left) * cw,
                     (pip.crop_bottom - pip.crop_top) * ch,
                 )
+                if image_placement is not None:
+                    origin_rect = ImageExporter._placed_source_rect(image_placement,
+                        (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom), scale)
                 open_pen = QPen(QColor(pip.origin_box_color))
                 # Convert points to dots
                 open_pen.setWidthF(pip.origin_box_width_pt * (project.dpi / 72.0))

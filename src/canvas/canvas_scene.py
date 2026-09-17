@@ -1,5 +1,6 @@
 import copy
 import os
+from dataclasses import replace
 
 from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent, QGraphicsSimpleTextItem
 from PyQt6.QtGui import QColor, QFont, QPen, QBrush, QPainter, QPainterPath
@@ -240,6 +241,9 @@ class CanvasScene(QGraphicsScene):
                 and not self._label_preview_transitioning):
             self.label_drag_cancel()
         layout_result = LayoutEngine.calculate_layout(self.project)
+        from src.utils.plot_alignment import resolve_image_placements
+        self._image_placements = resolve_image_placements(self.project, layout_result)
+        layout_result._image_placements = self._image_placements
         self._last_layout_result = layout_result
         
         # Sync Cell Items (only leaf cells are rendered on canvas)
@@ -275,7 +279,19 @@ class CanvasScene(QGraphicsScene):
             from src.utils.raster_text_utils import build_raster_override_spec, spec_key
             svg_override = get_svg_override_bytes_for_cell(self.project, cell, layout_result)
             raster_override = build_raster_override_spec(self.project, cell, layout_result)
+            placement = self._image_placements.placements.get(cell.id)
+            frame = getattr(cell, 'plot_area', None)
+            frame_key = tuple(getattr(frame, k, None) for k in
+                              ('left', 'top', 'right', 'bottom', 'source_digest')) if frame is not None else None
+            group_ids = {g.id for g in self.project.plot_alignment_groups
+                         if cell.id in getattr(g, 'cell_ids', [])}
+            issues = tuple(i for i in self._image_placements.issues
+                           if i.cell_id == cell.id or i.group_id in group_ids)
             fingerprint = (
+                placement,
+                frame_key,
+                self._image_placements.plot_rects.get(cell.id),
+                issues,
                 svg_override,
                 spec_key(raster_override) if raster_override else None,
                 rect_key,
@@ -355,6 +371,12 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'crop_bottom', 1.0),
                     svg_override_bytes=svg_override,
                     raster_override=raster_override,
+                    image_placement=replace(
+                        placement,
+                        rect=(placement.rect[0] - x, placement.rect[1] - y, *placement.rect[2:]),
+                        clip_rect=(placement.clip_rect[0] - x, placement.clip_rect[1] - y,
+                                   *placement.clip_rect[2:]),
+                    ) if placement is not None else None,
                 )
                 item.update_pip_items(pip_items)
 

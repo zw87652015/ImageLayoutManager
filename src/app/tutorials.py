@@ -6,12 +6,17 @@ from pathlib import Path
 from PyQt6 import sip
 from PyQt6.QtCore import (
     QBuffer, QByteArray, QEvent, QIODevice, QObject, QRect, QRectF, QSaveFile,
-    QStandardPaths, Qt, QTimer,
+    QSize, QStandardPaths, Qt, QTimer,
 )
-from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QPalette, QPen
+from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QMessageBox, QScrollArea, QAbstractButton, QMenu, QToolButton
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget, QMessageBox,
+    QScrollArea, QAbstractButton, QMenu, QToolButton, QFrame, QSizePolicy,
+    QStyle, QStyleOptionButton, QStylePainter,
+)
 
+from src.app.commands import DropImageCommand
 from src.app.i18n import current_language, tr
 from src.app.inspector import CollapsibleSection
 from src.app.motion import MotionTween
@@ -58,8 +63,8 @@ LESSONS = {
               '在画布上点击某个面板编号（或点击下方“选中标注”）。在检查器中展开“文字样式属性”，使用高亮的“字号”字段——标注大小就在这里修改。修改仅作用于所选标注；如需统一整组样式，请使用“应用到全部”。'),
              target='label_size', action='label_size'),
         Step('save', ('Save an editable project', '保存可编辑工程'),
-             ('Click Save (Ctrl+S) and choose a new file. Choose .figpack to include the sample assets. Cancelling the file dialog does not complete this step. You may Skip if you do not want a practice file.',
-              '点击“保存”（Ctrl+S），选择新文件。使用 .figpack 可包含示例素材。取消文件对话框不会完成本步骤；不想保存练习文件时可跳过。'), target='_act_save'),
+             ('Click Save (Ctrl+S) and choose a new file. Choose .figpack to include the sample assets. If you do not want a practice file, cancel the file dialog — clicking Save is what completes this step.',
+              '点击“保存”（Ctrl+S），选择新文件。使用 .figpack 可包含示例素材。不想保存练习文件时可取消文件对话框——点击“保存”即可完成本步骤。'), target='_act_save'),
         Step('preview', ('Check the composition', '检查构图'),
              ('Open the highlighted Export button and choose Export Preview to hide the editing aids, then check the labels and margins. The same toggle is under View → Export Preview, or press Ctrl+Shift+P. This is only a preview: use Export for a publication file, and inspect that file separately.',
               '点击高亮的“导出”按钮并选择“导出预览”，隐藏编辑辅助元素，然后检查标注和边距。该开关也位于“视图 → 导出预览”，或按 Ctrl+Shift+P。这只是预览：投稿文件需通过“导出”生成，并单独检查。'), target='_act_preview_mode'),
@@ -93,18 +98,38 @@ LESSONS = {
              ('Save a copy before extensive text edits; not every inspector edit supports undo. Inspect the exported file too: SVG group font sizes can differ from their targets in PDF output. Finish keeps the practice tab. Skipped steps can be revisited by replaying this lesson.',
               '大量文字修改前请另存副本，并非所有检查器操作都支持撤销。还要检查实际导出文件：PDF 中 SVG 组字号可能与目标值不同。完成后保留练习页；跳过的步骤可通过重学补做。')),
     ),
-    'arrange_panels': (
-        Step('intro', ('Grid, sub-cells, and freeform', '网格、子单元格与自由布局'),
-             ('These three panels are already loaded — the same SVG, PNG, and TIFF mix from the first lesson. Here we focus on layout: subdividing a panel, swapping content, and switching to freeform for exact positions. This is a separate practice tab; your other projects are untouched.',
-              '这三个面板已经载入完毕——与第一课相同的 SVG、PNG、TIFF 组合。本课聚焦于布局本身：细分面板、交换内容，以及切换到自由布局以获得精确位置。这是独立的练习标签页，不会影响你的其他工程。')),
+    'divide_cells': (
+        Step('intro', ('Build a layout inside one panel', '在一个面板内搭建布局'),
+             ('This separate practice tab starts with three sample panels: SVG, PNG, and TIFF. Divide only the third panel into columns and nested rows; the other two panels stay untouched. Source files are unchanged. Use Ctrl+Z to undo and Ctrl+Shift+Z to redo; Back only revisits instructions.',
+              '独立练习页已载入 SVG、PNG、TIFF 三个示例面板。本课只将第三个面板细分为列，再嵌套分行，前两个面板保持不变。源文件不会改动。可用 Ctrl+Z 撤销、Ctrl+Shift+Z 重做；“上一步”仅回看说明。')),
         Step('split', ('Subdivide a panel', '细分面板'),
-             ('Click Split third panel below. In real use, right-click any panel → Insert → Add Sub-Cell / Subdivide for one split at a time, or → Split into N Columns/Rows for several at once. This is how mismatched panel sizes — a wide photo next to two small insets — get built.',
-              '点击下方“拆分第三个面板”。实际使用时，右键任意面板 → 插入 → 细分为子单元格，可一次拆出一个；或 → 拆分为 N 列/行，一次拆出多个。宽照片配两张小插图这类不对称排版就是这样搭建的。'),
-             action='split_cols'),
+             ('Right-click the third panel → Add Sub-Cell / Subdivide → Subdivide into N Columns… (nested), then choose 2, or click Split third panel below. This divides only that panel, not the whole page. Its TIFF image stays in the left sub-cell; the right sub-cell starts empty.',
+              '右键第三个面板 → 细分为子单元格 → 细分为 N 列…（嵌套），选择 2，或点击下方“拆分第三个面板”。这只细分该面板，不会拆分整页。原 TIFF 图片保留在左侧子单元格，右侧子单元格为空。'),
+             target='division_panel', action='split_cols'),
         Step('ratio', ('Adjust the split ratio', '调整分割比例'),
              ('Click Select the new sub-cell below to reveal Sub-Cell Settings in the Inspector, then change the highlighted ratio. In real use, drag the divider between the two sub-cells directly on the canvas instead — the Inspector field gives you an exact number.',
               '点击下方“选中新的子单元格”，在检查器中展开“子单元格设置”，修改高亮的比例数值。实际使用时可直接在画布上拖动两个子单元格之间的分隔条；检查器字段则给出精确数值。'),
              target='subcell_ratio', action='select_subcell'),
+        Step('nested_rows', ('Nest two rows on the right', '在右侧嵌套两行'),
+             ('Right-click the rightmost sub-cell → Add Sub-Cell / Subdivide → Subdivide into N Rows… (nested), then choose 2, or click Divide the right sub-cell below. Only that sub-cell becomes two stacked rows; the left image and the other original panels stay in place.',
+              '右键最右侧子单元格 → 细分为子单元格 → 细分为 N 行…（嵌套），选择 2，或点击下方“细分右侧子单元格”。只有这个子单元格变成上下两行；左侧图片和另外两个原始面板保持原位。'),
+             target='division_panel', action='nested_rows'),
+        Step('add_sibling', ('Add a cell at the same level', '在同一层级添加单元格'),
+             ('Right-click the first, left sub-cell → Add Sub-Cell / Subdivide → Add Sibling Right, or use the button below. This adds a sibling in the existing inner row, not a whole-page column. The nested rows on the right and the other two original panels are preserved.',
+              '右键第一个（左侧）子单元格 → 细分为子单元格 → 在右侧添加同级单元格，或点击下方按钮。这会在现有的内部行中新增同级单元格，而不是为整页添加一列。右侧嵌套的两行和另外两个原始面板都会保留。'),
+             target='division_panel', action='add_sibling'),
+        Step('fill_subcells', ('Fill the empty sub-cells', '填充空白子单元格'),
+             ('Drag image files onto the empty sub-cells to fill them. Fill empty sub-cells below uses the same samples and only fills blanks, never replacing images already there. The sample fill is one undo step; the original TIFF remains in the left sub-cell.',
+              '将图片文件拖到空白子单元格即可填充。下方“填充空白子单元格”会复用示例素材，只填空白位置，不会替换已有图片。示例填充可一次撤销；原 TIFF 仍保留在左侧子单元格。'),
+             target='division_panel', action='fill_subcells'),
+        Step('finish', ('A nested layout, one panel at a time', '逐个面板搭建嵌套布局'),
+             ('You have divided a panel, adjusted its ratio, nested rows, added a sibling, and filled empty sub-cells without changing the other panels or source files. Finish returns to your previous tab and keeps this practice project available. Replay from Help → Guided Tutorials anytime.',
+              '你已练习细分面板、调整比例、嵌套分行、添加同级单元格和填充空白位置，其他面板和源文件均保持不变。完成后返回之前的标签页，并保留练习工程。可随时从“帮助 → 引导教程”重新学习。')),
+    ),
+    'arrange_panels': (
+        Step('intro', ('Grid and freeform', '网格与自由布局'),
+             ('These three panels are already loaded — the same SVG, PNG, and TIFF mix from the first lesson. Swap their content, crop and align images, then switch to freeform for exact positions. This is a separate practice tab; your other projects are untouched.',
+              '这三个面板已经载入完毕——与第一课相同的 SVG、PNG、TIFF 组合。本课将练习交换内容、裁剪与对齐图片，再切换到自由布局以精确定位。这是独立的练习标签页，不会影响你的其他工程。')),
         Step('swap', ('Swap two panels', '交换两个面板'),
              ('Click Swap panels below to exchange the first two panels’ images. In real use, drag one panel onto another on the canvas to swap them; hold Ctrl to select several cells and swap the whole set at once. Position, labels, and insets stay with the cell — only the image content moves.',
               '点击下方“交换面板”，交换前两个面板的图片。实际使用时，把画布上的一个面板拖到另一个上即可交换；按住 Ctrl 可多选几个单元格一起交换。位置、标注和插图都留在原单元格——只有图片内容会移动。'),
@@ -122,12 +147,12 @@ LESSONS = {
               '打开高亮的“布局”菜单，选择“网格转自由布局”。每个面板会保持当前位置，但不再受行列规则约束。随时可通过“布局 → 切换至网格模式”恢复网格定位——自由布局并非不可逆的操作。'),
              target='_act_bake'),
         Step('reposition', ('Position a panel precisely', '精确定位面板'),
-             ('Click Select a panel below, then edit the highlighted X field in the Inspector — Y, Width, and Height are right below it, all in millimetres. In real use, drag the panel directly on the canvas for a quick placement, then fine-tune the exact numbers here. Bring to Front / Send to Back (Layout menu) controls which panel sits on top when two overlap.',
-              '点击下方“选中面板”，然后修改检查器中高亮的 X 字段——Y、宽度和高度就在下方，单位均为毫米。实际使用时，可直接在画布上拖动面板快速摆放，再到这里微调精确数值。“置于顶层／置于底层”（布局菜单）控制两个面板重叠时的前后顺序。'),
+             ('Click Select a panel below, then edit the highlighted X field in the Inspector — Y, Width, and Height are right below it, all in millimetres. Drag the panel on the canvas for quick placement, then fine-tune the numbers here. In freeform mode, drag rows in Layers to change the overlap order: the top row is frontmost.',
+              '点击下方“选中面板”，然后修改检查器中高亮的 X 字段——Y、宽度和高度就在下方，单位均为毫米。可在画布上拖动面板快速摆放，再到这里微调数值。自由布局中，拖动“图层”中的条目可调整重叠顺序：最上方条目位于最前。'),
              target='freeform_x', action='select_cell'),
         Step('finish', ('Ready to compose your own layout', '可以开始搭建自己的布局了'),
-             ('You have subdivided a panel, adjusted a split ratio, swapped content, and repositioned a panel in freeform mode. Layout → Switch to Grid Mode returns to grid rules whenever you need consistent rows and columns again. Finish keeps this practice tab; replay this lesson anytime from Help → Guided Tutorials.',
-              '你已经练习了细分面板、调整分割比例、交换内容，以及在自由布局中重新定位面板。需要恢复整齐的行列时，随时可用“布局 → 切换至网格模式”。完成后练习页会保留；可随时从“帮助 → 引导教程”重新学习本课。')),
+             ('You have swapped content, cropped and aligned an image, and repositioned a panel in freeform mode. Layout → Switch to Grid Mode returns to grid rules whenever you need consistent rows and columns again. Finish keeps this practice tab; replay this lesson anytime from Help → Guided Tutorials.',
+              '你已经练习了交换内容、裁剪与对齐图片，以及在自由布局中重新定位面板。需要恢复整齐的行列时，随时可用“布局 → 切换至网格模式”。完成后练习页会保留；可随时从“帮助 → 引导教程”重新学习本课。')),
     ),
     'labels_titles': (
         Step('intro', ('Panel letters vs. shared titles', '面板编号与共享标题'),
@@ -197,6 +222,26 @@ LESSONS = {
              ('You have added and resized an inset image and enabled a scale bar. Insets also support their own border and scale bar, independent of the host panel\u2019s. Finish keeps this practice tab; replay this lesson anytime from Help → Guided Tutorials.',
               '你已经练习了添加与调整插图大小，以及启用比例尺。插图也可以拥有自己独立的边框和比例尺，与所在面板互不影响。完成后练习页会保留；可随时从“帮助 → 引导教程”重新学习本课。')),
     ),
+    'align_plots': (
+        Step('intro', ('Line up the plots, not the files', '对齐绘图区，而不是文件边缘'),
+             ('This practice row holds three synthetic charts saved with different margins, as if they came from different plotting tools. Auto Layout fits each file\u2019s edges, so the bottom axes sit at different heights and the plot boxes differ in size. The fix is to mark each chart\u2019s plotting area and match them. Marking is a reference, not a crop: labels stay visible and source files are never edited.',
+              '这一行练习面板包含三张合成图表，它们保存时留白各不相同，就像来自不同的绘图软件。“自动布局”按文件边缘适配，因此底部坐标轴高低不一，绘图框大小也不同。解决办法是标记每张图的绘图区，然后统一匹配。标记只是参照，不是裁剪：标签仍然可见，源文件不会被修改。')),
+        Step('mark_plots', ('Mark the three plot areas and apply', '标记三个绘图区并应用'),
+             ('Click Open Align Plot Areas below. In real use: select the panels, then open the arrow beside Auto Layout → Align Plot Areas…, use the Layout menu, or right-click a panel. Click New group and give it a name (for example Row 1), then check all three panels. Follow the Select → Mark → Match → Apply strip: draw a box around each chart\u2019s plotting area, leaving tick labels and titles outside, and use Mark next image to move on. Keep panel 1 as the reference, then click Apply. If Fit plots within cells appears, click it first, then Apply.',
+              '点击下方“打开对齐绘图区”。实际使用时：先选中面板，再点击“自动布局”旁的箭头 → “对齐绘图区…”，或使用“布局”菜单、右键面板。点击“新建对齐组”并命名（例如“第一行”），然后勾选全部三个面板。按照“选择 → 标记 → 匹配 → 应用”的步骤条操作：框住每张图的绘图区，刻度标签和标题留在框外，用“标记下一张”切换。保持面板 1 为参照图，然后点击“应用”。如果出现“适应单元格边界”，先点击它再应用。'),
+             target='_act_align_plots', action='open_align_plots'),
+        Step('layout', ('Auto Layout keeps the alignment', '自动布局会保留对齐'),
+             ('Click Auto Layout in the toolbar (Ctrl+Shift+A) again. The cells are rearranged, but the alignment is a saved relationship: the plot heights and bottom axes are recalculated, not lost. If a later change leaves too little room for a panel\u2019s title or labels, the whole group shrinks together so nothing is cut off, and the status bar tells you.',
+              '再次点击工具栏的“自动布局”（Ctrl+Shift+A）。单元格会重新排布，但对齐关系已被保存：绘图高度和底部坐标轴会重新计算，而不会丢失。若之后的修改让某个面板的标题或标签放不下，整组会一起缩小以免裁掉内容，状态栏会给出提示。'),
+             target='_act_auto_layout'),
+        Step('preview', ('Check the result', '检查结果'),
+             ('Open the highlighted Export button and choose Export Preview (Ctrl+Shift+P) to hide the editing aids. Compare the bottom axes across the row: they now share one line and the plots share one height, while each chart\u2019s own labels remain. Exported PDF, PNG, and SVG files use the same placement.',
+              '点击高亮的“导出”按钮并选择“导出预览”（Ctrl+Shift+P），隐藏编辑辅助元素。对比这一行的底部坐标轴：它们现在处于同一条线上，绘图高度也一致，而各图自身的标签仍然保留。导出的 PDF、PNG 和 SVG 使用同样的位置。'),
+             target='_act_preview_mode'),
+        Step('finish', ('Ready to align your own charts', '可以开始对齐你自己的图表了'),
+             ('The alignment is saved in .figlayout and .figpack projects, and Apply was one undo step. Reopen Align Plot Areas to adjust the marks, change the reference, or Remove alignment. Match reference exactly keeps the reference unchanged; Fit within cells may shrink it so every plot fits. Axis titles inside the source images are not moved separately. Finish keeps this practice tab; replay this lesson anytime from Help → Guided Tutorials.',
+              '对齐关系会随 .figlayout 和 .figpack 工程一起保存，“应用”只占一步撤销。重新打开“对齐绘图区”可调整标记、更换参照图或移除对齐。“精确匹配参照图”保持参照图不变；“适应单元格边界”则可能缩小参照图以容纳全部绘图区。源图内部的坐标轴标题不会被单独移动。完成后练习页会保留；可随时从“帮助 → 引导教程”重新学习本课。')),
+    ),
     'size_groups': (
         Step('intro', ('Keep several panels the same size', '让多个面板保持相同大小'),
              ('These three panels are already loaded (SVG, PNG, TIFF) — a separate practice tab. A Size Group forces its member panels to share one width and height, so editing one (e.g. cropping) does not throw the others out of alignment. This is different from a shared label, which only adds a heading.',
@@ -220,14 +265,50 @@ LESSONS = {
 }
 
 
+LESSON_ORDER = (
+    'first_figure', 'divide_cells', 'arrange_panels', 'size_groups', 'align_plots',
+    'labels_titles', 'text_sizes', 'insets_scale_bars', 'publication',
+)
+LESSONS = {key: LESSONS[key] for key in LESSON_ORDER}
+
+LESSON_GROUPS = (
+    (('Build the layout', '搭建布局'), ('first_figure', 'divide_cells', 'arrange_panels', 'size_groups', 'align_plots')),
+    (('Annotate the figure', '标注图形'), ('labels_titles', 'text_sizes', 'insets_scale_bars')),
+    (('Prepare to publish', '准备发表'), ('publication',)),
+)
+
+_LESSON_SUMMARIES = {
+    'first_figure': ('Import panels, arrange a figure, and save an editable project.',
+                     '导入面板、安排布局，并保存可编辑工程。'),
+    'divide_cells': ('Build nested rows and columns inside a cell.',
+                     '在单元格内搭建嵌套的行与列。'),
+    'arrange_panels': ('Swap, crop, and position panels in freeform mode.',
+                       '交换、裁剪面板，并在自由排布模式下调整位置。'),
+    'size_groups': ('Share panel dimensions with size groups.',
+                    '使用尺寸组统一面板尺寸。'),
+    'align_plots': ('Mark plot interiors and match their height and bottom axis across panels.',
+                    '标记绘图区，让多个面板的绘图高度和底部坐标轴对齐。'),
+    'labels_titles': ('Add panel numbers and shared titles.',
+                      '添加面板编号和共享标题。'),
+    'text_sizes': ('Match typography across SVG and raster panels.',
+                   '统一 SVG 与位图面板中的文字大小。'),
+    'insets_scale_bars': ('Add insets and scale bars to microscopy figures.',
+                          '为显微图添加插图与比例尺。'),
+    'publication': ('Set DPI, choose an output format, and check the export.',
+                     '设置 DPI、选择输出格式，并检查导出结果。'),
+}
+
+
 _LESSON_TITLES = {
     'first_figure':      ('Basic function',      '基础功能'),
+    'divide_cells':       ('Divide cells',                   '细分单元格'),
     'text_sizes':         ('Match text sizes',               '统一文字大小'),
     'arrange_panels':     ('Arrange panels',                 '排布面板'),
     'labels_titles':      ('Labels and shared titles',       '标注与共享标题'),
     'publication':        ('Prepare for publication',        '发表前准备'),
     'insets_scale_bars':  ('Insets and scale bars',          '插图与比例尺'),
     'size_groups':        ('Size groups',                    '尺寸组'),
+    'align_plots':        ('Align plot areas',               '对齐绘图区'),
 }
 
 
@@ -250,6 +331,51 @@ def _sample_svg(index, font_px, series):
 <text id="response" x="125" y="105">Response</text>
 <text id="zero" x="90" y="405">0</text>
 <text id="ten" x="590" y="405">10</text>
+</g></svg>'''
+
+
+#: (left, top, right, bottom) of each misaligned sample's plot frame, in
+#: source pixels of the 720×480 page. Variant 0 has the smallest plot
+#: height so, as the default reference, the other two scale *down* and
+#: "Match reference exactly" fits their cells without needing Fit.
+_ALIGN_PLOT_PIXELS = ((100, 170, 630, 360), (190, 90, 660, 410), (120, 60, 600, 320))
+ALIGN_PLOT_FRAMES = tuple((l / 720, t / 480, r / 720, b / 480) for l, t, r, b in _ALIGN_PLOT_PIXELS)
+
+
+def _sample_misaligned_chart(variant):
+    """Synthetic chart whose plot frame sits differently on the page for
+    each variant — imitating panels saved by different plotting tools —
+    so Auto Layout visibly misaligns the bottom axes and plot heights."""
+    left, top, right, bottom = _ALIGN_PLOT_PIXELS[variant]
+    series = ((45, 80, 60, 175, 200, 235), (60, 95, 140, 120, 205, 250), (30, 70, 105, 160, 150, 215))[variant]
+    width, height = right - left, bottom - top
+    points = ' '.join(f'{left + 15 + step * (width - 30) / 5:.0f} {bottom - 20 - value * (height - 40) / 250:.0f}'
+                      for step, value in enumerate(series))
+    ticks = ''.join(f'<line x1="{left}" y1="{bottom - height * f:.0f}" x2="{left - 8}" y2="{bottom - height * f:.0f}" stroke="#444" stroke-width="3"/>'
+                    for f in (0.25, 0.5, 0.75))
+    extras = {
+        0: (f'<text x="{left + 10}" y="{top - 30}">DEMO 1 - synthetic data</text>'
+            f'<text x="{(left + right) / 2 - 30:.0f}" y="{bottom + 60}">Time</text>'
+            f'<text x="{left - 40}" y="{bottom + 12}">0</text><text x="{left - 60}" y="{top + 12}">10</text>'),
+        1: (f'<text x="{left + 10}" y="{top - 60}">DEMO 2 - synthetic data</text>'
+            f'<text x="{left + 10}" y="{top - 22}">saved with wide tick labels</text>'
+            f'<text x="{(left + right) / 2 - 30:.0f}" y="{bottom + 60}">Time</text>'
+            f'<text x="{left - 150}" y="{bottom + 12}">1000</text><text x="{left - 170}" y="{top + 12}">10000</text>'),
+        2: (f'<text x="{left + 10}" y="{top - 20}">DEMO 3 - synthetic data</text>'
+            f'<text x="{(left + right) / 2 - 140:.0f}" y="{bottom + 60}">Time after treatment</text>'
+            f'<text x="{(left + right) / 2 - 110:.0f}" y="{bottom + 100}">(synthetic units)</text>'
+            f'<rect x="{right + 14}" y="{top + 8}" width="20" height="20" fill="#0891b2"/>'
+            f'<text x="{right + 42}" y="{top + 26}" font-size="24">series</text>'
+            f'<text x="{left - 40}" y="{bottom + 12}">0</text><text x="{left - 60}" y="{top + 12}">10</text>'),
+    }[variant]
+    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
+<rect width="720" height="480" fill="white"/>
+<path d="M{left} {top} V{bottom} H{right}" stroke="#444" fill="none" stroke-width="3"/>
+{ticks}
+<polyline points="{points}" stroke="#0891b2" fill="none" stroke-width="5"/>
+<g font-family="Arial" fill="#222" font-size="30">
+<text x="{left - 8}" y="{(top + bottom) / 2:.0f}" text-anchor="end" transform="rotate(-90 {left - 60} {(top + bottom) / 2:.0f})">Response</text>
+{extras}
 </g></svg>'''
 
 
@@ -347,6 +473,9 @@ def make_samples():
         ('micrograph-1.svg', _sample_micrograph(0), None),
         ('micrograph-2.svg', _sample_micrograph(1), None),
         ('micrograph-3.svg', _sample_micrograph(2), None),
+        ('plot-panel-1.svg', _sample_misaligned_chart(0), None),
+        ('plot-panel-2.png', _sample_misaligned_chart(1), 'PNG'),
+        ('plot-panel-3.svg', _sample_misaligned_chart(2), None),
     )
     created = {}
     for name, svg, fmt in specs:
@@ -360,6 +489,7 @@ def make_samples():
     base = [created['panel-1.svg'], created['panel-2.png'], created['panel-3.tiff']]
     return {
         'first_figure': base,
+        'divide_cells': base,
         'text_sizes': [created['text-panel-1.svg'], created['text-panel-2.svg'], created['text-panel-3.png']],
         # These three lessons focus on layout, labelling, and export — not on
         # importing — so they reuse the same mixed-format set already loaded,
@@ -372,7 +502,81 @@ def make_samples():
         # white-background charts.
         'insets_scale_bars': [created['micrograph-1.svg'], created['micrograph-2.svg'], created['micrograph-3.svg']],
         'size_groups': base,
+        # Deliberately misaligned plot frames (see _sample_misaligned_chart)
+        # so the lesson has something visible to fix.
+        'align_plots': [created['plot-panel-1.svg'], created['plot-panel-2.png'], created['plot-panel-3.svg']],
     }
+
+
+class TutorialLessonButton(QPushButton):
+    def __init__(self, key, state='new', parent=None):
+        super().__init__(parent)
+        self.setText(lesson_title(key))
+        self.setObjectName('tutorialLesson')
+        self.setProperty('lessonKey', key)
+        self.setProperty('lessonState', state)
+        self.setAccessibleName(self.text())
+        self.setAutoDefault(False)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        policy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 7, 14, 7)
+        layout.setSpacing(6)
+        self.title_label = QLabel(self.text())
+        self.title_label.setObjectName('tutorialLessonTitle')
+        self.title_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.title_label.setWordWrap(True)
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(self.title_label, 1)
+        status = {'completed': ('Completed', '已完成'), 'explored': ('Explored', '已浏览')}
+        status_text = text(*status.get(state, ('Not started', '未开始')))
+        self.status_label = QLabel(status_text if state in status else '')
+        self.status_label.setObjectName('tutorialLessonStatus')
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.status_label)
+        self.status_label.setVisible(state in status)
+        for child in self.findChildren(QWidget):
+            child.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        steps = sum(step.key not in ('intro', 'finish') for step in LESSONS[key])
+        description = ' '.join((
+            text(*_LESSON_SUMMARIES[key]), text(f'{steps} steps', f'{steps} 个步骤'), status_text,
+            text('Press to start this lesson.', '按下以开始本课。')))
+        self.setToolTip(description)
+        self.setAccessibleDescription(description)
+
+    def sizeHint(self):
+        self.ensurePolished()
+        return QSize(420, self.heightForWidth(420))
+
+    def minimumSizeHint(self):
+        self.ensurePolished()
+        return self.layout().totalMinimumSize()
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return self.layout().totalHeightForWidth(width)
+
+    def paintEvent(self, event):
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = ''
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        ancestor = self.parentWidget()
+        while ancestor is not None:
+            if isinstance(ancestor, QScrollArea):
+                ancestor.ensureWidgetVisible(self)
+                break
+            ancestor = ancestor.parentWidget()
 
 
 class TutorialHighlight(QWidget):
@@ -512,7 +716,7 @@ class TutorialCard(QDialog):
         self.heading = QLabel()
         self.heading.setWordWrap(True)
         font = self.heading.font()
-        font.setBold(True)
+        font.setWeight(QFont.Weight.Medium)
         self.heading.setFont(font)
         layout.addWidget(self.heading)
         self.body = QLabel()
@@ -554,6 +758,24 @@ class TutorialCard(QDialog):
         self.controller.stop()
 
 
+class _FillSubcellImageCommand(DropImageCommand):
+    def __init__(self, project, cell, path, update_callback):
+        super().__init__(cell, path, update_callback)
+        self.project = project
+
+    def redo(self):
+        cell = self.project.find_cell_by_id(self.cell.id)
+        if cell is not None:
+            self.cell = cell
+            super().redo()
+
+    def undo(self):
+        cell = self.project.find_cell_by_id(self.cell.id)
+        if cell is not None:
+            self.cell = cell
+            super().undo()
+
+
 class TutorialController(QObject):
     def __init__(self, window):
         super().__init__(window)
@@ -577,6 +799,8 @@ class TutorialController(QObject):
         self.timer.setInterval(200)
         self.timer.timeout.connect(self.refresh)
         window._act_auto_layout.triggered.connect(self._layout_triggered)
+        window._act_save.triggered.connect(self._save_triggered)
+        window._act_save_as.triggered.connect(self._save_triggered)
         for name in ('_act_export_pdf', '_act_export_tiff', '_act_export_png',
                     '_act_export_jpg', '_act_export_svg'):
             getattr(window, name).triggered.connect(self._export_triggered)
@@ -593,6 +817,14 @@ class TutorialController(QObject):
     def _layout_triggered(self):
         if self._active_step_action('layout'):
             self.actions.add('layout')
+            self.refresh()
+
+    def _save_triggered(self):
+        # Save or Save As (button or Ctrl+S) counts even when the file dialog
+        # is cancelled: the step teaches where Save is, and a learner who does
+        # not want a practice file must not be stuck with Next disabled.
+        if self._active_step_action('save'):
+            self.actions.add('save')
             self.refresh()
 
     def _export_triggered(self):
@@ -616,31 +848,69 @@ class TutorialController(QObject):
             self.center.close()
             self.center.deleteLater()
         self.center = QDialog(self.window)
+        self.center.setObjectName('tutorialCenter')
         self.center.setWindowTitle(tr('tutorials_title'))
-        self.center.resize(460, 300)
+        self.center.resize(480, 460)
+        self.center.setMinimumSize(420, 360)
         layout = QVBoxLayout(self.center)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
-        intro = QLabel(text('Learn with synthetic sample figures. Each lesson opens a separate practice tab. Your existing projects are not replaced. You can exit at any step and replay lessons anytime.',
-                            '使用合成示例图学习。每个教程会打开独立练习页，不会替换已有工程。可随时退出或重新学习。'))
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(6)
+        intro = QLabel(text('Practice with sample figures in separate tabs. Your projects stay untouched.',
+                            '在独立标签页中使用示例图练习，不会改动你的工程。'))
+        intro.setObjectName('tutorialCenterSubtitle')
+        intro.setTextFormat(Qt.TextFormat.PlainText)
         intro.setWordWrap(True)
         intro.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(intro)
-        for key in LESSONS:
-            status = self.window._settings.value(f'tutorials/v1/{key}', '')
-            suffix = text(' — completed', ' — 已完成') if status == 'completed' else text(' — explored', ' — 已浏览') if status == 'explored' else ''
-            button = QPushButton(lesson_title(key) + suffix)
+        states = {key: self.window._settings.value(f'tutorials/v1/{key}', '') for key in LESSON_ORDER}
+        completed = sum(state == 'completed' for state in states.values())
+        total = len(LESSON_ORDER)
+        self.center.progress_label = QLabel(text(f'{completed} of {total} completed', f'已完成 {completed} / {total}'))
+        self.center.progress_label.setObjectName('tutorialCenterProgress')
+        layout.addWidget(self.center.progress_label)
+        scroll = QScrollArea()
+        scroll.setObjectName('tutorialLessonScroll')
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.center.lesson_scroll = scroll
+        content = QWidget()
+        content.setObjectName('tutorialLessonList')
+        lessons = QVBoxLayout(content)
+        lessons.setContentsMargins(0, 0, 0, 0)
+        lessons.setSpacing(6)
+        buttons = []
+        for key in LESSON_ORDER:
+            state = states[key] if states[key] in ('completed', 'explored') else 'new'
+            button = TutorialLessonButton(key, state)
             button.clicked.connect(lambda checked=False, lesson=key: self.start(lesson))
-            layout.addWidget(button)
+            lessons.addWidget(button)
+            buttons.append(button)
+        lessons.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        self.center.resume_button = None
         if self.tab:
-            resume = QPushButton(text('Return to active lesson', '返回当前教程'))
+            resume = QPushButton(text('Resume lesson', '继续教程'))
+            resume.setObjectName('tutorialCenterResume')
+            resume.setProperty('accent', 'true')
+            resume.setAutoDefault(False)
             resume.clicked.connect(self.resume)
-            layout.addWidget(resume)
+            footer.addWidget(resume)
+            self.center.resume_button = resume
         close = QPushButton(tr('help_close'))
+        close.setObjectName('tutorialCenterClose')
+        close.setAutoDefault(False)
         close.clicked.connect(self.center.close)
-        layout.addWidget(close)
+        footer.addWidget(close)
+        self.center.close_button = close
+        layout.addLayout(footer)
         self.center.show()
         self.center.raise_()
+        next((button for button in buttons if button.property('lessonState') != 'completed'), buttons[0]).setFocus()
 
     def start(self, lesson):
         if lesson not in LESSONS:
@@ -683,12 +953,14 @@ class TutorialController(QObject):
             project.rows = [RowTemplate(index=0, column_count=len(paths))]
             project.cells = [Cell(row_index=0, col_index=i, image_path=path, is_placeholder=False)
                              for i, path in enumerate(paths)]
-            if lesson == 'insets_scale_bars':
+            if lesson in ('insets_scale_bars', 'align_plots'):
                 # These panels are dark end-to-end (see _sample_micrograph),
                 # so any letterboxing from a column/image aspect mismatch
                 # would show as a light gap — exactly where a default white
                 # scale bar would then be invisible. Auto Layout sizes each
-                # column to its image's aspect ratio, eliminating it.
+                # column to its image's aspect ratio, eliminating it. The
+                # plot-alignment lesson starts from the same file-edge fit
+                # so the misaligned axes it teaches about are visible.
                 from src.app.commands import AutoLayoutCommand
                 AutoLayoutCommand(project).redo()
             self.tab = self.window._create_tab(project)
@@ -728,6 +1000,19 @@ class TutorialController(QObject):
         return [group for group in self.tab.project.svg_text_groups
                 if abs(group.font_size_pt - 9.0) < 0.01 and paths <= {member.svg_path for member in group.members}]
 
+    def _plots_aligned(self):
+        """True once every practice panel is marked and belongs to one
+        alignment group that resolves without an active conflict."""
+        from src.utils.plot_alignment import resolve_image_placements
+        project = self.tab.project
+        ids = set(self._cell_ids)
+        if not any(ids <= set(group.cell_ids) for group in project.plot_alignment_groups):
+            return False
+        if any(cell.plot_area is None for cell in project.cells):
+            return False
+        return not any(issue.group_id or not issue.cell_id
+                       for issue in resolve_image_placements(project).issues)
+
     def valid(self):
         if (self.tab is None or self.tab not in self.window._tabs
                 or self.tab.project is not self._practice_project):
@@ -754,7 +1039,9 @@ class TutorialController(QObject):
         if key == 'load':
             return all(cell.image_path for cell in project.cells)
         if key == 'layout':
-            return 'layout' in self.actions
+            return 'layout' in self.actions and (self.lesson != 'align_plots' or self._plots_aligned())
+        if key == 'mark_plots':
+            return self._plots_aligned()
         if key == 'labels':
             return any(item.subtype == 'numbering' for item in project.text_items)
         if key == 'label_size':
@@ -764,7 +1051,7 @@ class TutorialController(QObject):
                     and not inspector.text_group._collapsed
                     and inspector.font_size.isVisible())
         if key == 'save':
-            return bool(self.tab.path) and self.tab.undo_stack.isClean()
+            return 'save' in self.actions
         if key == 'preview':
             return self.tab.scene.preview_mode
         if key == 'svg_open':
@@ -789,13 +1076,25 @@ class TutorialController(QObject):
         # arrange_panels
         if key == 'split':
             # >= 2, not == 2: "Split into N" with N>2 also satisfies the step.
-            return len(project.cells[2].children) >= 2
+            root = project.cells[2]
+            return len(root.children) >= 2 and (self.lesson != 'divide_cells' or root.split_direction == 'horizontal')
         if key == 'ratio':
             parent = project.cells[2]
             # 0.05, not 0.1: the Inspector ratio field steps by 0.1, and a
             # boundary check at exactly one step would accept or reject a
             # single click depending on float noise.
             return len(parent.split_ratios) >= 2 and abs(parent.split_ratios[0] - parent.split_ratios[1]) > 0.05
+        if self.lesson == 'divide_cells' and key in ('nested_rows', 'add_sibling', 'fill_subcells'):
+            root = project.cells[2]
+            nested = (root.split_direction == 'horizontal' and len(root.children) >= 2
+                      and any(child.split_direction == 'vertical' and len(child.children) >= 2
+                              for child in root.children))
+            if key == 'nested_rows':
+                return nested
+            if key == 'add_sibling':
+                return root.split_direction == 'horizontal' and len(root.children) >= 3
+            return nested and all(cell.image_path and not cell.is_placeholder
+                                  for cell in root.get_all_leaves())
         if key == 'swap':
             return project.cells[0].image_path == self.paths[1] and project.cells[1].image_path == self.paths[0]
         if key == 'crop':
@@ -923,6 +1222,9 @@ class TutorialController(QObject):
         'label_size': ('Select a label', '选中标注'),
         'split_cols': ('Split third panel', '拆分第三个面板'),
         'select_subcell': ('Select the new sub-cell', '选中新的子单元格'),
+        'nested_rows': ('Divide the right sub-cell', '细分右侧子单元格'),
+        'add_sibling': ('Add a sibling on the right', '在右侧添加同级单元格'),
+        'fill_subcells': ('Fill empty sub-cells', '填充空白子单元格'),
         'swap': ('Swap panels', '交换面板'),
         'select_cell': ('Select a panel', '选中面板'),
         'select_pair': ('Select two panels', '选中两个面板'),
@@ -934,6 +1236,7 @@ class TutorialController(QObject):
         'select_pip': ('Select inset', '选中插图'),
         'create_size_group': ('Create group', '创建组'),
         'add_to_size_group': ('Add third panel', '添加第三个面板'),
+        'open_align_plots': ('Open Align Plot Areas', '打开对齐绘图区'),
     }
 
     #: target -> Inspector widget attribute name, for steps that highlight a
@@ -973,6 +1276,14 @@ class TutorialController(QObject):
                     ancestor.set_collapsed(False, animate=False)
             if field.isVisible():
                 widget, rect, compact = field, field.rect(), True
+        elif target == 'division_panel':
+            bounds = QRectF()
+            for cell in self.tab.project.cells[2].get_all_leaves():
+                item = self.tab.scene.cell_items.get(cell.id)
+                if item is not None:
+                    bounds = bounds.united(item.sceneBoundingRect())
+            rect = (self.tab.view.mapFromScene(bounds).boundingRect().intersected(widget.rect())
+                    if not bounds.isEmpty() else QRect())
         elif target.startswith('group_label_'):
             side = target.rsplit('_', 1)[-1]
             index = ('top', 'bottom', 'left', 'right').index(side)
@@ -1127,6 +1438,39 @@ class TutorialController(QObject):
             # highlighted ratio field is actually on screen.
             self.window.inspector.subcell_group.set_collapsed(False, animate=False)
             self.window.inspector.subcell_group.show()
+        elif self.lesson == 'divide_cells' and action == 'nested_rows':
+            from src.app.commands import SplitCellCommand
+            root = self.tab.project.cells[2]
+            if (root.split_direction != 'horizontal' or len(root.children) < 2
+                    or any(child.split_direction == 'vertical' and len(child.children) >= 2
+                           for child in root.children)
+                    or not root.children[-1].is_leaf):
+                return
+            self.tab.undo_stack.push(SplitCellCommand(
+                self.tab.project, root.children[-1].id, 'vertical', count=2,
+                update_callback=self.window._refresh_and_update))
+        elif self.lesson == 'divide_cells' and action == 'add_sibling':
+            root = self.tab.project.cells[2]
+            if (root.split_direction != 'horizontal' or not root.children
+                    or len(root.children) >= 3 or not root.children[0].is_leaf):
+                return
+            self.window._ctx_wrap_and_insert(root.children[0].id, 'horizontal', 'after')
+        elif self.lesson == 'divide_cells' and action == 'fill_subcells':
+            root = self.tab.project.cells[2]
+            if root.is_leaf:
+                return
+            blanks = [cell for cell in root.get_all_leaves() if not cell.image_path or cell.is_placeholder]
+            if not blanks:
+                return
+            stack = self.tab.undo_stack
+            stack.beginMacro(text('Fill empty sub-cells', '填充空白子单元格'))
+            try:
+                for index, cell in enumerate(blanks):
+                    stack.push(_FillSubcellImageCommand(
+                        self.tab.project, cell, self.paths[index % len(self.paths)],
+                        self.window._refresh_and_update))
+            finally:
+                stack.endMacro()
         elif action == 'swap':
             from src.app.commands import SwapCellsCommand
             first, second = self.tab.project.cells[0], self.tab.project.cells[1]
@@ -1198,6 +1542,14 @@ class TutorialController(QObject):
                 return
             self._select_cells(2)
             self.window._on_size_group_add_to_existing(group_id)
+        # ── align_plots ──
+        elif action == 'open_align_plots':
+            if self._plots_aligned():
+                return
+            self._select_cells(0, 1, 2)
+            # Modal: the card is blocked until the dialog closes, and the
+            # dialog's own Select → Mark → Match → Apply guidance takes over.
+            self.window._on_align_plot_areas([cell.id for cell in self.tab.project.cells])
         # ── labels_titles ──
         elif action == 'select_pair':
             self._select_cells(0, 1)

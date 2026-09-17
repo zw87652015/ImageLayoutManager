@@ -14,6 +14,22 @@ def panel_mm_per_unit(project, cell, unit_w: float, unit_h: float,
     """
     from src.model.layout_engine import LayoutEngine
 
+    if any(cell.id in getattr(group, 'cell_ids', [])
+           for group in getattr(project, 'plot_alignment_groups', [])):
+        from src.utils.plot_alignment import resolve_image_placements
+        if layout_result is None:
+            layout_result = LayoutEngine.calculate_layout(project)
+        placements = getattr(layout_result, '_image_placements', None)
+        if placements is None:
+            placements = resolve_image_placements(project, layout_result)
+        placement = placements.placements.get(cell.id)
+        if placement is not None and unit_w > 0 and unit_h > 0:
+            cl, ct, cr, cb = placement.crop
+            crop_w, crop_h = unit_w * (cr - cl), unit_h * (cb - ct)
+            if placement.rotation % 180:
+                crop_w, crop_h = crop_h, crop_w
+            return min(placement.rect[2] / crop_w, placement.rect[3] / crop_h)
+
     if content_size_mm is None:
         if layout_result is None:
             layout_result = LayoutEngine.calculate_layout(project)

@@ -21,7 +21,7 @@ from src.app.motion import install_button_feedback
 def section_label(text: str) -> QLabel:
     lbl = QLabel(text)
     f = lbl.font()
-    f.setWeight(QFont.Weight.DemiBold)
+    f.setWeight(QFont.Weight.Medium)
     lbl.setFont(f)
     return lbl
 

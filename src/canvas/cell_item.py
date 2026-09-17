@@ -416,6 +416,7 @@ class CellItem(QGraphicsRectItem):
         self.image_path = None
         self._svg_override_bytes = None
         self._raster_override = None
+        self._image_placement = None
         self.fit_mode = FitMode.CONTAIN
         self.align_h = "center"  # left, center, right
         self.align_v = "center"  # top, center, bottom
@@ -628,6 +629,13 @@ class CellItem(QGraphicsRectItem):
 
     def _get_full_image_rect(self):
         """Item-local rect where the FULL (uncropped) image would be drawn."""
+        if self._image_placement is not None and not self._in_crop_mode:
+            from src.utils.plot_alignment import rotate_box
+            placement = self._image_placement
+            cl, ct, cr, cb = rotate_box(placement.crop, placement.rotation)
+            x, y, width, height = placement.rect
+            full_w, full_h = width / (cr - cl), height / (cb - ct)
+            return QRectF(x - cl * full_w, y - ct * full_h, full_w, full_h)
         if not self._pixmap or self._pixmap.isNull():
             return None
         rect = self.rect()
@@ -653,6 +661,8 @@ class CellItem(QGraphicsRectItem):
 
     def _get_crop_canvas_rect(self):
         """Item-local rect of the currently visible (cropped) region."""
+        if self._image_placement is not None and not self._in_crop_mode:
+            return QRectF(*self._image_placement.rect)
         full = self._get_full_image_rect()
         if full is None:
             return None
@@ -990,11 +1000,12 @@ class CellItem(QGraphicsRectItem):
                      scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0,
                      scale_bar_custom_text=None, scale_bar_text_size_mm=2.0, scale_bar_unit="µm",
                      crop_left=0.0, crop_top=0.0, crop_right=1.0, crop_bottom=1.0,
-                     svg_override_bytes=None, raster_override=None):
+                     svg_override_bytes=None, raster_override=None, *, image_placement=None):
         if self.image_path:
             self.proxy.unsubscribe(self.image_path, self.on_thumbnail_ready)
         self._svg_override_bytes = svg_override_bytes
         self._raster_override = raster_override
+        self._image_placement = image_placement
         self.image_path = image_path
         self.fit_mode = FitMode(fit_mode)
         self.rotation = rotation
@@ -1134,6 +1145,10 @@ class CellItem(QGraphicsRectItem):
 
     def _pip_origin_rect(self, pip, content_rect: QRectF) -> QRectF:
         """Origin box on parent image (zoom type only), in item coords."""
+        if self._image_placement is not None:
+            from src.export.image_exporter import ImageExporter
+            return ImageExporter._placed_source_rect(self._image_placement,
+                (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom))
         cr = content_rect
         return QRectF(
             cr.x() + pip.crop_left * cr.width(),
@@ -1372,6 +1387,21 @@ class CellItem(QGraphicsRectItem):
         MIN_SIZE = 0.05
 
         mode = self._pip_drag_mode
+        if mode.startswith('origin_') and self._image_placement is not None:
+            full = self._get_full_image_rect()
+            dx_norm = (item_pos.x() - start.x()) / full.width()
+            dy_norm = (item_pos.y() - start.y()) / full.height()
+            rotation = self._image_placement.rotation % 360
+            if rotation == 90:
+                dx_norm, dy_norm = dy_norm, -dx_norm
+            elif rotation == 180:
+                dx_norm, dy_norm = -dx_norm, -dy_norm
+            elif rotation == 270:
+                dx_norm, dy_norm = -dy_norm, dx_norm
+            if mode.startswith('origin_resize_'):
+                directions = 'nesw'
+                mode = 'origin_resize_' + ''.join(directions[(directions.index(d) - rotation // 90) % 4]
+                                                  for d in mode.split('_')[-1])
         ox, oy, ow, oh = self._pip_drag_old_geom
 
         if mode == "move":
@@ -1541,7 +1571,7 @@ class CellItem(QGraphicsRectItem):
         painter.setPen(QPen(QColor(0, 0, 0, 140), 1))
         painter.drawRoundedRect(badge_rect, 3, 3)
         # Group name text (first 3 chars)
-        font = QFont("Arial")
+        font = QFont()
         font.setPixelSize(max(8, size_px - 4))
         font.setBold(True)
         painter.setFont(font)
@@ -1615,6 +1645,27 @@ class CellItem(QGraphicsRectItem):
 
         if self._in_crop_mode:
             self._draw_image_crop_mode(painter, content_rect)
+            return
+
+        placement = self._image_placement
+        if placement is not None:
+            target = QRectF(*placement.rect)
+            cl, ct, cr, cb = placement.crop
+            source = QRectF(cl * self._pixmap.width(), ct * self._pixmap.height(),
+                            (cr - cl) * self._pixmap.width(), (cb - ct) * self._pixmap.height())
+            width, height = target.width(), target.height()
+            if placement.rotation % 180:
+                width, height = height, width
+            painter.save()
+            try:
+                painter.setClipRect(QRectF(*placement.clip_rect), Qt.ClipOperation.IntersectClip)
+                painter.setClipRect(target, Qt.ClipOperation.IntersectClip)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+                painter.translate(target.center())
+                painter.rotate(placement.rotation)
+                painter.drawPixmap(QRectF(-width / 2, -height / 2, width, height), self._pixmap, source)
+            finally:
+                painter.restore()
             return
 
         pix_w = self._pixmap.width()
@@ -1825,6 +1876,9 @@ class CellItem(QGraphicsRectItem):
         except Exception:
             orig_w, orig_h = 1000, 1000
         
+        from src.utils.plot_alignment import get_source_size
+        orig_w, orig_h = get_source_size(img_path) or (orig_w, orig_h)
+
         # Apply crop
         cl, ct, cr, cb = crop
         crop_w_frac = max(0.001, cr - cl)
@@ -1920,7 +1974,12 @@ class CellItem(QGraphicsRectItem):
         """Draw scale bar on the main image."""
         params = self._get_scale_bar_params(self)
         crop = (self.crop_left, self.crop_top, self.crop_right, self.crop_bottom)
-        self._draw_scale_bar_logic(painter, rect, params, self.image_path, crop, self.rotation, self.fit_mode, self.padding)
+        if self._image_placement is not None:
+            self._draw_scale_bar_logic(painter, QRectF(*self._image_placement.rect), params,
+                                      self.image_path, crop, self.rotation, FitMode.CONTAIN)
+        else:
+            self._draw_scale_bar_logic(painter, rect, params, self.image_path, crop, self.rotation,
+                                      self.fit_mode, (0, 0, 0, 0) if self._freeform else self.padding)
 
     def _update_tooltip(self):
         """Build tooltip from image metadata."""

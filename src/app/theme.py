@@ -13,7 +13,7 @@ Public API (stable — do not change signatures):
                                              layer thumbnails, etc.)
 """
 import os
-from PyQt6.QtGui import QPalette, QColor
+from PyQt6.QtGui import QPalette, QColor, QFont, QFontDatabase
 
 # Resolve assets directory: works both in dev and inside a PyInstaller bundle.
 def _assets_dir() -> str:
@@ -65,6 +65,7 @@ _TOKENS_LIGHT = {
     "on_accent":     "#FFFFFF",
     # Semantic
     "danger":        "#DC2626",
+    "success":       "#15803D",
     # Canvas helpers (not QSS — consumed by cell_item / canvas_view paint)
     "placeholder":   "#AEAEB2",
     "grid_line":     "#C7C7CC",
@@ -97,6 +98,7 @@ _TOKENS_DARK = {
     "accent_ring":   "rgba(34, 211, 238, 0.40)",
     "on_accent":     "#001018",
     "danger":        "#F87171",
+    "success":       "#4ADE80",
     "placeholder":   "#8E8E93",
     "grid_line":     "#48484A",
     "radius_panel":  "6px",
@@ -132,10 +134,36 @@ def _palette_tokens_to_roles(tokens: dict) -> dict:
 # correctly over panel / chrome surfaces.
 
 _QSS_TEMPLATE = """
+    QDialog#plotAlignmentDialog QPushButton,
+    QDialog#plotAlignmentDialog QPushButton[accent="true"] {
+        padding: 5px 8px;
+        font-weight: 400;
+    }
+    QDialog#plotAlignmentDialog QToolButton {
+        border: 1px solid %(border)s;
+        border-radius: %(radius_button)s;
+        padding: 4px 8px;
+        background: %(surface)s;
+    }
+    QDialog#plotAlignmentDialog QToolButton:hover,
+    QDialog#plotAlignmentDialog QToolButton:focus {
+        border-color: %(accent)s;
+    }
+    QDialog#plotAlignmentDialog QTableWidget {
+        border: 1px solid %(border)s;
+    }
+    QDialog#plotAlignmentDialog QTableWidget[plotGuideTarget="true"],
+    QDialog#plotAlignmentDialog QComboBox[plotGuideTarget="true"] {
+        border-color: %(accent)s;
+    }
+    QDialog#plotAlignmentDialog QHeaderView::section,
+    QDialog#plotAlignmentDialog QLabel#plotGuidance {
+        font-weight: 500;
+        background: transparent;
+    }
     QMainWindow, QWidget {
         background-color: %(panel)s;
         color: %(text)s;
-        font-family: system-ui, "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
         font-size: %(font_base)s;
     }
 
@@ -197,7 +225,7 @@ _QSS_TEMPLATE = """
     }
     QLabel#sectionTitle {
         font-size: %(font_md)s;
-        font-weight: 700;
+        font-weight: 500;
         color: %(text)s;
         letter-spacing: 0.5px;
         background: transparent;
@@ -218,7 +246,7 @@ _QSS_TEMPLATE = """
 
     /* ── Group boxes (legacy / dialogs) ──────────────────────────── */
     QGroupBox {
-        font-weight: 600; font-size: %(font_sm)s;
+        font-weight: 500; font-size: %(font_sm)s;
         color: %(label_caps)s;
         border: 1px solid %(divider)s;
         border-radius: %(radius_panel)s;
@@ -283,7 +311,7 @@ _QSS_TEMPLATE = """
         border-radius: %(radius_button)s;
         padding: 5px 12px;
         color: %(text)s;
-        font-weight: 500;
+        font-weight: 400;
     }
     QPushButton:hover  { background: %(hover)s; border-color: %(border_strong)s; }
     QPushButton:pressed { background: %(active)s; }
@@ -293,7 +321,7 @@ _QSS_TEMPLATE = """
         background: %(accent)s;
         border-color: %(accent)s;
         color: %(on_accent)s;
-        font-weight: 600;
+        font-weight: 500;
         padding: 5px 14px;
     }
     QPushButton[accent="true"]:hover  { background: %(accent_hover)s; border-color: %(accent_hover)s; }
@@ -307,7 +335,7 @@ _QSS_TEMPLATE = """
         border: 1px solid %(accent)s;
         border-radius: %(radius_button)s;
         padding: 5px 14px;
-        font-weight: 600;
+        font-weight: 500;
     }
     QToolButton[primary="true"]:hover  { background: %(accent_hover)s; border-color: %(accent_hover)s; }
     QToolButton[primary="true"]:pressed,
@@ -317,10 +345,10 @@ _QSS_TEMPLATE = """
     /* Startup welcome page — compact "high-DPI" density; element sizes
        follow importance: modest title, small actions, tiny hints. */
     QWidget#welcomePage { background: %(panel)s; }
-    QLabel#welcomeTitle { font-size: 13pt; font-weight: 600; color: %(text)s; }
+    QLabel#welcomeTitle { font-size: 13pt; font-weight: 500; color: %(text)s; }
     QLabel#welcomeDropHint { font-size: 10px; color: %(text_tert)s; }
     QLabel#welcomeHeader {
-        font-size: 10px; font-weight: 600; color: %(text_tert)s;
+        font-size: 10px; font-weight: 500; color: %(text_tert)s;
     }
     QLabel#welcomeRecent { font-size: 11px; color: %(text)s; }
     QPushButton#welcomePrimary {
@@ -329,8 +357,8 @@ _QSS_TEMPLATE = """
         border: 1px solid %(accent)s;
         border-radius: %(radius_button)s;
         padding: 5px 14px;
-        font-size: 12px;
-        font-weight: 600;
+        font-size: %(font_base)s;
+        font-weight: 500;
         min-width: 180px;
     }
     QPushButton#welcomePrimary:hover { background: %(accent_hover)s; }
@@ -387,7 +415,7 @@ _QSS_TEMPLATE = """
         color: %(accent)s;
         border-color: %(divider)s;
         border-bottom-color: %(accent_tint)s;
-        font-weight: 600;
+        font-weight: 500;
     }
 
     /* ── Scrollbars ───────────────────────────────────────────────── */
@@ -484,6 +512,50 @@ _QSS_TEMPLATE = """
         border: 1px solid %(border)s;
         border-radius: %(radius_button)s;
         padding: 4px 8px;
+    }
+
+    QDialog#tutorialCenter { background: %(panel)s; }
+    QDialog#tutorialCenter QLabel { background: transparent; }
+    QLabel#tutorialCenterHeading, QLabel#tutorialLessonTitle {
+        font-size: %(font_base)s;
+        font-weight: 500;
+    }
+    QLabel#tutorialGroupHeading {
+        font-size: %(font_md)s;
+        font-weight: 500;
+        color: %(text_sec)s;
+    }
+    QLabel#tutorialCenterSubtitle, QLabel#tutorialLessonSummary {
+        font-size: %(font_base)s;
+        color: %(text_sec)s;
+    }
+    QLabel#tutorialCenterProgress, QLabel#tutorialLessonNumber,
+    QLabel#tutorialLessonMetadata, QLabel#tutorialLessonStatus {
+        font-size: %(font_sm)s;
+        color: %(text_sec)s;
+    }
+    QWidget#tutorialLessonList { background: transparent; }
+    QPushButton#tutorialLesson {
+        background: %(surface)s;
+        border: 1px solid %(border)s;
+        border-radius: %(radius_panel)s;
+        padding: 0;
+        font-weight: 300;
+        text-align: left;
+    }
+    QPushButton#tutorialLesson:hover {
+        background: %(surface_subtle)s;
+        border-color: %(accent)s;
+    }
+    QPushButton#tutorialLesson:focus {
+        border: 2px solid %(accent)s;
+    }
+    QPushButton#tutorialLesson:pressed {
+        background: %(accent_tint)s;
+    }
+    QPushButton#tutorialLesson QLabel { background: transparent; }
+    QPushButton#tutorialLesson[lessonState="completed"] QLabel#tutorialLessonStatus {
+        color: %(accent)s;
     }
 """
 
@@ -603,7 +675,8 @@ def apply_font_scale(app, scale: float, theme: str = LIGHT) -> float:
     Returns the clamped scale that was actually applied.
     """
     global _BASE_APP_FONT_PT
-    f = app.font()
+    f = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+    f.setWeight(QFont.Weight.Light)
     if _BASE_APP_FONT_PT is None:
         base = f.pointSizeF()
         if base <= 0:

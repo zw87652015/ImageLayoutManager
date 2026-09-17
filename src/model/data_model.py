@@ -5,7 +5,10 @@ from dataclasses import dataclass, field, fields
 from typing import List, Optional, Dict, Any
 from .enums import FitMode, LabelPosition, PageSizePreset
 from src.version import APP_VERSION
-from .migrations import PROJECT_SCHEMA_VERSION, migrate_project_data
+from .migrations import (
+    PROJECT_SCHEMA_VERSION, migrate_project_data,
+    validate_plot_area, validate_plot_alignment_group,
+)
 
 @dataclass
 class TextItem:
@@ -276,6 +279,53 @@ class SizeGroup:
 
 
 @dataclass
+class PlotArea:
+    left: float = 0.0
+    top: float = 0.0
+    right: float = 1.0
+    bottom: float = 1.0
+    source_digest: str = ''
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = {f.name: getattr(self, f.name) for f in fields(self)}
+        validate_plot_area(data)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'PlotArea':
+        validate_plot_area(data)
+        allowed = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in allowed})
+
+
+@dataclass
+class PlotAlignmentGroup:
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    name: str = 'Plot alignment'
+    cell_ids: List[str] = field(default_factory=list)
+    reference_id: str = ''
+    sizing_mode: str = 'reference'
+    baseline_mode: str = 'grid_rows'
+    row_groups: Dict[str, int] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = {f.name: getattr(self, f.name) for f in fields(self)}
+        validate_plot_alignment_group(data)
+        data['cell_ids'] = list(self.cell_ids)
+        data['row_groups'] = dict(self.row_groups)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'PlotAlignmentGroup':
+        validate_plot_alignment_group(data)
+        allowed = {f.name for f in fields(cls)}
+        clean = {k: v for k, v in data.items() if k in allowed}
+        clean['cell_ids'] = list(data['cell_ids'])
+        clean['row_groups'] = dict(data.get('row_groups', {}))
+        return cls(**clean)
+
+
+@dataclass
 class Cell:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     row_index: int = 0
@@ -341,6 +391,7 @@ class Cell:
     crop_top: float = 0.0
     crop_right: float = 1.0
     crop_bottom: float = 1.0
+    plot_area: Optional[PlotArea] = None
 
     # PiP insets
     pip_items: List[PiPItem] = field(default_factory=list)
@@ -407,6 +458,7 @@ class Cell:
             "crop_top": self.crop_top,
             "crop_right": self.crop_right,
             "crop_bottom": self.crop_bottom,
+            "plot_area": self.plot_area.to_dict() if self.plot_area is not None else None,
             "children": [c.to_dict() for c in self.children],
             "split_direction": self.split_direction,
             "split_ratios": self.split_ratios,
@@ -463,6 +515,7 @@ class Cell:
         children_data = payload.pop("children", [])
         pip_items_data = payload.pop("pip_items", [])
         regions_data = payload.pop("raster_text_regions", [])
+        plot_area_data = payload.pop("plot_area", None)
         
         # Resolve image path: try absolute first, then relative to project file
         if payload.get("image_path") and project_dir:
@@ -475,6 +528,7 @@ class Cell:
                     payload["image_path"] = relative_path
         
         cell = cls(**payload)
+        cell.plot_area = PlotArea.from_dict(plot_area_data) if plot_area_data is not None else None
         cell.children = [Cell.from_dict(c, project_dir) for c in children_data]
         cell.pip_items = [PiPItem.from_dict(p) for p in pip_items_data]
         cell.raster_text_regions = [RasterTextRegion.from_dict(r) for r in regions_data]
@@ -653,6 +707,7 @@ class Project:
     # Layout
     rows: List[RowTemplate] = field(default_factory=list)
     cells: List[Cell] = field(default_factory=list)
+    plot_alignment_groups: List[PlotAlignmentGroup] = field(default_factory=list)
 
     # Size Groups (force shared W/H across member cells in grid mode)
     size_groups: List[SizeGroup] = field(default_factory=list)
@@ -818,6 +873,7 @@ class Project:
             "row_alignment": self.row_alignment,
             "rows": [r.to_dict() for r in self.rows],
             "cells": [c.to_dict() for c in self.cells],
+            "plot_alignment_groups": [g.to_dict() for g in self.plot_alignment_groups],
             "size_groups": [g.to_dict() for g in self.size_groups],
             "svg_text_groups": [g.to_dict() for g in self.svg_text_groups],
             "text_items": [t.to_dict() for t in self.text_items],
@@ -873,6 +929,7 @@ class Project:
         
         p.rows = [RowTemplate.from_dict(r) for r in data.get("rows", [])]
         p.cells = [Cell.from_dict(c, project_dir) for c in data.get("cells", [])]
+        p.plot_alignment_groups = [PlotAlignmentGroup.from_dict(g) for g in data.get("plot_alignment_groups", [])]
         p.size_groups = [SizeGroup.from_dict(g) for g in data.get("size_groups", [])]
         p.svg_text_groups = [SvgTextGroup.from_dict(g) for g in data.get("svg_text_groups", [])]
         p.text_items = [TextItem.from_dict(t) for t in data.get("text_items", [])]

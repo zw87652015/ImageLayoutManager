@@ -9,6 +9,26 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.4.1", "2026-09-18", [
+        {"en": "Align Plot Areas: mark each chart's plotting area, then match plot heights and bottom axes across panels in grid or freeform layouts, without editing the source files. Open it from the arrow beside Auto Layout, the Layout menu, a panel's right-click menu, or the Inspector's new Plot alignment row.",
+         "zh": "新增“对齐绘图区”：标记每张图的绘图区，即可在网格或自由排布中统一绘图高度并对齐底部坐标轴，不修改源文件。可从“自动布局”旁的箭头、“布局”菜单、面板右键菜单或检查器中新增的“绘图区对齐”行打开。"},
+        {"en": "Alignment is saved with .figlayout and .figpack projects; projects saved by this version need version 3.4.1 or later to open.",
+         "zh": "对齐设置会随 .figlayout 和 .figpack 工程保存；由本版本保存的工程需使用 3.4.1 或更高版本打开。"},
+        {"en": "New tutorial lessons: Divide cells and Align plot areas, in a clearer learning order, with a compact lesson list.",
+         "zh": "新增教程：细分单元格、对齐绘图区，学习顺序更清晰，教程列表更紧凑。"},
+        {"en": "Export all source images from the current project to a folder in their original formats from the File menu.",
+         "zh": "可从“文件”菜单将当前项目使用的全部源图片按原始格式导出到文件夹。"},
+        {"en": "In the first-figure lesson, the Save step completes when you click Save or press Ctrl+S, even if you cancel the file dialog.",
+         "zh": "在“第一张图”教程中，点击“保存”或按 Ctrl+S 即可完成保存步骤，即使取消了文件对话框。"},
+        {"en": "Subdivide is now directly in a cell's right-click menu.",
+         "zh": "“细分为子单元格”现在直接位于单元格右键菜单中。"},
+        {"en": "Lighter interface text in both languages.",
+         "zh": "中英文界面文字更纤细。"},
+        {"en": "Inset images default to a black border in the top-right corner.",
+         "zh": "插图默认使用黑色边框并置于右上角。"},
+        {"en": "Fixed a flicker when folding Inspector sections.",
+         "zh": "修复折叠设置区时的闪烁。"},
+    ]),
     ("3.4.0", "2026-09-11", [
         {"en": "Match selected text sizes across SVG and raster panels without changing the source files.",
          "zh": "无需修改源文件，即可统一 SVG 和位图面板中所选文字的大小。"},
@@ -24,8 +44,6 @@ CHANGELOG = [
          "zh": "新增引导教程。"},
         {"en": "In freeform mode, drag panels in the Layers panel to reorder them like Photoshop layers; PiP insets can be reordered the same way.",
          "zh": "自由排布模式下，可在图层面板中像 Photoshop 图层一样拖动面板调整前后顺序；画中画插图也可以同样排序。"},
-        {"en": "Providing tutorial lessons for new users.",
-         "zh": "为新用户提供了教学模式。"},
     ]),
     ("3.3.5", "2026-08-21", [
         {"en": "New shared labels are numbered automatically: Label 1, Label 2, and so on.",

@@ -19,7 +19,8 @@ class AutoLayout:
                         if renderer.isValid():
                             size = renderer.defaultSize()
                             if size.height() > 0:
-                                ratio = size.width() / size.height()
+                                ratio = (size.width() * max(0.001, cell.crop_right - cell.crop_left)
+                                         / (size.height() * max(0.001, cell.crop_bottom - cell.crop_top)))
                                 if getattr(cell, 'rotation', 0) in [90, 270]:
                                     ratio = 1.0 / ratio if ratio != 0 else 0
                                 aspect_ratios[cell.id] = ratio
@@ -32,7 +33,8 @@ class AutoLayout:
                                 page = doc[0]
                                 rect = page.rect
                                 if rect.height > 0:
-                                    ratio = rect.width / rect.height
+                                    ratio = (rect.width * max(0.001, cell.crop_right - cell.crop_left)
+                                             / (rect.height * max(0.001, cell.crop_bottom - cell.crop_top)))
                                     if getattr(cell, 'rotation', 0) in [90, 270]:
                                         ratio = 1.0 / ratio if ratio != 0 else 0
                                     aspect_ratios[cell.id] = ratio
@@ -85,7 +87,8 @@ class AutoLayout:
                         if renderer.isValid():
                             size = renderer.defaultSize()
                             if size.height() > 0:
-                                ratio = size.width() / size.height()
+                                ratio = (size.width() * max(0.001, cell.crop_right - cell.crop_left)
+                                         / (size.height() * max(0.001, cell.crop_bottom - cell.crop_top)))
                                 # Adjust ratio if rotated 90 or 270 degrees
                                 if getattr(cell, 'rotation', 0) in [90, 270]:
                                     ratio = 1.0 / ratio if ratio != 0 else 0
@@ -99,7 +102,8 @@ class AutoLayout:
                                 page = doc[0]
                                 rect = page.rect
                                 if rect.height > 0:
-                                    ratio = rect.width / rect.height
+                                    ratio = (rect.width * max(0.001, cell.crop_right - cell.crop_left)
+                                             / (rect.height * max(0.001, cell.crop_bottom - cell.crop_top)))
                                     # Adjust ratio if rotated 90 or 270 degrees
                                     if getattr(cell, 'rotation', 0) in [90, 270]:
                                         ratio = 1.0 / ratio if ratio != 0 else 0

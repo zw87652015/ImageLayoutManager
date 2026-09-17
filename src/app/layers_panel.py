@@ -242,7 +242,7 @@ class LayersDelegate(QStyledItemDelegate):
             meta  = index.data(_ROLE_META) or ""
             fnt = QFont(painter.font())
             fnt.setPointSizeF(max(7.0, fnt.pointSizeF() * 0.85))
-            fnt.setWeight(QFont.Weight.DemiBold)
+            fnt.setWeight(QFont.Weight.Medium)
             painter.setFont(fnt)
             fm = QFontMetrics(fnt)
             painter.setPen(col)
@@ -285,7 +285,7 @@ class LayersDelegate(QStyledItemDelegate):
         if badge and itype in ("cell_filled", "pip_item"):
             badge_font = QFont(painter.font())
             badge_font.setPointSizeF(max(6.5, badge_font.pointSizeF() * 0.78))
-            badge_font.setWeight(QFont.Weight.DemiBold)
+            badge_font.setWeight(QFont.Weight.Medium)
             badge_fm = QFontMetrics(badge_font)
             badge_w = badge_fm.horizontalAdvance(badge) + 10
             badge_h = badge_fm.height() + 2
@@ -315,7 +315,7 @@ class LayersDelegate(QStyledItemDelegate):
             z_text = f"Z{z_val:+d}"
             z_font = QFont(painter.font())
             z_font.setPointSizeF(max(6.5, z_font.pointSizeF() * 0.78))
-            z_font.setWeight(QFont.Weight.DemiBold)
+            z_font.setWeight(QFont.Weight.Medium)
             z_fm = QFontMetrics(z_font)
             z_w = z_fm.horizontalAdvance(z_text) + 10
             z_h = z_fm.height() + 2
@@ -411,7 +411,7 @@ class LayersPanel(QWidget):
         # Header
         self.header_label = QLabel(tr("layers_header"))
         self.header_label.setStyleSheet(
-            "font-weight: 600; font-size: 11px; letter-spacing: 1px;"
+            "font-weight: 500; font-size: 11px; letter-spacing: 1px;"
             " padding: 0 2px; color: #888888;"
         )
         layout.addWidget(self.header_label)

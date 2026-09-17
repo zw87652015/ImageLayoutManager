@@ -142,7 +142,7 @@ class AboutDialog(QDialog):
         title = QLabel(tr("about_app_name"))
         title_font = QFont()
         title_font.setPointSize(18)
-        title_font.setBold(True)
+        title_font.setWeight(QFont.Weight.Medium)
         title.setFont(title_font)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(title)

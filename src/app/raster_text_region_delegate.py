@@ -128,7 +128,7 @@ class RasterTextRegionDelegate(QStyledItemDelegate):
         line_h = metrics.height()
         title_rect = QRect(left, rect.top() + 6, width, line_h + 2)
         bold = QFont(option.font)
-        bold.setWeight(QFont.Weight.DemiBold)
+        bold.setWeight(QFont.Weight.Medium)
         painter.setFont(bold)
         painter.setPen(text)
         title = QFontMetrics(bold).elidedText(details['text'], Qt.TextElideMode.ElideRight, width)

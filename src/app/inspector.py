@@ -209,6 +209,7 @@ class CollapsibleSection(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._header = QWidget()
         self._header.setObjectName("sectionHead")
@@ -332,6 +333,7 @@ class Inspector(QWidget):
     size_group_pinned_changed = pyqtSignal(str, float, float)      # (group_id, w_mm, h_mm) — 0 = auto
     size_group_rename_requested = pyqtSignal(str, str)             # (group_id, new_name)
     size_group_delete_requested = pyqtSignal(str)                  # group_id
+    plot_alignment_edit_requested = pyqtSignal(str)                # cell_id
     # Selected numbering-label item (placement override / tier / style lock)
     label_item_property_changed = pyqtSignal(str, dict)            # (text_item_id, changes)
     # Group Label (spanning / row-title label) signals
@@ -678,6 +680,24 @@ class Inspector(QWidget):
         self.size_group_delete_btn = QPushButton()
         self.size_group_delete_btn.clicked.connect(self._emit_size_group_delete)
         self.cell_layout.addRow(self.size_group_delete_btn)
+
+        # --- Plot alignment (read-only membership + shortcut to the dialog) --
+        plot_alignment_row = QWidget()
+        plot_alignment_layout = QHBoxLayout(plot_alignment_row)
+        plot_alignment_layout.setContentsMargins(0, 0, 0, 0)
+        plot_alignment_layout.setSpacing(6)
+        self.plot_alignment_value = QLabel("")
+        self.plot_alignment_value.setObjectName("cellPlotAlignmentValue")
+        self.plot_alignment_value.setWordWrap(True)
+        self.plot_alignment_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.plot_alignment_edit_btn = QPushButton(tr("plot_alignment_create"))
+        self.plot_alignment_edit_btn.clicked.connect(self._emit_plot_alignment_edit)
+        plot_alignment_layout.addWidget(self.plot_alignment_value, 1)
+        plot_alignment_layout.addWidget(self.plot_alignment_edit_btn)
+        self._plot_alignment_label = self._fl("lbl_plot_alignment")
+        self.cell_layout.addRow(self._plot_alignment_label, plot_alignment_row)
+        self._plot_alignment_row = plot_alignment_row
+        self._plot_alignment_cell_id: Optional[str] = None
 
         # Internal state
         self._current_size_group_id: Optional[str] = None
@@ -1833,6 +1853,27 @@ class Inspector(QWidget):
             return
         self.size_group_rename_requested.emit(self._current_size_group_id, new_name)
 
+    def _populate_plot_alignment_row(self, data: dict) -> None:
+        info = data.get("_plot_alignment")
+        cell_id = data.get("id")
+        visible = bool(cell_id) and "_plot_alignment" in data
+        self._plot_alignment_cell_id = cell_id if visible else None
+        for w in (self._plot_alignment_label, self._plot_alignment_row):
+            w.setVisible(visible)
+        if not visible:
+            return
+        if info:
+            self.plot_alignment_value.setText(tr("plot_alignment_members").format(name=info.get("name", ""), count=info.get("member_count", 0)))
+            self.plot_alignment_edit_btn.setText(tr("plot_alignment_edit"))
+        else:
+            self.plot_alignment_value.setText(tr("plot_alignment_none"))
+            self.plot_alignment_edit_btn.setText(tr("plot_alignment_create"))
+        self.plot_alignment_value.setToolTip(tr("tooltip_align_plots"))
+
+    def _emit_plot_alignment_edit(self):
+        if self._plot_alignment_cell_id:
+            self.plot_alignment_edit_requested.emit(self._plot_alignment_cell_id)
+
     def _emit_size_group_delete(self):
         if not self._current_size_group_id:
             return
@@ -2143,6 +2184,7 @@ class Inspector(QWidget):
                     None if sg is MIXED else sg,
                     data.get("_size_groups", []),
                 )
+                self._populate_plot_alignment_row({})
                 self.blockSignals(False)
             return
 
@@ -2316,6 +2358,7 @@ class Inspector(QWidget):
                 data.get("size_group_id"),
                 data.get("_size_groups", []),
             )
+            self._populate_plot_alignment_row(data)
 
             corner_labels = data.get("corner_labels", {}) if data else {}
             self.corner_label_tl.setText(corner_labels.get("top_left_inside", ""))

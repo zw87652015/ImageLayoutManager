@@ -3,15 +3,164 @@ from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtWidgets import QGraphicsTextItem, QStyleOptionGraphicsItem
 from PyQt6.QtSvg import QSvgRenderer
 from PIL import Image
+from dataclasses import dataclass, field
+import ntpath
 import os
+import stat
+import unicodedata
 from src.model.data_model import Project, Cell
 from src.model.enums import FitMode
 from src.model.layout_engine import LayoutEngine
+from src.utils.figpack.encoding import sanitize_basename
+from src.utils.plot_alignment import resolve_image_placements, content_rect as cell_content_rect
+
+
+@dataclass(frozen=True)
+class SourceImage:
+    path: str | None
+    filename: str
+    reference: str
+
+
+@dataclass
+class SourceImageExportResult:
+    copied: list[str] = field(default_factory=list)
+    failures: list[tuple[str, str]] = field(default_factory=list)
+    cancelled: bool = False
 
 
 class ImageExporter:
     """Export project to raster image formats (TIFF, JPG, PNG)."""
     
+    @staticmethod
+    def collect_source_images(project: Project, project_dir: str | None = None,
+                              bundle_dir: str | None = None) -> list[SourceImage]:
+        sources: list[SourceImage] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add_source(current: str | None, sticky: str | None = None):
+            if not current and not (current is None and sticky):
+                return
+            reference = sticky or current
+            if current:
+                if os.path.isabs(current):
+                    candidates = [current]
+                else:
+                    candidates = [os.path.join(directory, current)
+                                  for directory in (bundle_dir, project_dir)
+                                  if directory is not None]
+                    if not candidates:
+                        candidates = [os.path.join(os.getcwd(), current)]
+                path = next((candidate for candidate in candidates if os.path.isfile(candidate)),
+                            candidates[0])
+                path = os.path.normcase(os.path.realpath(path))
+                key = ('path', path)
+            else:
+                path = None
+                key = ('missing', reference)
+            if key in seen:
+                return
+            seen.add(key)
+            sources.append(SourceImage(
+                path=path, filename=sanitize_basename(ntpath.basename(reference)),
+                reference=reference,
+            ))
+
+        for cell in project.get_all_leaf_cells():
+            add_source(cell.image_path, cell.original_source_path)
+            for pip in cell.pip_items:
+                if pip.pip_type == 'external' and pip.image_path:
+                    add_source(pip.image_path)
+        return sources
+
+    @staticmethod
+    def export_source_images(sources: list[SourceImage], output_dir: str, *,
+                             progress=None, cancel=None) -> SourceImageExportResult:
+        if not os.path.isdir(output_dir):
+            raise NotADirectoryError(f'Output directory does not exist or is not a directory: {output_dir}')
+        output_dir = os.path.abspath(output_dir)
+        result = SourceImageExportResult()
+
+        def name_key(name: str) -> str:
+            return unicodedata.normalize('NFC', name).casefold()
+
+        def source_opener(path: str, flags: int) -> int:
+            return os.open(path, flags | getattr(os, 'O_NONBLOCK', 0))
+
+        with os.scandir(output_dir) as entries:
+            used_names = {name_key(entry.name) for entry in entries}
+        total = len(sources)
+        for completed, source in enumerate(sources):
+            if cancel is not None and cancel():
+                result.cancelled = True
+                break
+            if progress is not None:
+                progress(completed, total, source.reference)
+            destination = None
+            destination_stat = None
+            copied = False
+            failure = None
+            try:
+                if source.path is None:
+                    raise FileNotFoundError('Source image is unavailable; its current image path is missing.')
+                if not stat.S_ISREG(os.stat(source.path).st_mode):
+                    raise OSError(f'Source image is not a regular file: {source.path}')
+                with open(source.path, 'rb', opener=source_opener) as source_file:
+                    if not stat.S_ISREG(os.fstat(source_file.fileno()).st_mode):
+                        raise OSError(f'Source image is not a regular file: {source.path}')
+                    filename = sanitize_basename(ntpath.basename(source.filename))
+                    stem, extension = os.path.splitext(filename)
+                    suffix = 0
+                    while True:
+                        if cancel is not None and cancel():
+                            result.cancelled = True
+                            break
+                        candidate = filename if suffix == 0 else f'{stem}_{suffix}{extension}'
+                        suffix += 1
+                        key = name_key(candidate)
+                        if key in used_names:
+                            continue
+                        used_names.add(key)
+                        candidate_path = os.path.join(output_dir, candidate)
+                        try:
+                            output_file = open(candidate_path, 'xb')
+                        except FileExistsError:
+                            continue
+                        destination = candidate_path
+                        with output_file:
+                            destination_stat = os.fstat(output_file.fileno())
+                            while True:
+                                if cancel is not None and cancel():
+                                    result.cancelled = True
+                                    break
+                                chunk = source_file.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                output_file.write(chunk)
+                        break
+                if not result.cancelled:
+                    copied = True
+                    result.copied.append(destination)
+            except (OSError, ValueError) as error:
+                failure = str(error) or type(error).__name__
+            finally:
+                if destination is not None and not copied:
+                    try:
+                        current_stat = os.stat(destination, follow_symlinks=False)
+                        if destination_stat is None or os.path.samestat(destination_stat, current_stat):
+                            os.unlink(destination)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as error:
+                        failure = f'{failure + "; " if failure else ""}Could not remove partial file: {error}'
+            if failure is not None:
+                result.failures.append((source.reference, failure))
+            if progress is not None:
+                progress(completed if result.cancelled else completed + 1, total, source.reference)
+            if result.cancelled:
+                break
+        return result
+
     @staticmethod
     def export(project: Project, output_path: str, format: str = "TIFF",
                color_mode: str = "rgb", icc_profile_path: str = None,
@@ -26,6 +175,8 @@ class ImageExporter:
         """
         # Calculate Layout (mm)
         layout_result = LayoutEngine.calculate_layout(project)
+        layout_result._image_placements = resolve_image_placements(project, layout_result, strict=True)
+        layout_result._image_placements_strict = True
 
         # If a user-defined export region is set, the raster canvas shrinks to
         # the region size and content is translated so the region origin maps
@@ -86,30 +237,26 @@ class ImageExporter:
                     x_mm * scale, y_mm * scale, w_mm * scale, h_mm * scale
                 )
 
-                p_top = cell.padding_top * scale
-                p_right = cell.padding_right * scale
-                p_bottom = cell.padding_bottom * scale
-                p_left = cell.padding_left * scale
-                content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
+                content_rect = QRectF(*(v * scale for v in cell_content_rect(
+                    cell, (x_mm, y_mm, w_mm, h_mm), project.layout_mode)))
+                placement = layout_result._image_placements.placements.get(cell.id)
 
                 if content_rect.width() <= 0 or content_rect.height() <= 0:
                     continue
 
-                if cell.image_path and os.path.exists(cell.image_path):
-                    rotation = getattr(cell, 'rotation', 0)
-                    crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
-                            getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
+                if placement is not None:
                     from src.utils.text_overrides import overrides_for_cell
                     svg_override, raster_override = overrides_for_cell(
                         project, cell, layout_result,
                         (content_rect.width() / scale, content_rect.height() / scale))
-                    ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop,
-                                              svg_override, raster_override)
+                    ImageExporter._draw_placed_image(painter, cell, placement, scale,
+                                                     svg_override, raster_override)
 
                     if getattr(cell, 'scale_bar_enabled', False):
-                        ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
+                        ImageExporter._draw_scale_bar(painter, cell,
+                            QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain')
 
-                ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
+                ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale, placement)
 
             # 1b. Draw Label Cells (labels living in their own reserved strip)
             ImageExporter._draw_label_cells(painter, project, layout_result, scale)
@@ -149,39 +296,43 @@ class ImageExporter:
             image.save(output_path, "PNG")
     
     @staticmethod
-    def _paint_scene(painter: QPainter, project: Project, layout_result, scale: float):
+    def _paint_scene(painter: QPainter, project: Project, layout_result, scale: float, *, cell_painter=None):
         """Shared painting logic: draws all cells, labels, and text items.
 
         Extracted so raster export, in-memory render, and SVG export can share it.
         """
+        placements = getattr(layout_result, '_image_placements', None)
+        if placements is None or not getattr(layout_result, '_image_placements_strict', False):
+            placements = resolve_image_placements(project, layout_result, strict=True)
+            layout_result._image_placements = placements
+            layout_result._image_placements_strict = True
         label_rects = getattr(layout_result, 'label_rects', {})
 
         sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
         for cell in sorted_cells:
             if cell.id not in layout_result.cell_rects:
                 continue
+            if cell_painter is not None:
+                cell_painter(cell)
+                continue
             x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
             target_rect = QRectF(x_mm * scale, y_mm * scale, w_mm * scale, h_mm * scale)
-            p_top = cell.padding_top * scale
-            p_right = cell.padding_right * scale
-            p_bottom = cell.padding_bottom * scale
-            p_left = cell.padding_left * scale
-            content_rect = target_rect.adjusted(p_left, p_top, -p_right, -p_bottom)
+            content_rect = QRectF(*(v * scale for v in cell_content_rect(
+                cell, (x_mm, y_mm, w_mm, h_mm), project.layout_mode)))
+            placement = placements.placements.get(cell.id)
             if content_rect.width() <= 0 or content_rect.height() <= 0:
                 continue
-            if cell.image_path and os.path.exists(cell.image_path):
-                rotation = getattr(cell, 'rotation', 0)
-                crop = (getattr(cell, 'crop_left', 0.0), getattr(cell, 'crop_top', 0.0),
-                        getattr(cell, 'crop_right', 1.0), getattr(cell, 'crop_bottom', 1.0))
+            if placement is not None:
                 from src.utils.text_overrides import overrides_for_cell
                 svg_override, raster_override = overrides_for_cell(
                     project, cell, layout_result,
                     (content_rect.width() / scale, content_rect.height() / scale))
-                ImageExporter._draw_image(painter, cell.image_path, content_rect, cell.fit_mode, rotation, crop,
-                                          svg_override, raster_override)
+                ImageExporter._draw_placed_image(painter, cell, placement, scale,
+                                                 svg_override, raster_override)
                 if getattr(cell, 'scale_bar_enabled', False):
-                    ImageExporter._draw_scale_bar(painter, cell, content_rect, scale)
-            ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale)
+                    ImageExporter._draw_scale_bar(painter, cell,
+                        QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain')
+            ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale, placement)
 
         ImageExporter._draw_label_cells(painter, project, layout_result, scale)
         ImageExporter._draw_group_labels(painter, project, layout_result, scale)
@@ -204,6 +355,8 @@ class ImageExporter:
         so z-index ordering and label-placement logic stay in sync.
         """
         layout_result = LayoutEngine.calculate_layout(project)
+        layout_result._image_placements = resolve_image_placements(project, layout_result, strict=True)
+        layout_result._image_placements_strict = True
 
         export_region = getattr(project, 'export_region', None)
         if export_region is not None:
@@ -244,7 +397,18 @@ class ImageExporter:
         return image
 
     @staticmethod
-    def _draw_pip_items(painter: QPainter, project, cell, content_rect: QRectF, scale: float):
+    def _placed_source_rect(placement, crop, scale=1.0):
+        from src.utils.plot_alignment import rotate_box
+        cl, ct, cr, cb = rotate_box(placement.crop, placement.rotation)
+        left, top, right, bottom = rotate_box(crop, placement.rotation)
+        x, y, width, height = placement.rect
+        full_w, full_h = width / (cr - cl), height / (cb - ct)
+        return QRectF((x + (left - cl) * full_w) * scale,
+                      (y + (top - ct) * full_h) * scale,
+                      (right - left) * full_w * scale, (bottom - top) * full_h * scale)
+
+    @staticmethod
+    def _draw_pip_items(painter: QPainter, project, cell, content_rect: QRectF, scale: float, image_placement=None):
         """Draw all PiP insets for a cell onto the given content_rect."""
         pip_items = getattr(cell, 'pip_items', [])
         if not pip_items:
@@ -285,7 +449,8 @@ class ImageExporter:
                 
                 # PiP zoom type is STRETCH, external is CONTAIN
                 pip_fit = "stretch" if pip.pip_type == "zoom" else "contain"
-                ImageExporter._draw_scale_bar(painter, pip, img_rect, scale, fit_mode_override=pip_fit)
+                ImageExporter._draw_scale_bar(painter, pip, img_rect, scale, fit_mode_override=pip_fit,
+                    source_path_override=cell.image_path if pip.pip_type == 'zoom' else None)
                 
                 # Restore
                 pip.scale_bar_um_per_px = old_um
@@ -309,6 +474,9 @@ class ImageExporter:
                     (pip.crop_right - pip.crop_left) * cw,
                     (pip.crop_bottom - pip.crop_top) * ch,
                 )
+                if image_placement is not None:
+                    origin_rect = ImageExporter._placed_source_rect(image_placement,
+                        (pip.crop_left, pip.crop_top, pip.crop_right, pip.crop_bottom), scale)
                 from PyQt6.QtGui import QPen
                 open_pen = QPen(QColor(pip.origin_box_color))
                 # pt -> output units (see _draw_pip_items border comment above)
@@ -465,6 +633,65 @@ class ImageExporter:
         # naive conversion, which is the best we can do without a working CMS.
         print("[tiff-export] All ICC strategies failed; embedding profile tag on naive CMYK.")
         return pil_rgb.convert("CMYK"), profile_bytes
+
+    @staticmethod
+    def _draw_placed_image(painter: QPainter, cell, placement, scale: float,
+                           svg_override_bytes=None, raster_override=None):
+        path = cell.image_path
+        target = QRectF(*(value * scale for value in placement.rect))
+        clip = QRectF(*(value * scale for value in placement.clip_rect))
+        cl, ct, cr, cb = placement.crop
+        if target.isEmpty() or clip.isEmpty() or cr <= cl or cb <= ct:
+            return
+        width, height = target.width(), target.height()
+        if placement.rotation % 180:
+            width, height = height, width
+        local = QRectF(-width / 2, -height / 2, width, height)
+        painter.save()
+        try:
+            painter.setClipRect(clip, Qt.ClipOperation.IntersectClip)
+            painter.setClipRect(target, Qt.ClipOperation.IntersectClip)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.translate(target.center())
+            painter.rotate(placement.rotation)
+            extension = os.path.splitext(path)[1].lower()
+            if extension == '.svg':
+                from PyQt6.QtCore import QByteArray
+                from src.utils.svg_utils import sanitize_svg_bytes
+                if svg_override_bytes is None:
+                    with open(path, 'rb') as source:
+                        svg_override_bytes = source.read()
+                renderer = QSvgRenderer(QByteArray(sanitize_svg_bytes(svg_override_bytes)))
+                if renderer.isValid():
+                    full_w, full_h = width / (cr - cl), height / (cb - ct)
+                    renderer.render(painter, QRectF(-width / 2 - cl * full_w,
+                                                    -height / 2 - ct * full_h, full_w, full_h))
+            else:
+                if extension in ('.pdf', '.eps'):
+                    import fitz
+                    with fitz.open(path) as document:
+                        if not document.page_count:
+                            return
+                        pix = document[0].get_pixmap(matrix=fitz.Matrix(4, 4), alpha=True)
+                    image = QImage(pix.samples, pix.width, pix.height, pix.stride,
+                                   QImage.Format.Format_RGBA8888).copy()
+                else:
+                    from src.utils.raster_text_utils import load_raster_with_overrides
+                    raster = load_raster_with_overrides(path, raster_override)
+                    data = raster.tobytes('raw', 'RGBA')
+                    image = QImage(data, raster.width, raster.height, QImage.Format.Format_RGBA8888)
+                source = QRectF(cl * image.width(), ct * image.height(),
+                                (cr - cl) * image.width(), (cb - ct) * image.height())
+                if getattr(painter, '_svg_full_source', False):
+                    full_w, full_h = width / (cr - cl), height / (cb - ct)
+                    painter.drawImage(QRectF(-width / 2 - cl * full_w,
+                                            -height / 2 - ct * full_h, full_w, full_h), image)
+                else:
+                    painter.drawImage(local, image, source)
+        except Exception as exc:
+            print(f'Failed to export image {path}: {exc}')
+        finally:
+            painter.restore()
 
     @staticmethod
     def _draw_image(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
@@ -854,7 +1081,8 @@ class ImageExporter:
             group_label_render.draw(painter, group_label, QRectF(x, y, w, h), scale)
 
     @staticmethod
-    def _draw_scale_bar(painter: QPainter, obj, content_rect: QRectF, scale: float, fit_mode_override=None):
+    def _draw_scale_bar(painter: QPainter, obj, content_rect: QRectF, scale: float, fit_mode_override=None,
+                        source_path_override=None):
         """Draw scale bar on the exported image (works for Cell or PiPItem)."""
         # Ensure we have all necessary attributes (PiPItem/Cell compatibility)
         um_per_px = getattr(obj, "scale_bar_um_per_px", 0.1301)
@@ -874,7 +1102,7 @@ class ImageExporter:
 
         # Get image dimensions for scale calculation
         from PIL import Image
-        img_path = getattr(obj, "image_path", None)
+        img_path = source_path_override or getattr(obj, "image_path", None)
         try:
             if img_path and os.path.exists(img_path):
                 with Image.open(img_path) as img:
@@ -884,6 +1112,9 @@ class ImageExporter:
         except Exception:
             orig_w, orig_h = 1000, 1000
         
+        from src.utils.plot_alignment import get_source_size
+        orig_w, orig_h = get_source_size(img_path) or (orig_w, orig_h)
+
         # Crop
         cl = getattr(obj, "crop_left", 0.0)
         ct = getattr(obj, "crop_top", 0.0)
@@ -906,7 +1137,7 @@ class ImageExporter:
             scale_ratio = content_rect.width() / eff_pix_w
             img_rect = content_rect
         else:
-            fit_mode_str = getattr(obj, "fit_mode", "contain")
+            fit_mode_str = fit_mode_override or getattr(obj, "fit_mode", "contain")
             from src.model.enums import FitMode
             fit_mode = FitMode(fit_mode_str)
             if fit_mode == FitMode.CONTAIN:

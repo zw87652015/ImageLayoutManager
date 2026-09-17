@@ -4,7 +4,6 @@ from PyQt6.QtWidgets import (
     QHeaderView, QSizePolicy
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
 from src.app.i18n import tr, current_language
 
 
@@ -123,7 +122,7 @@ def _shortcuts_page() -> QWidget:
 
     for row, (key, desc) in enumerate(shortcuts):
         key_item = QTableWidgetItem(key)
-        key_font = QFont("Courier New", 11)
+        key_font = table.font()
         key_item.setFont(key_font)
         table.setItem(row, 0, key_item)
         table.setItem(row, 1, QTableWidgetItem(desc))
@@ -280,7 +279,7 @@ _CELLS_HTML_EN = """
 Select a row or cell to edit its properties in the Inspector.</p>
 <ul>
   <li>Use the canvas <b>+</b> controls or right-click → <b>Insert</b> to add rows and columns.</li>
-  <li>For mixed-size panels, right-click → <b>Insert → Add Sub-Cell / Subdivide</b>.
+  <li>For mixed-size panels, right-click → <b>Add Sub-Cell / Subdivide</b>.
       Add a sibling above, below, left, or right; a leaf cell can also be split into several rows or columns.</li>
   <li>Drag dividers or use <b>Sub-Cell Layout</b> in the Inspector to adjust the split.</li>
   <li>Use the right-click <b>Delete</b> menu to remove layout cells. This is different from
@@ -289,6 +288,35 @@ Select a row or cell to edit its properties in the Inspector.</p>
 <h3>Auto Layout</h3>
 <p><b>Edit → Auto Layout</b> (<code>Ctrl+Shift+A</code>) adjusts the arrangement to the images.
 Check the result and undo if it is not appropriate. Set the page dimensions and margins before final fine-tuning.</p>
+<h3>Align Plot Areas Manually</h3>
+<p>Open <b>Align Plot Areas…</b> from the arrow beside the toolbar's Auto Layout button,
+from the <b>Layout</b> menu, or directly from an image panel's right-click menu.
+The main Auto Layout button and <code>Ctrl+Shift+A</code> still arrange panels as before.</p>
+<ol>
+  <li>Check at least two image panels. An empty or single-panel selection never silently selects all images.
+      A selection belonging to one alignment opens that group for editing; the group selector also offers existing groups and <b>New alignment</b>.</li>
+  <li>Select each checked panel and drag around the plot interior, excluding axis labels, titles and legends.
+      This is a <b>marker, not a crop</b>: source labels remain visible. There is no automatic axis detection.
+      The editor always shows the full, unrotated source. Drag edges/corners to resize, drag inside to move,
+      use the wheel to zoom, and middle-drag or Space-drag to pan. Redraw, Clear mark and Next unmarked help review the panels.</li>
+  <li>Choose the reference. <b>Match reference exactly</b> keeps its placement and scale unchanged.
+      <b>Fit within cells</b> may shrink or move the reference so all panels fit their available slots.
+      Only plot height is matched; image aspect ratios are always preserved. Neither mode moves or resizes cells,
+      in either grid or freeform layouts.</li>
+  <li>Use <b>Grid rows</b> to keep each grid row's bottom baseline separate, or <b>Custom rows</b> for explicit grouping.
+      Equal row numbers share a baseline. Freeform defaults to suggested custom rows based on current vertical positions;
+      review and edit the visible row numbers rather than flattening a multi-row figure. <b>One baseline</b> is only for panels that should share one line.</li>
+  <li><b>Preview alignment</b> shows a separate project copy, the target height in millimetres and temporary plot/baseline guides.
+      Exact-reference overflow disables Apply: explicitly choose Fit, change membership, or adjust the layout.
+      Cropped-out plot areas, missing sources, changed sources and overlapping group membership also require repair.</li>
+</ol>
+<p><b>Apply</b> saves markers and alignment groups in one undoable change, without editing source files.
+<b>Cancel</b> changes neither the project nor undo history. <b>Remove alignment</b> restores normal image fitting
+while retaining marks; preview and Apply to confirm, or Cancel to keep the group. Other groups are retained.</p>
+<p>Alignment remains active after Auto Layout and later layout edits. If source bytes change, redraw the affected mark;
+do not assume the old box still identifies the same plot. Missing files are reported without clearing marks.
+Repair or remove invalid active alignments before exporting PDF, TIFF, PNG, JPEG or SVG figures.
+You can still save an invalid project for repair, or use <b>File → Export All Source Images…</b> to copy the raw assets.</p>
 <h3>Freeform Positioning</h3>
 <p><b>Layout → Convert Grid → Freeform</b> starts from the current grid geometry and enables direct positioning.
 Use the Inspector's X, Y, width, and height fields for precise dimensions in millimetres.
@@ -309,7 +337,7 @@ _CELLS_HTML_ZH = """
 选中行或单元格后，在检查器中修改对应属性。</p>
 <ul>
   <li>使用画布上的 <b>+</b> 控件，或右键 → <b>插入</b>，添加行列。</li>
-  <li>混合尺寸面板可通过右键 → <b>插入 → 细分为子单元格</b>实现。
+  <li>混合尺寸面板可通过右键 → <b>细分为子单元格</b>实现。
       在上下左右添加同级单元格；叶子单元格还可一次拆分为多行或多列。</li>
   <li>拖动分隔条，或通过检查器的<b>子单元格排版</b>调整分割。</li>
   <li>右键<b>删除</b>菜单用于删除布局单元格；<code>Ctrl+Delete</code> 则仅移除图片，保留单元格。</li>
@@ -317,6 +345,31 @@ _CELLS_HTML_ZH = """
 <h3>自动布局</h3>
 <p><b>编辑 → 自动布局</b>（<code>Ctrl+Shift+A</code>）根据图片调整排布。
 请检查结果，不合适时可撤销。建议先确定页面尺寸和边距，再做最终微调。</p>
+<h3>手动对齐绘图区</h3>
+<p>点击工具栏“自动布局”旁的下拉箭头，或通过<b>布局 → 对齐绘图区…</b>、图像面板右键菜单中的
+<b>对齐绘图区…</b>打开。自动布局主按钮及 <code>Ctrl+Shift+A</code> 仍保持原来的面板排布功能。</p>
+<ol>
+  <li>勾选至少两个图像面板。未选择或只选择一个面板时，不会自动勾选全部图片。
+      若选择涉及一个已有对齐组，会直接编辑该组；也可通过组选择器切换已有组或<b>新建对齐</b>。</li>
+  <li>逐个选择已勾选面板，手动框选绘图区内部，排除坐标标签、标题及图例。
+      这是<b>标记而非裁剪</b>，源图标签会保留，不会自动检测坐标轴。
+      编辑器始终显示完整、未旋转的源图。拖动边角调整范围，内部拖动移动标记，滚轮缩放，中键或空格拖动平移。
+      可使用重画、清除标记和下一个未标记按钮。</li>
+  <li>选择参照图。<b>精确匹配参照图</b>保持参照图位置及缩放不变；<b>适应单元格边界</b>可能缩小或移动参照图，
+      使全部图片适应各自可用空间。仅匹配绘图区高度，始终保持图像宽高比。
+      网格及自由布局下均不会移动或调整单元格尺寸。</li>
+  <li><b>按网格行</b>分别对齐各行底部基线；<b>自定义分行</b>中相同编号的面板共用基线。
+      自由布局默认依据当前垂直位置建议分行，请检查并编辑表格中可见的编号，不要将多行图无意压到同一基线。
+      仅在确实需要所有面板共用一条基线时选择<b>同一基线</b>。</li>
+  <li><b>预览对齐</b>使用独立项目副本，显示目标高度（毫米）及临时绘图区和基线辅助线。
+      精确匹配超出边界时无法应用，需主动选择适应边界、改变成员或调整布局。
+      标记超出裁剪范围、源文件缺失或更改、面板同时属于多个对齐组时，也需先修复。</li>
+</ol>
+<p><b>应用</b>将标记及对齐组保存为一次可撤销操作，不修改源文件；<b>取消</b>不更改项目或撤销历史。
+<b>移除对齐</b>恢复普通图像适配但保留标记，预览后应用确认，或取消以保留原组；其他组不会被清除。</p>
+<p>自动布局及后续布局编辑后，对齐组仍保持启用。源文件内容改变时请重新标记，不要假设旧框仍指向同一绘图区；
+文件缺失只会提示，不会自动清除标记。导出 PDF、TIFF、PNG、JPEG 或 SVG 成图前必须修复或移除无效的启用对齐组。
+仍可保存有问题的项目以便修复，也可通过<b>文件 → 导出全部源图片…</b>复制原始素材。</p>
 <h3>自由定位</h3>
 <p><b>布局 → 网格转自由布局</b>保留当前网格几何位置作为起点，并允许自由定位。
 使用检查器中的 X、Y、宽度和高度字段，以毫米为单位精确调整。
@@ -480,6 +533,15 @@ _EXPORT_HTML_EN = """
   <li><b>TIFF / PNG:</b> lossless raster output, useful when a submission system requests images.</li>
   <li><b>JPG:</b> lossy output; compression can introduce artifacts around lettering and fine lines.</li>
 </ul>
+<h3>Copy the Source Images</h3>
+<p><b>File → Export All Source Images…</b> chooses a folder and copies each unique source reference
+used by the current project, including nested subcells and external PiP images, in its original format.
+This is not a rendered figure: layout, crops, annotations, and text overrides are not applied.
+For <code>.figlayout</code>, it copies the currently linked files; for <code>.figpack</code>, it copies
+available extracted image bytes, even if the original files are gone. Missing files are reported.
+Repeated references are copied once; duplicate filenames receive safe suffixes such as <code>_1</code>
+without overwriting existing files. Cancel leaves completed copies in the chosen folder.
+The project, its links, and its saved state are unchanged.</p>
 <h3>Page Size, DPI, and Export Region</h3>
 <p>Set the physical page size and DPI in the Inspector. For raster output:</p>
 <p><code>pixels ≈ (size in mm / 25.4) × DPI</code></p>
@@ -511,6 +573,13 @@ _EXPORT_HTML_ZH = """
   <li><b>TIFF / PNG：</b>无损位图输出，适用于投稿系统要求图片文件的情况。</li>
   <li><b>JPG：</b>有损输出，压缩可能在文字和细线周围产生伪影。</li>
 </ul>
+<h3>复制源图片</h3>
+<p><b>文件 → 导出全部源图片…</b>可选择文件夹，按原始格式复制当前项目使用的每个唯一源图片引用，
+包括嵌套子单元格和外部画中画图片。这不是渲染整幅图：不会应用布局、裁剪、标注或文字覆盖修改。
+<code>.figlayout</code>复制当前链接的文件；<code>.figpack</code>复制可用的解包图片数据，
+即使原始文件已不存在也可导出。缺失的文件会被报告。重复引用只复制一次，同名文件会安全添加
+<code>_1</code>等后缀，不覆盖已有文件。取消后，已完成的副本会保留在所选文件夹中。
+项目内容、图片链接及保存状态均保持不变。</p>
 <h3>页面尺寸、DPI 与导出区域</h3>
 <p>在检查器中设置物理页面尺寸和 DPI。位图输出的像素数近似为：</p>
 <p><code>像素数 ≈ (尺寸毫米 / 25.4) × DPI</code></p>
@@ -636,9 +705,6 @@ class HelpDialog(QDialog):
         tutorials_btn = QPushButton(tr('tutorials_title'))
         tutorials_btn.clicked.connect(lambda: self.tutorial_requested.emit(''))
         btn_row.addWidget(tutorials_btn)
-        text_lesson_btn = QPushButton(tr('tutorials_try_text'))
-        text_lesson_btn.clicked.connect(lambda: self.tutorial_requested.emit('text_sizes'))
-        btn_row.addWidget(text_lesson_btn)
         btn_row.addStretch()
         close_btn = QPushButton(tr("help_close"))
         close_btn.setDefault(True)
