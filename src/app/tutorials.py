@@ -5,8 +5,8 @@ from pathlib import Path
 
 from PyQt6 import sip
 from PyQt6.QtCore import (
-    QBuffer, QByteArray, QEvent, QIODevice, QObject, QRect, QRectF, QSaveFile,
-    QSize, QStandardPaths, Qt, QTimer,
+    QBuffer, QByteArray, QCoreApplication, QEvent, QIODevice, QObject, QPoint,
+    QRect, QRectF, QSaveFile, QSize, QStandardPaths, Qt, QTimer,
 )
 from PyQt6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen
 from PyQt6.QtSvg import QSvgRenderer
@@ -107,8 +107,8 @@ LESSONS = {
               '右键第三个面板 → 细分为子单元格 → 细分为 N 列…（嵌套），选择 2，或点击下方“拆分第三个面板”。这只细分该面板，不会拆分整页。原 TIFF 图片保留在左侧子单元格，右侧子单元格为空。'),
              target='division_panel', action='split_cols'),
         Step('ratio', ('Adjust the split ratio', '调整分割比例'),
-             ('Click Select the new sub-cell below to reveal Sub-Cell Settings in the Inspector, then change the highlighted ratio. In real use, drag the divider between the two sub-cells directly on the canvas instead — the Inspector field gives you an exact number.',
-              '点击下方“选中新的子单元格”，在检查器中展开“子单元格设置”，修改高亮的比例数值。实际使用时可直接在画布上拖动两个子单元格之间的分隔条；检查器字段则给出精确数值。'),
+             ('Click Select the new sub-cell below to reveal Sub-Cell Settings in the Inspector, then change the highlighted ratio. In real use, drag the divider between the two sub-cells directly on the canvas instead — the Inspector field gives you an exact number. If Size Ratio is out of view, fold Image Cell Properties by clicking its header — Sub-Cell Layout then moves up into view.',
+              '点击下方“选中新的子单元格”，在检查器中展开“子单元格设置”，修改高亮的比例数值。实际使用时可直接在画布上拖动两个子单元格之间的分隔条；检查器字段则给出精确数值。若看不到分割比例，点击“图像单元格属性”的标题将其折叠，“子单元格排版”即会上移进入视野。'),
              target='subcell_ratio', action='select_subcell'),
         Step('nested_rows', ('Nest two rows on the right', '在右侧嵌套两行'),
              ('Right-click the rightmost sub-cell → Add Sub-Cell / Subdivide → Subdivide into N Rows… (nested), then choose 2, or click Divide the right sub-cell below. Only that sub-cell becomes two stacked rows; the left image and the other original panels stay in place.',
@@ -794,6 +794,7 @@ class TutorialController(QObject):
         self.card = TutorialCard(self)
         self._feedback_step = None
         self._step_ready = None
+        self._target_hint = None
         self.center = None
         self.timer = QTimer(self)
         self.timer.setInterval(200)
@@ -1254,13 +1255,53 @@ class TutorialController(QObject):
         'size_group_pinned_w': 'size_group_pinned_w',
     }
 
+    @staticmethod
+    def _rect_in_viewport(rect, viewport):
+        """Fully inside on the vertical scroll axis and at least partly
+        visible horizontally — the horizontal scrollbar is disabled, so a
+        field wider than the viewport still counts as in view when it is
+        vertically contained."""
+        return (rect.top() >= viewport.top() and rect.bottom() <= viewport.bottom()
+                and rect.left() <= viewport.right() and rect.right() >= viewport.left())
+
+    def _foldable_blocker(self, scroll, own_section, field_top):
+        """First expanded section the user can fold to un-block the target:
+        visible, not *own_section*, above the field, and with its header
+        inside the scroll viewport so it can actually be clicked."""
+        viewport = scroll.viewport().rect()
+        candidates = []
+        for section in self.window.inspector.findChildren(CollapsibleSection):
+            if (section is own_section or section._collapsed
+                    or not section.isVisible()):
+                continue
+            top = section._header.mapTo(scroll.viewport(), QPoint(0, 0))
+            header_rect = QRect(top, section._header.size())
+            if top.y() < field_top and self._rect_in_viewport(header_rect, viewport):
+                candidates.append((top.y(), section))
+        candidates.sort(key=lambda pair: pair[0])
+        return candidates[0][1] if candidates else None
+
+    def _reveal_section(self, section):
+        """Unfold *section* for a guided action and fold the other expanded
+        sections, so the highlighted field lands inside the scroll viewport."""
+        for other in self.window.inspector.findChildren(CollapsibleSection):
+            if (other is not section and other.isVisible()
+                    and not other._collapsed):
+                other.set_collapsed(True, animate=False)
+        section.set_collapsed(False, animate=False)
+        section.show()
+
     def _show_target(self):
         target = self.step.target
         widget = self.window.view.viewport()
         rect = widget.rect()
         compact = False
+        hint = None
         if target in self._INSPECTOR_TARGETS:
             field = getattr(self.window.inspector, self._INSPECTOR_TARGETS[target])
+            ancestor = field.parentWidget()
+            while ancestor is not None and not isinstance(ancestor, CollapsibleSection):
+                ancestor = ancestor.parentWidget()
             if not field.isVisible():
                 # Every Inspector section starts collapsed, and selecting an
                 # item shows its section without unfolding it — so the field a
@@ -1268,14 +1309,34 @@ class TutorialController(QObject):
                 # Expand a section that is shown-but-collapsed; a section that
                 # is hidden entirely means the wrong thing is selected, and
                 # expanding it cannot help.
-                ancestor = field.parentWidget()
-                while ancestor is not None and not isinstance(ancestor, CollapsibleSection):
-                    ancestor = ancestor.parentWidget()
                 if (ancestor is not None and ancestor.isVisible()
                         and ancestor._collapsed):
                     ancestor.set_collapsed(False, animate=False)
             if field.isVisible():
-                widget, rect, compact = field, field.rect(), True
+                scroll = self.window.inspector._scroll
+                # A just-expanded section leaves nested layouts queued behind
+                # deferred LayoutRequests; flush until the field has real
+                # geometry so the viewport check measures the true position.
+                for _ in range(4):
+                    QCoreApplication.sendPostedEvents(None, QEvent.Type.LayoutRequest)
+                    if field.height() > 0:
+                        break
+                field_rect = QRect(field.mapTo(scroll.viewport(), QPoint(0, 0)),
+                                   field.size())
+                if self._rect_in_viewport(field_rect, scroll.viewport().rect()):
+                    widget, rect, compact = field, field.rect(), True
+                else:
+                    blocker = self._foldable_blocker(scroll, ancestor, field_rect.top())
+                    if blocker is not None:
+                        widget, rect = blocker._header, blocker._header.rect()
+                        section_name = (ancestor._title_lbl.text()
+                                        if ancestor is not None else '')
+                        hint = text(
+                            f'Fold “{blocker._title_lbl.text()}” (click its header) so “{section_name}” comes into view, then change the highlighted field.',
+                            f'点击“{blocker._title_lbl.text()}”的标题将其折叠，让“{section_name}”进入视野，再修改高亮字段。')
+                    else:
+                        scroll.ensureWidgetVisible(field, 0, 24)
+                        widget, rect, compact = field, field.rect(), True
         elif target == 'division_panel':
             bounds = QRectF()
             for cell in self.tab.project.cells[2].get_all_leaves():
@@ -1309,7 +1370,7 @@ class TutorialController(QObject):
                     rect = self.tab.view.mapFromScene(item.sceneBoundingRect()).boundingRect().intersected(widget.rect())
         if widget is None or not widget.isVisible() or rect.isEmpty():
             self._clear_highlight()
-            return
+            return None
         if (self.highlight is None or sip.isdeleted(self.highlight)
                 or self.highlight.target is not widget or self.highlight.compact != compact):
             self._clear_highlight()
@@ -1317,6 +1378,7 @@ class TutorialController(QObject):
         self.highlight.set_target_rect(rect)
         self.highlight.show()
         self.highlight.raise_()
+        return hint
 
     def refresh(self):
         if self.tab is None:
@@ -1344,10 +1406,16 @@ class TutorialController(QObject):
         self.card.status.set_success(success, animate=success and self._step_ready is False)
         if active:
             self._step_ready = ready
+        if active:
+            hint = self._show_target()
+        else:
+            self._clear_highlight()
+            hint = None
+        self._target_hint = hint
         self.card.status.setText(text('Return to the practice tab to continue.', '请返回练习标签页继续。') if not active else
                                  text('Step complete — well done. Continue when ready.', '本步骤已完成，做得好。准备好后可继续。') if success else
                                  text('Ready — continue when you are comfortable.', '已就绪，准备好后可继续。') if ready else
-                                 text('Try the action above, or skip this step.', '请尝试上述操作，或跳过此步骤。'))
+                                 hint or text('Try the action above, or skip this step.', '请尝试上述操作，或跳过此步骤。'))
         self.card.back.setText(text('Back', '上一步'))
         self.card.skip.setText(text('Skip', '跳过'))
         self.card.next.setText(text('Finish', '完成') if self.step.key == 'finish' else text('Next', '下一步'))
@@ -1359,10 +1427,6 @@ class TutorialController(QObject):
         self.card.action.setEnabled(active)
         self.card.action.setText(text(*self._ACTION_LABELS.get(
             self.step.action, ('Open inspector', '打开检查器'))))
-        if active:
-            self._show_target()
-        else:
-            self._clear_highlight()
 
     def perform_action(self):
         if not self.valid() or self.window.project is not self.tab.project:
@@ -1403,8 +1467,7 @@ class TutorialController(QObject):
             self.window._on_selection_changed()
             # The inspector collapses every section at startup, so reveal the
             # one holding the size field instead of leaving the user hunting.
-            self.window.inspector.text_group.set_collapsed(False, animate=False)
-            self.window.inspector.text_group.show()
+            self._reveal_section(self.window.inspector.text_group)
         elif action in ('svg0', 'svg1', 'raster'):
             cell = self.tab.project.cells[{'svg0': 0, 'svg1': 1, 'raster': 2}[action]]
             inspector = self._inspector(cell)
@@ -1436,8 +1499,7 @@ class TutorialController(QObject):
             self.window._on_selection_changed()
             # Selecting shows the section but leaves it folded; unfold so the
             # highlighted ratio field is actually on screen.
-            self.window.inspector.subcell_group.set_collapsed(False, animate=False)
-            self.window.inspector.subcell_group.show()
+            self._reveal_section(self.window.inspector.subcell_group)
         elif self.lesson == 'divide_cells' and action == 'nested_rows':
             from src.app.commands import SplitCellCommand
             root = self.tab.project.cells[2]
@@ -1491,8 +1553,7 @@ class TutorialController(QObject):
                 item.deselect_pip()
             item.setSelected(True)
             self.window._on_selection_changed()
-            self.window.inspector.cell_group.set_collapsed(False, animate=False)
-            self.window.inspector.cell_group.show()
+            self._reveal_section(self.window.inspector.cell_group)
             # Baseline for "did the user actually move it" in ready().
             self._reposition_baseline = (cell.freeform_x_mm, cell.freeform_y_mm,
                                          cell.freeform_w_mm, cell.freeform_h_mm)
@@ -1572,8 +1633,7 @@ class TutorialController(QObject):
             # section still starts folded, so unfold it for the highlight.
             self.tab.scene.clearSelection()
             self.window._on_selection_changed()
-            self.window.inspector.project_group.set_collapsed(False, animate=False)
-            self.window.inspector.project_group.show()
+            self._reveal_section(self.window.inspector.project_group)
         self.refresh()
 
     def back(self):
@@ -1607,6 +1667,7 @@ class TutorialController(QObject):
         self.card.status.set_success(False)
         self._feedback_step = None
         self._step_ready = None
+        self._target_hint = None
         previous, practice = self.previous_tab, self.tab
         self.tab = None
         self.previous_tab = None

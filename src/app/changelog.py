@@ -24,6 +24,8 @@ CHANGELOG = [
          "zh": "界面动画现在按显示器刷新率运行（如 120 或 144 Hz），不再固定 60 帧，时长不变；图面较重时会自动降速以保持操作流畅。"},
         {"en": "The Welcome window now shows the ILM logo, drawn as vector figure panels that follow the light and dark themes.",
          "zh": "欢迎窗口新增 ILM 徽标：由矢量图面板拼成，并随浅色/深色主题变化。"},
+        {"en": "Tutorial steps that point at an Inspector field now tell you which section to fold when another open section pushes the field out of view, and the guided button folds it for you.",
+         "zh": "教程步骤指向检查器字段时，若其他展开的分区把该字段推出视野，会提示应折叠哪个分区；引导按钮也会自动折叠。"},
         {"en": "Subdivide is now directly in a cell's right-click menu.",
          "zh": "“细分为子单元格”现在直接位于单元格右键菜单中。"},
         {"en": "Lighter interface text in both languages.",

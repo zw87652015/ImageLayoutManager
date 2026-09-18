@@ -4,10 +4,10 @@ import copy
 import os
 import uuid
 
-from PyQt6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen
 from PyQt6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
+    QAbstractSpinBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSpinBox, QSplitter,
     QStackedWidget, QStyle, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton,
     QVBoxLayout, QWidget,
@@ -700,9 +700,6 @@ class PlotAlignmentDialog(QDialog):
         right_layout.addLayout(tabs)
         self.source_label = self._label("")
         right_layout.addWidget(self.source_label)
-        self.inline_illustration = PlotGuideIllustration("mark")
-        self.inline_illustration.setFixedHeight(108)
-        right_layout.addWidget(self.inline_illustration)
         self.views = QStackedWidget()
         self.source_view = PlotAreaView()
         self.source_view.setAccessibleName(tr("plot_source"))
@@ -823,22 +820,6 @@ class PlotAlignmentDialog(QDialog):
         self.details_dialog.close()
         super().done(result)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._update_inline_example()
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
-            self._update_inline_example()
-
-    def _update_inline_example(self):
-        if hasattr(self, "source_view"):
-            self.inline_illustration.setVisible(
-                self.guidance_stage == "mark" and self.views.currentWidget() is self.source_view
-                and self.width() >= 850 and self.height() >= 620
-                and self.fontMetrics().height() <= 18)
-
     def _set_guidance(self, stage, target, text):
         old = self.guidance_target
         if old is not target:
@@ -865,7 +846,6 @@ class PlotAlignmentDialog(QDialog):
         self.stage_strip.set_stage(stage)
         self.guidance_label.setText(text)
         self.guidance_label.setAccessibleName(text)
-        self._update_inline_example()
 
     def _repairable_mark_ids(self):
         needed = []
@@ -962,6 +942,11 @@ class PlotAlignmentDialog(QDialog):
             spin = QSpinBox()
             spin.setRange(-1, 999)
             spin.setSpecialValueText("—")
+            # Typed entry only: the step arrows invite clicking through
+            # baseline numbers, which regroups panels one accidental step
+            # at a time.
+            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
             default_row = -1 if group.baseline_mode == "custom" and cid in group.cell_ids and group.id not in self._new_ids else self._suggested_rows.get(cid, 1)
             value = group.row_groups.get(cid, default_row)
             spin.setValue(value if type(value) is int and value >= 0 else -1)

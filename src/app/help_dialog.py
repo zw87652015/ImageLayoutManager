@@ -304,8 +304,8 @@ The main Auto Layout button and <code>Ctrl+Shift+A</code> still arrange panels a
       Only plot height is matched; image aspect ratios are always preserved. Neither mode moves or resizes cells,
       in either grid or freeform layouts.</li>
   <li>Use <b>Grid rows</b> to keep each grid row's bottom baseline separate, or <b>Custom rows</b> for explicit grouping.
-      Equal row numbers share a baseline. Freeform defaults to suggested custom rows based on current vertical positions;
-      review and edit the visible row numbers rather than flattening a multi-row figure. <b>One baseline</b> is only for panels that should share one line.</li>
+      Panels with the same number in the table's <b>Baseline</b> column share one bottom axis. Freeform defaults to suggested
+      numbers based on current vertical positions; review and retype them rather than flattening a multi-row figure. <b>One baseline</b> is only for panels that should share one line.</li>
   <li><b>Preview alignment</b> shows a separate project copy, the target height in millimetres and temporary plot/baseline guides.
       Exact-reference overflow disables Apply: explicitly choose Fit, change membership, or adjust the layout.
       Cropped-out plot areas, missing sources, changed sources and overlapping group membership also require repair.</li>
@@ -359,7 +359,8 @@ _CELLS_HTML_ZH = """
       使全部图片适应各自可用空间。仅匹配绘图区高度，始终保持图像宽高比。
       网格及自由布局下均不会移动或调整单元格尺寸。</li>
   <li><b>按网格行</b>分别对齐各行底部基线；<b>自定义分行</b>中相同编号的面板共用基线。
-      自由布局默认依据当前垂直位置建议分行，请检查并编辑表格中可见的编号，不要将多行图无意压到同一基线。
+      表格“基线组”列中编号相同的面板共用一条底部基线。自由布局默认依据当前垂直位置建议编号，
+      请检查并重新输入，不要将多行图无意压到同一基线。
       仅在确实需要所有面板共用一条基线时选择<b>同一基线</b>。</li>
   <li><b>预览对齐</b>使用独立项目副本，显示目标高度（毫米）及临时绘图区和基线辅助线。
       精确匹配超出边界时无法应用，需主动选择适应边界、改变成员或调整布局。
