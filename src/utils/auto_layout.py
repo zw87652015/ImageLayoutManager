@@ -407,7 +407,8 @@ class AutoLayout:
             for labels in bucket.values():
                 for group_label in labels:
                     total_natural_height += (
-                        LayoutEngine.group_label_thickness_mm(group_label)
+                        LayoutEngine.group_label_thickness_mm(
+                            group_label, getattr(project, 'typography_mode', 'points'))
                         + group_label.gap_mm
                     )
 

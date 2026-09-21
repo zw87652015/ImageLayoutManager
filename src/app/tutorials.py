@@ -944,13 +944,17 @@ class TutorialController(QObject):
         else:
             project = Project(name=tr('tutorials_practice') + ' — ' + lesson_title(lesson), page_width_mm=180, page_height_mm=72,
                               margin_left_mm=6, margin_right_mm=6, margin_top_mm=6, margin_bottom_mm=6, gap_mm=3.5, dpi=300)
-            # Label size is a scale in this app, not typographic points: one unit
-            # is roughly 1.8 mm of glyph box. The default 12 would draw ~22 mm
-            # letters across a 54 mm panel, so the lesson would teach a figure no
-            # journal would accept. 2 puts the bold letters just above the sample
-            # charts' own axis text.
-            project.label_font_size = 2
-            project.title_label_font_size = 2
+            if project.typography_mode == 'legacy':
+                # Label size is a scale in this app, not typographic points: one unit
+                # is roughly 1.8 mm of glyph box. The default 12 would draw ~22 mm
+                # letters across a 54 mm panel, so the lesson would teach a figure no
+                # journal would accept. 2 puts the bold letters just above the sample
+                # charts' own axis text.
+                project.label_font_size = 2
+                project.title_label_font_size = 2
+            else:
+                project.label_font_size = 8.0
+                project.title_label_font_size = 8.0
             project.rows = [RowTemplate(index=0, column_count=len(paths))]
             project.cells = [Cell(row_index=0, col_index=i, image_path=path, is_placeholder=False)
                              for i, path in enumerate(paths)]

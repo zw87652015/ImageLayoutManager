@@ -56,13 +56,13 @@ class GroupLabelItem(QGraphicsObject):
         """Update geometry and model. Cheap no-op when nothing changed."""
         self._stop_animation()
         changed = band != self._band
-        if changed:
+        if changed or model is not None:
             self.prepareGeometryChange()
+        if changed:
             self._band = QRectF(band)
             self.setPos(band.x(), band.y())
         self.model = model
-        if changed:
-            self.update()
+        self.update()
 
     def animate_from(self, old_band: QRectF, duration_ms: int = _ANIM_MS) -> None:
         """Tween the displayed band from *old_band* to the current one."""
@@ -101,6 +101,11 @@ class GroupLabelItem(QGraphicsObject):
         self._apply_animated_band(anim.endValue())
         anim.deleteLater()
 
+    def _typography_mode(self) -> str:
+        scene = self.scene()
+        project = getattr(scene, 'project', None)
+        return getattr(project, 'typography_mode', 'points')
+
     def band_scene_rect(self) -> QRectF:
         """Band in scene coordinates (a copy, safe to keep)."""
         return QRectF(self._band)
@@ -115,7 +120,8 @@ class GroupLabelItem(QGraphicsObject):
             return band
         # Rotated text can spill outside the reserved band; include it so Qt
         # does not clip or leave trails when the item repaints.
-        bounds = group_label_render.rotated_bounds_mm(self.model, band)
+        bounds = group_label_render.rotated_bounds_mm(
+            self.model, band, self._typography_mode())
         return bounds.adjusted(-1.0, -1.0, 1.0, 1.0)
 
     # ── painting ────────────────────────────────────────────────────────
@@ -137,7 +143,8 @@ class GroupLabelItem(QGraphicsObject):
             painter.restore()
 
         # scale=1.0: scene units are already millimetres.
-        group_label_render.draw(painter, self.model, band, scale=1.0)
+        group_label_render.draw(painter, self.model, band, scale=1.0,
+                                typography_mode=self._typography_mode())
 
     # ── hover / cursor feedback ─────────────────────────────────────────
 

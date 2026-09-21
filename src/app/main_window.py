@@ -2569,6 +2569,8 @@ class MainWindow(QMainWindow):
         self._push_with_group_prune(cmd, affected_gids)
 
     def _on_selection_changed(self):
+        self.inspector.set_typography_mode(
+            getattr(self.project, 'typography_mode', 'points'))
         try:
             items = self.scene.selectedItems()
         except RuntimeError:

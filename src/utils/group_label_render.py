@@ -26,7 +26,12 @@ def _font(group_label) -> QFont:
     return font
 
 
-def _text_item(group_label) -> QGraphicsTextItem:
+def _text_item(group_label, typography_mode='points') -> QGraphicsTextItem:
+    if typography_mode == 'points':
+        from src.utils.typography import point_text_item
+        return point_text_item(group_label.text or "", group_label.font_family,
+                               group_label.font_size_pt, group_label.font_weight,
+                               group_label.color, rich=False)
     item = QGraphicsTextItem()
     item.setPlainText(group_label.text or "")
     item.setFont(_font(group_label))
@@ -34,11 +39,14 @@ def _text_item(group_label) -> QGraphicsTextItem:
     return item
 
 
-def measure_mm(group_label) -> tuple:
+def measure_mm(group_label, typography_mode='points') -> tuple:
     """Natural (width_mm, height_mm) of the label's text."""
-    item = _text_item(group_label)
+    item = _text_item(group_label, typography_mode)
     rect = item.boundingRect()
-    scale = group_label.font_size_pt / BASE_PT
+    if typography_mode == 'points':
+        scale = item.scale()
+    else:
+        scale = group_label.font_size_pt / BASE_PT
     return rect.width() * scale, rect.height() * scale
 
 
@@ -75,14 +83,14 @@ def split_band(group_label, band: QRectF) -> tuple:
     return text, bracket
 
 
-def text_origin_mm(group_label, text_area: QRectF) -> tuple:
+def text_origin_mm(group_label, text_area: QRectF, typography_mode='points') -> tuple:
     """Top-left mm position for the unrotated text box inside *text_area*.
 
     Rotation is applied later around the text's centre, so alignment is
     resolved on the upright box: horizontal bands align along x, vertical
     bands align along y.
     """
-    tw, th = measure_mm(group_label)
+    tw, th = measure_mm(group_label, typography_mode)
     align = group_label.align
     horizontal = group_label.side in ("top", "bottom")
 
@@ -166,7 +174,8 @@ def bracket_path_mm(group_label, bracket_area: QRectF) -> QPainterPath:
     return path
 
 
-def draw(painter: QPainter, group_label, band: QRectF, scale: float = 1.0) -> None:
+def draw(painter: QPainter, group_label, band: QRectF, scale: float = 1.0,
+         typography_mode='points') -> None:
     """Render *group_label* into *band* (mm) on a painter scaled by *scale*."""
     if band is None or band.isEmpty():
         return
@@ -190,15 +199,18 @@ def draw(painter: QPainter, group_label, band: QRectF, scale: float = 1.0) -> No
     if not (group_label.text or "").strip():
         return
 
-    item = _text_item(group_label)
-    x_mm, y_mm = text_origin_mm(group_label, text_area)
-    text_scale = group_label.font_size_pt / BASE_PT
+    item = _text_item(group_label, typography_mode)
+    x_mm, y_mm = text_origin_mm(group_label, text_area, typography_mode)
+    if typography_mode == 'points':
+        text_scale = item.scale()
+    else:
+        text_scale = group_label.font_size_pt / BASE_PT
     rotation = group_label.auto_rotation()
 
     painter.save()
     if rotation:
         # Rotate about the text's own centre so alignment stays predictable.
-        tw, th = measure_mm(group_label)
+        tw, th = measure_mm(group_label, typography_mode)
         cx, cy = x_mm + tw / 2.0, y_mm + th / 2.0
         painter.translate(cx * scale, cy * scale)
         painter.rotate(rotation)
@@ -210,14 +222,14 @@ def draw(painter: QPainter, group_label, band: QRectF, scale: float = 1.0) -> No
     painter.restore()
 
 
-def rotated_bounds_mm(group_label, band: QRectF) -> QRectF:
+def rotated_bounds_mm(group_label, band: QRectF, typography_mode='points') -> QRectF:
     """Union of band and rotated text extents, for canvas bounding rects."""
     bounds = QRectF(band)
     if not (group_label.text or "").strip():
         return bounds
     text_area, _bracket = split_band(group_label, band)
-    tw, th = measure_mm(group_label)
-    x_mm, y_mm = text_origin_mm(group_label, text_area)
+    tw, th = measure_mm(group_label, typography_mode)
+    x_mm, y_mm = text_origin_mm(group_label, text_area, typography_mode)
     rotation = group_label.auto_rotation()
     if not rotation:
         return bounds.united(QRectF(x_mm, y_mm, tw, th))

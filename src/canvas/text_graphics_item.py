@@ -47,17 +47,27 @@ class TextGraphicsItem(QGraphicsTextItem):
         self._font_size_pt = 12.0
         self._font_weight = "normal"
         self._color_hex = "#000000"
+        self._typography_mode = "points"
 
         # Background box behind the text (label aesthetic).
         self._bg_enabled = False
         self._bg_color = "#FFFFFF"
         self._bg_padding_mm = 0.6
 
-    def update_style(self, font_family, font_size_pt, font_weight, color_hex):
+    def update_style(self, font_family, font_size_pt, font_weight, color_hex,
+                     typography_mode='points'):
         self._font_family = font_family
         self._font_size_pt = font_size_pt
         self._font_weight = font_weight
         self._color_hex = color_hex
+        self._typography_mode = typography_mode
+
+        if typography_mode == 'points':
+            from src.utils.typography import configure_point_text
+            configure_point_text(self, font_family, font_size_pt,
+                                 font_weight, color_hex)
+            self._update_math_cache()
+            return
 
         # Use a base font size of 24pt for quality, then scale to desired size
         # This avoids extreme scaling (1/72) which causes pixelation
@@ -75,6 +85,11 @@ class TextGraphicsItem(QGraphicsTextItem):
 
         # Try to build a math-rendered pixmap; if successful, scale becomes 1.0
         self._update_math_cache()
+
+    def content_rect(self) -> QRectF:
+        if self._math_rect is not None:
+            return QRectF(self._math_rect)
+        return super().boundingRect()
 
     def _update_math_cache(self):
         """Re-render math to pixmap if the current text contains $...$ expressions."""
@@ -155,8 +170,9 @@ class TextGraphicsItem(QGraphicsTextItem):
                 cx, cy, cw, ch = self.cell_bounds
                 pos = self.pos()
                 scale = self.scale()
-                text_width = self.boundingRect().width() * scale
-                text_height = self.boundingRect().height() * scale
+                rect = self.content_rect() if self._typography_mode == 'points' else self.boundingRect()
+                text_width = rect.width() * scale
+                text_height = rect.height() * scale
                 
                 # Calculate offset based on anchor
                 if "left" in self.anchor:
@@ -183,10 +199,18 @@ class TextGraphicsItem(QGraphicsTextItem):
                 })
             else:
                 # Global text: use absolute x,y
-                self.item_changed.emit(self.text_item_id, {
-                    "x": self.pos().x(),
-                    "y": self.pos().y()
-                })
+                if self._typography_mode == 'points':
+                    rect = self.content_rect()
+                    scale = self.scale() or 1.0
+                    self.item_changed.emit(self.text_item_id, {
+                        "x": self.pos().x() + rect.width() * (1 - scale) / 2,
+                        "y": self.pos().y() + rect.height() * (1 - scale) / 2,
+                    })
+                else:
+                    self.item_changed.emit(self.text_item_id, {
+                        "x": self.pos().x(),
+                        "y": self.pos().y()
+                    })
 
     def paint(self, painter, option, widget):
         if self._bg_enabled:
@@ -196,6 +220,9 @@ class TextGraphicsItem(QGraphicsTextItem):
             painter.drawRect(self.boundingRect())
             painter.restore()
         if self._math_pixmap is not None and not self._math_pixmap.isNull():
-            painter.drawPixmap(self._math_rect.toRect(), self._math_pixmap)
+            if self._typography_mode == 'points':
+                painter.drawPixmap(self._math_rect, self._math_pixmap, QRectF(self._math_pixmap.rect()))
+            else:
+                painter.drawPixmap(self._math_rect.toRect(), self._math_pixmap)
             return
         super().paint(painter, option, widget)

@@ -123,7 +123,8 @@ class PdfExporter:
                         # Draw scale bar if enabled
                     if getattr(cell, 'scale_bar_enabled', False):
                         ImageExporter._draw_scale_bar(painter, cell,
-                            QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain')
+                            QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain',
+                            typography_mode=getattr(project, 'typography_mode', 'points'))
 
                 PdfExporter._draw_pip_items(painter, project, cell, content_rect, scale, placement)
 
@@ -358,7 +359,8 @@ class PdfExporter:
                 # PiP zoom type is STRETCH, external is CONTAIN
                 pip_fit = "stretch" if pip.pip_type == "zoom" else "contain"
                 ImageExporter._draw_scale_bar(painter, pip, img_rect, scale, fit_mode_override=pip_fit,
-                    source_path_override=cell.image_path if pip.pip_type == 'zoom' else None)
+                    source_path_override=cell.image_path if pip.pip_type == 'zoom' else None,
+                    typography_mode=getattr(project, 'typography_mode', 'points'))
                 
                 # Restore
                 pip.scale_bar_um_per_px = old_um
@@ -730,35 +732,47 @@ class PdfExporter:
                 painter.restore()
                 return
 
-        base_pt = 24
-        text_scale = text_item.font_size_pt / base_pt
-
-        temp_item = QGraphicsTextItem()
-        temp_item.setHtml(text_item.text)
-
-        font = QFont(text_item.font_family, base_pt)
-        if text_item.font_weight == "bold":
-            font.setBold(True)
-        temp_item.setFont(font)
-        temp_item.setDefaultTextColor(QColor(text_item.color))
-
-        base_rect = temp_item.boundingRect()
-        tw_mm = base_rect.width() * text_scale
-        th_mm = base_rect.height() * text_scale
-
-        x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
-
-        # Canvas applies scale & rotation about the unscaled bounding-rect
-        # centre for GLOBAL (floating) text. Mirror that here so the exported
-        # visual top-left matches the on-canvas position:
-        #   visual_topleft = (x, y) + (1 - s) * br/2
         is_global = not (text_item.scope == "cell" and text_item.parent_id
                          and text_item.parent_id in layout_result.cell_rects)
-        if is_global:
-            offset_x_mm = (base_rect.width() - tw_mm) / 2.0
-            offset_y_mm = (base_rect.height() - th_mm) / 2.0
-            x_mm += offset_x_mm
-            y_mm += offset_y_mm
+        if getattr(project, 'typography_mode', 'legacy') == 'points':
+            from src.utils.typography import point_text_item
+            temp_item = point_text_item(text_item.text, text_item.font_family,
+                                        text_item.font_size_pt,
+                                        text_item.font_weight, text_item.color)
+            text_scale = temp_item.scale()
+            base_rect = temp_item.boundingRect()
+            tw_mm = base_rect.width() * text_scale
+            th_mm = base_rect.height() * text_scale
+            x_mm, y_mm = ImageExporter._text_position_mm(
+                text_item, layout_result, tw_mm, th_mm)
+        else:
+            base_pt = 24
+            text_scale = text_item.font_size_pt / base_pt
+
+            temp_item = QGraphicsTextItem()
+            temp_item.setHtml(text_item.text)
+
+            font = QFont(text_item.font_family, base_pt)
+            if text_item.font_weight == "bold":
+                font.setBold(True)
+            temp_item.setFont(font)
+            temp_item.setDefaultTextColor(QColor(text_item.color))
+
+            base_rect = temp_item.boundingRect()
+            tw_mm = base_rect.width() * text_scale
+            th_mm = base_rect.height() * text_scale
+
+            x_mm, y_mm = ImageExporter._text_position_mm(text_item, layout_result, tw_mm, th_mm)
+
+            # Canvas applies scale & rotation about the unscaled bounding-rect
+            # centre for GLOBAL (floating) text. Mirror that here so the exported
+            # visual top-left matches the on-canvas position:
+            #   visual_topleft = (x, y) + (1 - s) * br/2
+            if is_global:
+                offset_x_mm = (base_rect.width() - tw_mm) / 2.0
+                offset_y_mm = (base_rect.height() - th_mm) / 2.0
+                x_mm += offset_x_mm
+                y_mm += offset_y_mm
 
         x_dots = x_mm * scale
         y_dots = y_mm * scale
@@ -812,6 +826,19 @@ class PdfExporter:
             align = project.effective_label_align(t)
             ox_mm, oy_mm = project.effective_label_offsets(t)
 
+            rect_dots = QRectF((lx + ox_mm) * scale, (ly + oy_mm) * scale,
+                               lw * scale, lh * scale)
+            from src.utils.typography import uses_points
+            if uses_points(project):
+                from src.utils.label_strip_render import draw_point_strip_label
+                draw_point_strip_label(
+                    painter, rect_dots, t.text, t.font_family, t.font_size_pt,
+                    t.font_weight, QColor(t.color),
+                    project.label_strip_is_vertical(t), align,
+                    project.effective_label_valign(t),
+                    getattr(t, 'rotation', 0.0) or 0.0, device_scale=scale)
+                continue
+
             # The canvas draws strip labels with an explicit pixel size, i.e.
             # one point of label font spans one millimetre on the page (the
             # same convention the layout engine sizes the strip with). Mirror
@@ -823,8 +850,6 @@ class PdfExporter:
             if t.font_weight == "bold":
                 font.setBold(True)
 
-            rect_dots = QRectF((lx + ox_mm) * scale, (ly + oy_mm) * scale,
-                               lw * scale, lh * scale)
             from src.utils.label_strip_render import draw_strip_label
             draw_strip_label(painter, rect_dots, t.text, font, QColor(t.color),
                              project.label_strip_is_vertical(t), align,
@@ -846,10 +871,12 @@ class PdfExporter:
             if not band:
                 continue
             x, y, w, h = band
-            group_label_render.draw(painter, group_label, QRectF(x, y, w, h), scale)
+            group_label_render.draw(painter, group_label, QRectF(x, y, w, h), scale,
+                                    typography_mode=getattr(project, 'typography_mode', 'points'))
 
     @staticmethod
-    def _draw_scale_bar(painter: QPainter, obj, content_rect: QRectF, scale: float, fit_mode_override=None):
+    def _draw_scale_bar(painter: QPainter, obj, content_rect: QRectF, scale: float, fit_mode_override=None,
+                        typography_mode='points'):
         """Draw scale bar on the exported image (works for Cell or PiPItem)."""
         # Ensure we have all necessary attributes (PiPItem/Cell compatibility)
         um_per_px = getattr(obj, "scale_bar_um_per_px", 0.1301)
@@ -943,14 +970,22 @@ class PdfExporter:
                 display_val = length_um / factor
                 text = f"{display_val:.0f} {unit}" if display_val >= 1 or display_val == 0 else f"{display_val:.2f} {unit}"
 
-            base_pt = 24
-            text_scale = text_size_mm / base_pt
-            render_scale = text_scale * scale
+            if typography_mode == 'points':
+                from src.utils.typography import point_text_item
+                temp_item = point_text_item(
+                    text, 'Arial', getattr(obj, 'scale_bar_text_size_pt', 8.0),
+                    'normal', color, rich=False)
+                text_scale = temp_item.scale()
+            else:
+                base_pt = 24
+                text_scale = text_size_mm / base_pt
 
-            temp_item = QGraphicsTextItem()
-            temp_item.setPlainText(text)
-            temp_item.setFont(QFont("Arial", base_pt))
-            temp_item.setDefaultTextColor(QColor(color))
+                temp_item = QGraphicsTextItem()
+                temp_item.setPlainText(text)
+                temp_item.setFont(QFont("Arial", base_pt))
+                temp_item.setDefaultTextColor(QColor(color))
+
+            render_scale = text_scale * scale
 
             br = temp_item.boundingRect()
             tw_dots = br.width() * render_scale

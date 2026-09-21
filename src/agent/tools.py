@@ -93,6 +93,18 @@ def _apply(ctx: ToolContext, cmd: Any) -> None:
         ctx.on_changed()
 
 
+def _validate_font_size_pt(value: Any, field: str = "font_size_pt") -> float:
+    import math
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(value) or not 0 < value <= 1000:
+        raise ToolError(
+            "invalid_value",
+            f"{field} must be a positive finite number up to 1000, "
+            f"got {value!r}",
+            field=field)
+    return float(value)
+
+
 def _find_cell(ctx: ToolContext, cell_id: str) -> Cell:
     cell = ctx.project.find_cell_by_id(cell_id)
     if cell is None:
@@ -157,6 +169,7 @@ def _cell_summary(cell: Cell,
             "offset_y": cell.scale_bar_offset_y,
             "custom_text": cell.scale_bar_custom_text,
             "text_size_mm": cell.scale_bar_text_size_mm,
+            "text_size_pt": getattr(cell, 'scale_bar_text_size_pt', 8.0),
         }
     if cell.pip_items:
         out["pip_items"] = [
@@ -195,6 +208,7 @@ def project_describe(ctx: ToolContext) -> Dict[str, Any]:
     ]
     return _ok({
         "name": p.name,
+        "typography_mode": getattr(p, 'typography_mode', 'points'),
         "page_mm": {"w": p.page_width_mm, "h": p.page_height_mm},
         "dpi": p.dpi,
         "layout_mode": p.layout_mode,
@@ -952,7 +966,7 @@ def text_set_style(ctx: ToolContext, text_id: str,
                         "font_weight must be 'normal' or 'bold'",
                         field="font_weight")
     if "font_size_pt" in changes:
-        changes["font_size_pt"] = int(changes["font_size_pt"])
+        changes["font_size_pt"] = _validate_font_size_pt(changes["font_size_pt"])
     if "placement" in changes:
         placement = changes["placement"]
         if placement is not None and placement not in _LABEL_ITEM_PLACEMENTS:
@@ -982,7 +996,7 @@ def text_add(ctx: ToolContext, text: str,
              x: float = 10.0, y: float = 10.0,
              parent_cell_id: Optional[str] = None,
              font_family: Optional[str] = None,
-             font_size_pt: Optional[int] = None,
+             font_size_pt: Optional[float] = None,
              font_weight: Optional[str] = None,
              color: Optional[str] = None,
              rotation: Optional[float] = None) -> Dict[str, Any]:
@@ -1002,7 +1016,7 @@ def text_add(ctx: ToolContext, text: str,
     if font_family is not None:
         item.font_family = str(font_family)
     if font_size_pt is not None:
-        item.font_size_pt = int(font_size_pt)
+        item.font_size_pt = _validate_font_size_pt(font_size_pt)
     if font_weight is not None:
         if font_weight not in ("normal", "bold"):
             raise ToolError("invalid_value",
@@ -1059,7 +1073,7 @@ def labels_set_style(ctx: ToolContext, tier: Optional[str] = None,
                         "tier must be 'panel' or 'title'",
                         field="tier")
     if "font_size_pt" in changes:
-        changes["font_size_pt"] = int(changes["font_size_pt"])
+        changes["font_size_pt"] = _validate_font_size_pt(changes["font_size_pt"])
     if "font_weight" in changes and changes["font_weight"] not in ("normal", "bold"):
         raise ToolError("invalid_value",
                         "font_weight must be 'normal' or 'bold'",
@@ -1173,6 +1187,7 @@ _SCALE_BAR_FIELDS = {
     "scale_bar_thickness_mm", "scale_bar_position",
     "scale_bar_offset_x", "scale_bar_offset_y",
     "scale_bar_custom_text", "scale_bar_text_size_mm", "scale_bar_unit",
+    "scale_bar_text_size_pt",
 }
 
 
@@ -1196,9 +1211,24 @@ def cell_set_scale_bar(ctx: ToolContext, cell_id: str,
                 f"unknown scale-bar field: {k}",
                 hint="allowed (unprefixed): enabled, mode, um_per_px, "
                      "length_um, color, show_text, thickness_mm, position, "
-                     "offset_x, offset_y, custom_text, text_size_mm, unit",
+                     "offset_x, offset_y, custom_text, text_size_mm, "
+                     "text_size_pt, unit",
             )
         norm[full] = v
+
+    points = getattr(ctx.project, 'typography_mode', 'legacy') == 'points'
+    if points and "scale_bar_text_size_mm" in norm:
+        raise ToolError("invalid_value",
+                        "Use text_size_pt for points-mode projects.",
+                        field="text_size_mm")
+    if not points and "scale_bar_text_size_pt" in norm:
+        raise ToolError("invalid_value",
+                        "This project preserves legacy scale-bar sizing; "
+                        "use text_size_mm.",
+                        field="text_size_pt")
+    if "scale_bar_text_size_pt" in norm:
+        norm["scale_bar_text_size_pt"] = _validate_font_size_pt(
+            norm["scale_bar_text_size_pt"], "scale_bar_text_size_pt")
 
     from src.app.commands import PropertyChangeCommand
     cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
@@ -1224,6 +1254,7 @@ _PIP_FIELDS = {
     "scale_bar_show_text", "scale_bar_thickness_mm", "scale_bar_position",
     "scale_bar_offset_x", "scale_bar_offset_y",
     "scale_bar_custom_text", "scale_bar_text_size_mm",
+    "scale_bar_text_size_pt",
 }
 
 
@@ -1282,6 +1313,20 @@ def pip_set_properties(ctx: ToolContext, pip_id: str,
         raise ToolError("invalid_params",
                         f"unknown PiP fields: {sorted(bad)}",
                         hint=f"allowed: {sorted(_PIP_FIELDS)}")
+
+    points = getattr(ctx.project, 'typography_mode', 'legacy') == 'points'
+    if points and "scale_bar_text_size_mm" in changes:
+        raise ToolError("invalid_value",
+                        "Use scale_bar_text_size_pt for points-mode projects.",
+                        field="scale_bar_text_size_mm")
+    if not points and "scale_bar_text_size_pt" in changes:
+        raise ToolError("invalid_value",
+                        "This project preserves legacy scale-bar sizing; "
+                        "use scale_bar_text_size_mm.",
+                        field="scale_bar_text_size_pt")
+    if "scale_bar_text_size_pt" in changes:
+        changes["scale_bar_text_size_pt"] = _validate_font_size_pt(
+            changes["scale_bar_text_size_pt"], "scale_bar_text_size_pt")
 
     from src.app.commands import PropertyChangeCommand
     cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
@@ -1443,7 +1488,9 @@ def _validate_group_label_changes(changes: Dict[str, Any]) -> None:
                     "bracket_width_pt", "bracket_tick_mm", "bracket_gap_mm"):
         if numeric in changes and changes[numeric] is not None:
             changes[numeric] = float(changes[numeric])
-    for integer in ("level", "font_size_pt", "row_index"):
+    if "font_size_pt" in changes and changes["font_size_pt"] is not None:
+        changes["font_size_pt"] = _validate_font_size_pt(changes["font_size_pt"])
+    for integer in ("level", "row_index"):
         if integer in changes and changes[integer] is not None:
             changes[integer] = int(changes[integer])
 
@@ -1618,9 +1665,10 @@ def project_set_label_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
         else:
             proj_changes[proj_field_map[key]] = value
     if "label_font_size" in proj_changes:
-        proj_changes["label_font_size"] = int(proj_changes["label_font_size"])
+        proj_changes["label_font_size"] = _validate_font_size_pt(
+            proj_changes["label_font_size"])
     if "title_label_font_size" in proj_changes:
-        proj_changes["title_label_font_size"] = int(
+        proj_changes["title_label_font_size"] = _validate_font_size_pt(
             proj_changes["title_label_font_size"])
 
     from src.app.commands import PropertyChangeCommand

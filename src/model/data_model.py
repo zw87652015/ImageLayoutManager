@@ -15,10 +15,10 @@ class TextItem:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     text: str = "Text"
     font_family: str = "Arial"
-    font_size_pt: int = 12
+    font_size_pt: float = 12.0
     font_weight: str = "normal" # normal, bold
     color: str = "#000000"
-    
+
     # Position
     scope: str = "global" # global, cell
     subtype: Optional[str] = None # numbering, corner, or None
@@ -139,6 +139,7 @@ class PiPItem:
     scale_bar_offset_y: float = 2.0
     scale_bar_custom_text: Optional[str] = None
     scale_bar_text_size_mm: float = 2.0
+    scale_bar_text_size_pt: float = 8.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -175,6 +176,7 @@ class PiPItem:
             "scale_bar_offset_y": self.scale_bar_offset_y,
             "scale_bar_custom_text": self.scale_bar_custom_text,
             "scale_bar_text_size_mm": self.scale_bar_text_size_mm,
+            "scale_bar_text_size_pt": self.scale_bar_text_size_pt,
         }
 
     @classmethod
@@ -381,6 +383,7 @@ class Cell:
     scale_bar_offset_y: float = 2.0
     scale_bar_custom_text: Optional[str] = None  # If set, overrides auto-generated "X µm" text
     scale_bar_text_size_mm: float = 2.0  # Font size in mm for scale bar text
+    scale_bar_text_size_pt: float = 8.0
     scale_bar_unit: str = "µm"  # Display unit for the length field (m/cm/dm/mm/µm/nm/pm/fm)
 
     # Freeform layout (used when Project.layout_mode == "freeform")
@@ -456,6 +459,7 @@ class Cell:
             "scale_bar_offset_y": self.scale_bar_offset_y,
             "scale_bar_custom_text": self.scale_bar_custom_text,
             "scale_bar_text_size_mm": self.scale_bar_text_size_mm,
+            "scale_bar_text_size_pt": self.scale_bar_text_size_pt,
             "scale_bar_unit": self.scale_bar_unit,
             "freeform_x_mm": self.freeform_x_mm,
             "freeform_y_mm": self.freeform_y_mm,
@@ -500,6 +504,7 @@ class Cell:
         payload.setdefault("scale_bar_offset_y", 2.0)
         payload.setdefault("scale_bar_custom_text", None)
         payload.setdefault("scale_bar_text_size_mm", 2.0)
+        payload.setdefault("scale_bar_text_size_pt", 8.0)
         payload.setdefault("scale_bar_unit", "µm")
         payload.setdefault("freeform_x_mm", 0.0)
         payload.setdefault("freeform_y_mm", 0.0)
@@ -641,7 +646,7 @@ class GroupLabel:
 
     # --- Style ---
     font_family: str = "Arial"
-    font_size_pt: int = 12
+    font_size_pt: float = 12.0
     font_weight: str = "bold"
     color: str = "#000000"
 
@@ -697,7 +702,8 @@ class GroupLabel:
 @dataclass
 class Project:
     name: str = "Untitled Project"
-    
+    typography_mode: str = "points"
+
     # Page Settings
     page_width_mm: float = 210.0
     page_height_mm: float = 297.0
@@ -744,7 +750,7 @@ class Project:
     label_sub_separator: str = ""
     label_placement: str = "in_cell"
     label_font_family: str = "Arial"
-    label_font_size: int = 12
+    label_font_size: float = 12.0
     label_font_weight: str = "bold"
     label_color: str = "#000000" # black or white (#FFFFFF)
     label_anchor: str = LabelPosition.TOP_LEFT.value
@@ -773,7 +779,7 @@ class Project:
 
     # Global Corner Label Settings
     corner_label_font_family: str = "Arial"
-    corner_label_font_size: int = 12
+    corner_label_font_size: float = 12.0
     corner_label_font_weight: str = "bold"
     corner_label_color: str = "#000000"
 
@@ -781,7 +787,7 @@ class Project:
     # independent of label_* so bold panel letters and regular-weight titles
     # can coexist without either overwriting the other.
     title_label_font_family: str = "Arial"
-    title_label_font_size: int = 10
+    title_label_font_size: float = 10.0
     title_label_font_weight: str = "normal"
     title_label_color: str = "#000000"
 
@@ -887,6 +893,7 @@ class Project:
             "file_version": APP_VERSION,
             "schema_version": PROJECT_SCHEMA_VERSION,
             "name": self.name,
+            "typography_mode": self.typography_mode,
             "page_width_mm": self.page_width_mm,
             "page_height_mm": self.page_height_mm,
             "margin_left_mm": self.margin_left_mm,
@@ -942,6 +949,7 @@ class Project:
         data = migrate_project_data(data)
         p = cls()
         p.name = data.get("name", "Untitled Project")
+        p.typography_mode = data.get("typography_mode", "legacy")
         p.page_width_mm = data.get("page_width_mm", 210.0)
         p.page_height_mm = data.get("page_height_mm", 297.0)
         p.margin_left_mm = data.get("margin_left_mm", 10.0)

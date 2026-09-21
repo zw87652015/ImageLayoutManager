@@ -77,8 +77,10 @@ class SvgTextGroupsPanel(QDialog):
 
         self._font_size_spin = QDoubleSpinBox()
         self._font_size_spin.setRange(1.0, 200.0)
-        self._font_size_spin.setDecimals(1)
+        self._font_size_spin.setDecimals(2)
+        self._font_size_spin.setSingleStep(0.5)
         self._font_size_spin.setSuffix(" pt")
+        self._font_size_spin.setToolTip(tr("typography_points_tip"))
         self._font_size_spin.setValue(12.0)
         props_form.addRow(tr("svgtxt_font_size_label"), self._font_size_spin)
 

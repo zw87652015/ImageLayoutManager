@@ -170,7 +170,8 @@ class SvgExporter:
                         p, cell, placement, scale, svg_override, raster_override), clip)
             if placement is not None and getattr(cell, 'scale_bar_enabled', False):
                 layer(lambda p: ImageExporter._draw_scale_bar(p, cell,
-                    QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain'))
+                    QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain',
+                    typography_mode=getattr(project, 'typography_mode', 'points')))
             if getattr(cell, 'pip_items', []):
                 layer(lambda p: ImageExporter._draw_pip_items(p, project, cell, content, scale, placement))
 

@@ -106,8 +106,10 @@ class TextGroupsWidget(QWidget):
 
         spin = QDoubleSpinBox()
         spin.setRange(1.0, 200.0)
-        spin.setDecimals(1)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.5)
         spin.setSuffix(" pt")
+        spin.setToolTip(tr("typography_points_tip"))
         spin.setValue(group.font_size_pt)
         spin.setFixedWidth(80)
 

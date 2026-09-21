@@ -89,7 +89,8 @@ def _register_all_namespaces(svg_path: str):
     ET.register_namespace('xlink', 'http://www.w3.org/1999/xlink')
 
 
-def _set_font_size(elem, font_size: float, unit: str = 'pt'):
+def _set_font_size(elem, font_size: float, unit: str = 'pt',
+                   override_last: bool = False):
     """Write font-size into the element's inline style="" attribute.
 
     Inline style has the highest CSS specificity (beats class selectors and SVG
@@ -102,7 +103,11 @@ def _set_font_size(elem, font_size: float, unit: str = 'pt'):
     """
     new_size = f'{font_size}{unit}'
     style = elem.get('style', '')
-    if style and 'font-size' in style:
+    if override_last:
+        parts = [part for part in style.split(';')
+                 if part.strip() and not re.match(r'^\s*font-size\s*:', part, re.I)]
+        new_style = ';'.join(parts + [f'font-size:{new_size}'])
+    elif style and 'font-size' in style:
         new_style = re.sub(r'font-size\s*:\s*[^;]+', f'font-size:{new_size}', style)
     elif style:
         new_style = f'font-size:{new_size};{style}'
@@ -219,7 +224,31 @@ def _matrix_effective_scale(matrix: list) -> float:
     return max(s, 1e-9)
 
 
-def _walk_normalize(elem, acc: list, target_pt: float, unit: str = 'pt') -> None:
+def _rescale_text_coordinates(elem, scale):
+    length = re.compile(r'([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)(%|[A-Za-z]+)?')
+    def inverse(match):
+        unit = match.group(2) or ''
+        if unit in ('em', 'ex'):
+            return match.group(0)
+        return f'{float(match.group(1)) / scale:.12g}{unit}'
+    for node in elem.iter():
+        if node.tag.rsplit('}', 1)[-1] not in ('text', 'tspan'):
+            continue
+        for key in ('x', 'y', 'dx', 'dy', 'textLength'):
+            if key in node.attrib:
+                node.set(key, length.sub(inverse, node.get(key)))
+        for key in ('letter-spacing', 'word-spacing', 'stroke-width'):
+            if key in node.attrib:
+                node.set(key, length.sub(inverse, node.get(key)))
+        style = node.get('style')
+        if style:
+            node.set('style', re.sub(
+                r'((?:letter-spacing|word-spacing|stroke-width)\s*:\s*)([^;]+)',
+                lambda m: m.group(1) + length.sub(inverse, m.group(2)), style))
+
+
+def _walk_normalize(elem, acc: list, target_pt: float, unit: str = 'pt',
+                    precise: bool = False) -> None:
     """Recursively walk *elem*, accumulating the CTM, normalising <text>/<tspan>."""
     local = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
 
@@ -239,17 +268,52 @@ def _walk_normalize(elem, acc: list, target_pt: float, unit: str = 'pt') -> None
     if local == 'text':
         effective_scale = _matrix_effective_scale(new_acc)
         adjusted = target_pt / effective_scale
-        _set_font_size(elem, adjusted, unit)
+        size = adjusted
+        if precise and unit == 'px':
+            size = 128
+            comp = adjusted / size
+            if abs(comp - 1.0) > 1e-12:
+                _rescale_text_coordinates(elem, comp)
+                elem.set('transform', (elem.get('transform', '') + f' scale({comp:.12g})').strip())
+        _set_font_size(elem, size, unit, override_last=precise)
         # Normalise all <tspan> descendants to the same visual size.
         # tspan cannot carry its own transform, so effective_scale is the same.
         for desc in elem.iter():
             desc_local = desc.tag.split('}')[-1] if '}' in desc.tag else desc.tag
             if desc_local == 'tspan' and desc is not elem:
-                _set_font_size(desc, adjusted, unit)
+                _set_font_size(desc, size, unit, override_last=precise)
         return  # no need to recurse further into text children
 
     for child in elem:
-        _walk_normalize(child, new_acc, target_pt, unit)
+        _walk_normalize(child, new_acc, target_pt, unit, precise)
+
+
+def _positioned_text_runs(svg_bytes):
+    try:
+        root = ET.fromstring(svg_bytes)
+    except ET.ParseError:
+        return svg_bytes
+    changed = False
+    for elem in list(root.iter()):
+        if elem.tag.rsplit('}', 1)[-1] != 'text' or (elem.text or '').strip():
+            continue
+        children = list(elem)
+        if not children or any(key in elem.attrib for key in ('rotate', 'textLength')):
+            continue
+        if any(child.tag.rsplit('}', 1)[-1] != 'tspan'
+               or 'x' not in child.attrib or 'y' not in child.attrib
+               or 'transform' in child.attrib or (child.tail or '').strip()
+               or any(node.tag.rsplit('}', 1)[-1] == 'textPath' for node in child.iter())
+               for child in children):
+            continue
+        namespace = elem.tag[:-4]
+        elem.tag = namespace + 'g'
+        for key in ('x', 'y', 'dx', 'dy'):
+            elem.attrib.pop(key, None)
+        for child in children:
+            child.tag = namespace + 'text'
+        changed = True
+    return ET.tostring(root, encoding='unicode').encode('utf-8') if changed else svg_bytes
 
 
 def _register_all_namespaces_from_bytes(svg_bytes: bytes) -> None:
@@ -267,7 +331,8 @@ def _register_all_namespaces_from_bytes(svg_bytes: bytes) -> None:
     ET.register_namespace('xlink', 'http://www.w3.org/1999/xlink')
 
 
-def normalize_svg_text(svg_bytes: bytes, target_pt: float) -> bytes:
+def normalize_svg_text(svg_bytes: bytes, target_pt: float, unit: str = 'pt',
+                       precise: bool = False) -> bytes:
     """Return SVG bytes with every <text>/<tspan> font-size set to *target_pt*.
 
     Accounts for ancestor transform scaling (scale/matrix/rotate) so the
@@ -289,7 +354,7 @@ def normalize_svg_text(svg_bytes: bytes, target_pt: float) -> bytes:
         return svg_bytes
 
     identity = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
-    _walk_normalize(root, identity, target_pt)
+    _walk_normalize(root, identity, target_pt, unit, precise)
 
     # Best-effort: replace font-size in <style> CSS blocks
     for elem in root.iter():
@@ -297,7 +362,7 @@ def normalize_svg_text(svg_bytes: bytes, target_pt: float) -> bytes:
         if local == 'style' and elem.text:
             elem.text = re.sub(
                 r'font-size\s*:\s*[^;}"]*',
-                f'font-size: {target_pt}pt',
+                f'font-size: {target_pt}{unit}',
                 elem.text,
             )
 
@@ -308,7 +373,7 @@ def normalize_svg_text(svg_bytes: bytes, target_pt: float) -> bytes:
 
 
 def apply_svg_font_overrides_from_bytes(
-    svg_bytes: bytes, overrides: dict, unit: str = 'pt'
+    svg_bytes: bytes, overrides: dict, unit: str = 'pt', precise: bool = False
 ) -> Optional[bytes]:
     """Like ``apply_svg_font_overrides`` but takes already-loaded bytes."""
     if not overrides:
@@ -318,7 +383,7 @@ def apply_svg_font_overrides_from_bytes(
         root = ET.fromstring(svg_bytes)
     except Exception:
         return None
-    if not _apply_group_font_sizes(root, overrides, unit):
+    if not _apply_group_font_sizes(root, overrides, unit, precise):
         return None
     try:
         return ET.tostring(root, encoding='unicode').encode('utf-8')
@@ -326,7 +391,8 @@ def apply_svg_font_overrides_from_bytes(
         return None
 
 
-def _apply_group_font_sizes(root, overrides, unit: str = 'pt'):
+def _apply_group_font_sizes(root, overrides, unit: str = 'pt',
+                            precise: bool = False):
     parents = {child: parent for parent in root.iter() for child in parent}
     modified = False
     for elem, key, _idx in _iter_text_elements(root):
@@ -338,7 +404,7 @@ def _apply_group_font_sizes(root, overrides, unit: str = 'pt'):
             transforms.append(parent.get('transform', ''))
             parent = parents.get(parent)
         acc = _parse_transform_matrix(' '.join(reversed(transforms)))
-        _walk_normalize(elem, acc, overrides[key], unit)
+        _walk_normalize(elem, acc, overrides[key], unit, precise)
         modified = True
     return modified
 
@@ -387,6 +453,9 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     do_normalize = getattr(cell, 'svg_normalize_text', False)
     overrides = build_svg_overrides_for_path(project, path)
 
+    from src.utils.typography import uses_points
+    precise = uses_points(project)
+
     if not do_normalize and not overrides:
         return None
 
@@ -409,12 +478,20 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     # Step 1 — normalise
     if do_normalize:
         target_pt = float(getattr(cell, 'svg_normalize_text_pt', 8.0))
-        base_bytes = normalize_svg_text(base_bytes, target_pt)
+        if precise:
+            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result,
+                                          content_size_mm)
+            base_bytes = normalize_svg_text(
+                base_bytes, (target_pt * 25.4 / 72.0) / mm_per_unit,
+                unit='px', precise=True)
+        else:
+            base_bytes = normalize_svg_text(base_bytes, target_pt)
 
     # Step 2 — per-element group overrides on top of (possibly normalised) bytes
     if overrides:
-        result = apply_svg_font_overrides_from_bytes(base_bytes, overrides, unit='px')
+        result = apply_svg_font_overrides_from_bytes(
+            base_bytes, overrides, unit='px', precise=precise)
         if result:
-            return result
+            return _positioned_text_runs(result) if precise else result
 
-    return base_bytes if do_normalize else None
+    return _positioned_text_runs(base_bytes) if do_normalize and precise else base_bytes if do_normalize else None

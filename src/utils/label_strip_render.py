@@ -65,3 +65,16 @@ def draw_strip_label(painter: QPainter, rect: QRectF, text: str, font: QFont,
     h, v = strip_text_alignment(vertical, align, valign, rotation)
     painter.drawText(box, _H_FLAGS[h] | _V_FLAGS[v], text)
     painter.restore()
+
+
+def draw_point_strip_label(painter, rect, text, family, size_pt, weight, color,
+                           vertical, align, valign, rotation, device_scale=1.0):
+    from src.utils.typography import reference_font, text_scale_mm
+    factor = text_scale_mm(size_pt) * device_scale
+    painter.save()
+    painter.scale(factor, factor)
+    box = QRectF(rect.x() / factor, rect.y() / factor,
+                 rect.width() / factor, rect.height() / factor)
+    draw_strip_label(painter, box, text, reference_font(family, weight),
+                     color, vertical, align, valign, rotation)
+    painter.restore()

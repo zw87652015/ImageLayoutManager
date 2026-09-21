@@ -314,6 +314,8 @@ class CanvasScene(QGraphicsScene):
                 getattr(cell, 'scale_bar_offset_y', 2.0),
                 getattr(cell, 'scale_bar_custom_text', None),
                 getattr(cell, 'scale_bar_text_size_mm', 2.0),
+                getattr(cell, 'scale_bar_text_size_pt', 8.0),
+                getattr(self.project, 'typography_mode', 'points'),
                 getattr(cell, 'scale_bar_unit', 'µm'),
                 getattr(cell, 'crop_left', 0.0),
                 getattr(cell, 'crop_top', 0.0),
@@ -371,6 +373,7 @@ class CanvasScene(QGraphicsScene):
                     getattr(cell, 'crop_bottom', 1.0),
                     svg_override_bytes=svg_override,
                     raster_override=raster_override,
+                    scale_bar_text_size_pt=getattr(cell, 'scale_bar_text_size_pt', 8.0),
                     image_placement=replace(
                         placement,
                         rect=(placement.rect[0] - x, placement.rect[1] - y, *placement.rect[2:]),
@@ -453,10 +456,11 @@ class CanvasScene(QGraphicsScene):
             # Use setHtml to support rich text
             t_item.setHtml(text_model.text)
             t_item.update_style(
-                text_model.font_family, 
-                text_model.font_size_pt, 
-                text_model.font_weight, 
-                text_model.color
+                text_model.font_family,
+                text_model.font_size_pt,
+                text_model.font_weight,
+                text_model.color,
+                typography_mode=getattr(self.project, 'typography_mode', 'points'),
             )
             t_item.set_background(
                 getattr(text_model, 'bg_enabled', False),
@@ -492,8 +496,13 @@ class CanvasScene(QGraphicsScene):
                     
                     # Get text bounding rect for right/bottom alignment (accounting for scale)
                     scale = t_item.scale()
-                    text_width = t_item.boundingRect().width() * scale
-                    text_height = t_item.boundingRect().height() * scale
+                    if getattr(self.project, 'typography_mode', 'points') == 'points':
+                        t_item.setTransformOriginPoint(0, 0)
+                        text_width = t_item.content_rect().width() * scale
+                        text_height = t_item.content_rect().height() * scale
+                    else:
+                        text_width = t_item.boundingRect().width() * scale
+                        text_height = t_item.boundingRect().height() * scale
                     
                     if "top" in anchor:
                         ty = cy + oy
@@ -524,10 +533,18 @@ class CanvasScene(QGraphicsScene):
                 # Rotation is applied around the text's visual centre so that
                 # setPos() still represents the unrotated top-left origin,
                 # keeping drag-save math simple.
-                t_item.setPos(text_model.x, text_model.y)
-                br = t_item.boundingRect()
-                t_item.setTransformOriginPoint(br.width() / 2, br.height() / 2)
-                t_item.setRotation(getattr(text_model, "rotation", 0.0))
+                if getattr(self.project, 'typography_mode', 'points') == 'points':
+                    br = t_item.content_rect()
+                    scale = t_item.scale() or 1.0
+                    t_item.setTransformOriginPoint(br.center())
+                    t_item.setPos(text_model.x - br.width() * (1 - scale) / 2,
+                                  text_model.y - br.height() * (1 - scale) / 2)
+                    t_item.setRotation(getattr(text_model, "rotation", 0.0))
+                else:
+                    t_item.setPos(text_model.x, text_model.y)
+                    br = t_item.boundingRect()
+                    t_item.setTransformOriginPoint(br.width() / 2, br.height() / 2)
+                    t_item.setRotation(getattr(text_model, "rotation", 0.0))
                 t_item.scope = "global"
 
         # Place add-row / add-cell buttons and dividers around the layout
@@ -1203,7 +1220,8 @@ class CanvasScene(QGraphicsScene):
         self._gl_drag_hints = {
             'source': source, 'target': target, 'target_side': target_side,
             'inside': False, 'level_hint': level_hint, 'base': base,
-            'step': LayoutEngine.group_label_thickness_mm(model) + model.gap_mm,
+            'step': LayoutEngine.group_label_thickness_mm(
+                model, getattr(self.project, 'typography_mode', 'points')) + model.gap_mm,
             'side': model.side, 'current_level': model.level,
             'hover_level': None,
         }
@@ -1350,9 +1368,16 @@ class CanvasScene(QGraphicsScene):
 
         # Ghost letter — mimics the strip's rendering (1pt = 1 scene unit).
         ghost = QGraphicsSimpleTextItem(text_model.text)
-        font = QFont(text_model.font_family, text_model.font_size_pt)
-        font.setBold(text_model.font_weight == "bold")
-        ghost.setFont(font)
+        if getattr(self.project, 'typography_mode', 'points') == 'points':
+            from src.utils.typography import reference_font, text_scale_mm
+            ghost.setFont(reference_font(text_model.font_family,
+                                         text_model.font_weight))
+            ghost.setScale(text_scale_mm(text_model.font_size_pt))
+        else:
+            font = QFont(text_model.font_family)
+            font.setPointSizeF(text_model.font_size_pt)
+            font.setBold(text_model.font_weight == "bold")
+            ghost.setFont(font)
         ghost.setBrush(QBrush(QColor(text_model.color)))
         ghost.setZValue(70)
         ghost.setOpacity(0.85)
@@ -1524,7 +1549,9 @@ class CanvasScene(QGraphicsScene):
     def _label_letter_point(self, rect: QRectF, ghost, align: str,
                             valign: str = "center", vertical: bool = False) -> QPointF:
         """Top-left for the ghost so its text lands where the strip paints it."""
-        size = ghost.boundingRect()
+        raw = ghost.boundingRect()
+        scale = ghost.scale() or 1.0
+        size = QRectF(raw.x(), raw.y(), raw.width() * scale, raw.height() * scale)
         if vertical:
             x = rect.center().x() - size.width() / 2
             if valign == "top":

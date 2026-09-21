@@ -7,6 +7,8 @@ OUT_OF_CELL_PLACEMENTS = (
     "label_row_above", "label_row_below", "label_col_left", "label_col_right",
 )
 
+_PT_TO_MM = 25.4 / 72.0
+
 
 @dataclass
 class LayoutResult:
@@ -22,13 +24,19 @@ class LayoutEngine:
     @staticmethod
     def _label_row_height_mm(project: Project) -> float:
         """Height of a label row based on label font settings."""
-        h = project.label_font_size * 1.2 + 2.0
+        size = project.label_font_size
+        if getattr(project, 'typography_mode', 'legacy') == 'points':
+            size = size * _PT_TO_MM
+        h = size * 1.2 + 2.0
         return max(5.0, min(50.0, h))
 
     @staticmethod
     def _label_col_width_mm(project: Project) -> float:
         """Width of a label column based on label font settings (same formula as row height)."""
-        w = project.label_font_size * 1.2 + 2.0
+        size = project.label_font_size
+        if getattr(project, 'typography_mode', 'legacy') == 'points':
+            size = size * _PT_TO_MM
+        w = size * 1.2 + 2.0
         return max(5.0, min(50.0, w))
 
     # ------------------------------------------------------------------
@@ -42,6 +50,8 @@ class LayoutEngine:
         if override and override > 0:
             return override
         size = font_size_pt if font_size_pt and font_size_pt > 0 else project.label_font_size
+        if getattr(project, 'typography_mode', 'legacy') == 'points':
+            size = size * _PT_TO_MM
         return max(5.0, min(50.0, size * 1.2 + 2.0))
 
     @staticmethod
@@ -75,11 +85,14 @@ class LayoutEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def group_label_thickness_mm(group_label: GroupLabel) -> float:
+    def group_label_thickness_mm(group_label: GroupLabel, typography_mode='points') -> float:
         """Band thickness: explicit value, else derived from font and bracket."""
         if group_label.thickness_mm and group_label.thickness_mm > 0:
             return group_label.thickness_mm
-        thickness = group_label.font_size_pt * 1.2 + 2.0
+        size = group_label.font_size_pt
+        if typography_mode == 'points':
+            size = size * _PT_TO_MM
+        thickness = size * 1.2 + 2.0
         if group_label.bracket_style != "none":
             thickness += group_label.bracket_gap_mm + group_label.bracket_tick_mm
         return max(4.0, min(60.0, thickness))
@@ -174,7 +187,8 @@ class LayoutEngine:
         slot_geoms: List[Tuple[float, float]] = []
         for group_label in labels:
             span = set(LayoutEngine.group_label_target_ids(project, group_label))
-            thickness = LayoutEngine.group_label_thickness_mm(group_label)
+            thickness = LayoutEngine.group_label_thickness_mm(
+                group_label, getattr(project, 'typography_mode', 'points'))
             for idx, occupied in enumerate(slot_spans):
                 if not (occupied & span):
                     occupied |= span
@@ -189,12 +203,12 @@ class LayoutEngine:
         return slot_of, slot_geoms
 
     @staticmethod
-    def _gutter_mm(group_labels: List[GroupLabel]) -> float:
+    def _gutter_mm(group_labels: List[GroupLabel], typography_mode='points') -> float:
         """Width a side gutter must reserve to fit its widest band."""
         if not group_labels:
             return 0.0
         return max(
-            LayoutEngine.group_label_thickness_mm(g) + g.gap_mm
+            LayoutEngine.group_label_thickness_mm(g, typography_mode) + g.gap_mm
             for g in group_labels
         )
 
@@ -269,7 +283,8 @@ class LayoutEngine:
         if bbox is None:
             return None
         x, y, w, h = bbox
-        thickness = LayoutEngine.group_label_thickness_mm(group_label)
+        thickness = LayoutEngine.group_label_thickness_mm(
+            group_label, getattr(project, 'typography_mode', 'points'))
         gap = group_label.gap_mm
         if side == "top":
             return (x, y - gap - thickness, w, thickness)
@@ -344,7 +359,8 @@ class LayoutEngine:
             if bbox is None:
                 continue
             x, y, w, h = bbox
-            thickness = LayoutEngine.group_label_thickness_mm(group_label)
+            thickness = LayoutEngine.group_label_thickness_mm(
+                group_label, getattr(project, 'typography_mode', 'points'))
             gap = group_label.gap_mm
             if group_label.side == "top":
                 rects[group_label.id] = (x, y - gap - thickness, w, thickness)
@@ -388,8 +404,10 @@ class LayoutEngine:
         # Group-label bands claim space before anything else is measured.
         bands_top, bands_bottom, bands_left, bands_right = \
             LayoutEngine._collect_group_bands(project)
-        gutter_left = LayoutEngine._gutter_mm(bands_left)
-        gutter_right = LayoutEngine._gutter_mm(bands_right)
+        gutter_left = LayoutEngine._gutter_mm(
+            bands_left, getattr(project, 'typography_mode', 'points'))
+        gutter_right = LayoutEngine._gutter_mm(
+            bands_right, getattr(project, 'typography_mode', 'points'))
         content_x = project.margin_left_mm + gutter_left
         content_width = max(0.0, content_width - gutter_left - gutter_right)
         if content_width <= 0:
@@ -702,7 +720,8 @@ class LayoutEngine:
             bbox = LayoutEngine._group_label_bbox(project, group_label, cell_rects)
             if bbox is None:
                 continue
-            thickness = LayoutEngine.group_label_thickness_mm(group_label)
+            thickness = LayoutEngine.group_label_thickness_mm(
+                group_label, getattr(project, 'typography_mode', 'points'))
             x = content_x - group_label.gap_mm - thickness
             rects[group_label.id] = (x, bbox[1], thickness, bbox[3])
 
@@ -710,7 +729,8 @@ class LayoutEngine:
             bbox = LayoutEngine._group_label_bbox(project, group_label, cell_rects)
             if bbox is None:
                 continue
-            thickness = LayoutEngine.group_label_thickness_mm(group_label)
+            thickness = LayoutEngine.group_label_thickness_mm(
+                group_label, getattr(project, 'typography_mode', 'points'))
             x = content_right + group_label.gap_mm
             rects[group_label.id] = (x, bbox[1], thickness, bbox[3])
 

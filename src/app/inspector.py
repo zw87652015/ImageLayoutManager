@@ -577,6 +577,8 @@ class Inspector(QWidget):
         self._scroll = scroll
 
         self._lbl_registry: list[tuple[str, QLabel]] = []
+        self._typography_mode = 'points'
+        self._selected_text_is_math = False
 
         container = QWidget()
         self.layout = QVBoxLayout(container)
@@ -584,6 +586,11 @@ class Inspector(QWidget):
         self.layout.setSpacing(4)
         self.layout.setContentsMargins(4, 4, 4, 4)
         scroll.setWidget(container)
+
+        self.typography_notice = QLabel()
+        self.typography_notice.setWordWrap(True)
+        self.typography_notice.hide()
+        self.layout.addWidget(self.typography_notice)
 
         self.setMinimumWidth(300)
         
@@ -599,6 +606,10 @@ class Inspector(QWidget):
             lambda v: self.project_property_changed.emit({"dpi": v})
         )
         self.project_layout.addRow(self._fl("lbl_dpi"), self.dpi_spin)
+
+        self.typography_mode_value = QLabel()
+        self.project_layout.addRow(self._fl("lbl_typography_mode"),
+                                   self.typography_mode_value)
         
         # Page Size Presets
         self.page_preset = QComboBox()
@@ -675,9 +686,11 @@ class Inspector(QWidget):
         )
         self.project_layout.addRow(self._fl("lbl_font"), self.corner_label_font)
         
-        self.corner_label_size = QSpinBox()
-        self.corner_label_size.setRange(1, 72)
-        self.corner_label_size.setValue(12)
+        self.corner_label_size = QDoubleSpinBox()
+        self.corner_label_size.setRange(0.1, 1000.0)
+        self.corner_label_size.setDecimals(2)
+        self.corner_label_size.setSingleStep(0.5)
+        self.corner_label_size.setValue(12.0)
         self.corner_label_size.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"corner_label_font_size": v})
         )
@@ -743,9 +756,11 @@ class Inspector(QWidget):
         )
         self.project_layout.addRow(self._fl("lbl_font"), self.title_label_font)
 
-        self.title_label_size = QSpinBox()
-        self.title_label_size.setRange(1, 72)
-        self.title_label_size.setValue(10)
+        self.title_label_size = QDoubleSpinBox()
+        self.title_label_size.setRange(0.1, 1000.0)
+        self.title_label_size.setDecimals(2)
+        self.title_label_size.setSingleStep(0.5)
+        self.title_label_size.setValue(10.0)
         self.title_label_size.valueChanged.connect(
             lambda v: self.project_property_changed.emit({"title_label_font_size": v})
         )
@@ -1020,10 +1035,11 @@ class Inspector(QWidget):
         self.scale_bar_layout.addRow(self._fl("lbl_custom_text"), self.scale_bar_custom_text)
         
         self.scale_bar_text_size = QDoubleSpinBox()
-        self.scale_bar_text_size.setRange(0.5, 10.0)
-        self.scale_bar_text_size.setSingleStep(0.1)
-        self.scale_bar_text_size.setSuffix(" mm")
-        self.scale_bar_text_size.setValue(2.0)
+        self.scale_bar_text_size.setRange(0.1, 1000.0)
+        self.scale_bar_text_size.setDecimals(2)
+        self.scale_bar_text_size.setSingleStep(0.5)
+        self.scale_bar_text_size.setSuffix(" pt")
+        self.scale_bar_text_size.setValue(8.0)
         self.scale_bar_text_size.valueChanged.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self._fl("lbl_text_size"), self.scale_bar_text_size)
         
@@ -1144,13 +1160,15 @@ class Inspector(QWidget):
         )
         self.label_cell_layout.addRow(self._fl("lbl_font"), self.label_font)
 
-        self.label_size = QSpinBox()
-        self.label_size.setRange(1, 72)
-        self.label_size.setValue(8)
+        self.label_size = QDoubleSpinBox()
+        self.label_size.setRange(0.1, 1000.0)
+        self.label_size.setDecimals(2)
+        self.label_size.setSingleStep(0.5)
+        self.label_size.setValue(8.0)
         self.label_size.valueChanged.connect(
             lambda v: self._emit_label_cell_change({"font_size_pt": v})
         )
-        self.label_cell_layout.addRow(self._fl("lbl_size_pt"), self.label_size)
+        self.label_cell_layout.addRow(self._fl("lbl_size"), self.label_size)
 
         self.label_bold = QCheckBox(tr("chk_bold"))
         self.label_bold.setChecked(True)
@@ -1389,8 +1407,10 @@ class Inspector(QWidget):
         )
         self.group_label_layout.addRow(self._fl("lbl_font"), self.gl_font_combo)
 
-        self.gl_size_spin = QSpinBox()
-        self.gl_size_spin.setRange(1, 72)
+        self.gl_size_spin = QDoubleSpinBox()
+        self.gl_size_spin.setRange(0.1, 1000.0)
+        self.gl_size_spin.setDecimals(2)
+        self.gl_size_spin.setSingleStep(0.5)
         self.gl_size_spin.valueChanged.connect(
             lambda v: self._emit_group_label_change({"font_size_pt": v})
         )
@@ -1619,12 +1639,14 @@ class Inspector(QWidget):
         )
         self.text_layout.addRow(self._fl("lbl_font"), self.font_family)
         
-        self.font_size = QSpinBox()
-        self.font_size.setRange(1, 72)
+        self.font_size = QDoubleSpinBox()
+        self.font_size.setRange(0.1, 1000.0)
+        self.font_size.setDecimals(2)
+        self.font_size.setSingleStep(0.5)
         self.font_size.valueChanged.connect(
             lambda v: self.text_property_changed.emit({"font_size_pt": v})
         )
-        self.text_layout.addRow(self._fl("lbl_size_pt"), self.font_size)
+        self.text_layout.addRow(self._fl("lbl_size"), self.font_size)
         
         self.is_bold = QCheckBox("Bold")
         self.is_bold.toggled.connect(
@@ -1818,6 +1840,7 @@ class Inspector(QWidget):
             lbl.setText(tr(key))
 
         self.no_selection_label.setText(tr("no_selection"))
+        self._update_typography_labels()
 
         # Retranslate combo-box items (block signals so no spurious property changes)
         def _retranslate_combo(combo, items):
@@ -2241,7 +2264,8 @@ class Inspector(QWidget):
             "scale_bar_offset_x": self.scale_bar_offset_x.value(),
             "scale_bar_offset_y": self.scale_bar_offset_y.value(),
             "scale_bar_custom_text": custom_text if custom_text else None,
-            "scale_bar_text_size_mm": self.scale_bar_text_size.value(),
+            ("scale_bar_text_size_pt" if self._typography_mode == 'points'
+             else "scale_bar_text_size_mm"): self.scale_bar_text_size.value(),
         }
         if getattr(self, "_current_item_type", None) == "pip":
             self.pip_property_changed.emit(properties)
@@ -2481,7 +2505,7 @@ class Inspector(QWidget):
         rotation = data.get("rotation")
         self.gl_rotation_spin.setValue(-1.0 if rotation is None else float(rotation))
         self.gl_font_combo.setCurrentText(data.get("font_family", "Arial"))
-        self.gl_size_spin.setValue(int(data.get("font_size_pt", 12)))
+        self.gl_size_spin.setValue(float(data.get("font_size_pt", 12.0)))
         self.gl_bold_chk.setChecked(data.get("font_weight", "bold") == "bold")
         self.gl_color.set_color(data.get("color", "#000000"))
         bracket = data.get("bracket_style", "none")
@@ -2496,10 +2520,51 @@ class Inspector(QWidget):
         self.group_label_group.set_collapsed(False, animate=False)
         self.group_label_group.show()
 
+    def set_typography_mode(self, mode: str) -> None:
+        if mode not in ('points', 'legacy'):
+            return
+        self._typography_mode = mode
+        self._update_typography_labels()
+
+    def _update_typography_labels(self) -> None:
+        points = self._typography_mode == 'points'
+        size_suffix = " pt" if points else tr("typography_legacy_suffix")
+        size_tip = tr("typography_points_tip") if points else tr("typography_legacy_notice")
+        for spin in (self.corner_label_size, self.title_label_size,
+                     self.label_size, self.gl_size_spin, self.font_size):
+            spin.setSuffix(size_suffix)
+            spin.setToolTip(size_tip)
+        if self._selected_text_is_math:
+            self.font_size.setSuffix(" pt")
+            self.font_size.setToolTip(tr("typography_points_tip"))
+        self.scale_bar_text_size.setSuffix(size_suffix)
+        self.scale_bar_text_size.setToolTip(size_tip)
+        self.svg_normalize_pt.setSuffix(
+            " pt" if points else tr("typography_source_pt_suffix"))
+        self.svg_normalize_pt.setToolTip(
+            tr("typography_points_tip") if points else tr("tip_svg_normalize"))
+        self.typography_mode_value.setText(
+            tr("typography_points") if points else tr("typography_legacy"))
+        self.typography_notice.setText(tr("typography_legacy_notice"))
+        self.typography_notice.setVisible(not points)
+
     def set_selection(self, item_type, data=None, row_data=None, project_data=None):
         """
         item_type: 'cell' | 'label_cell' | 'text' | 'pip' | 'multi_cell' | None
         """
+        mode = None
+        if isinstance(project_data, dict):
+            mode = project_data.get('typography_mode')
+        if mode is None and isinstance(data, dict):
+            mode = data.get('typography_mode')
+        if mode is not None:
+            self.set_typography_mode(mode)
+        self._selected_text_is_math = False
+        if item_type == 'text' and isinstance(data, dict):
+            from src.utils.math_text import has_math, strip_html
+            self._selected_text_is_math = has_math(
+                strip_html(data.get("text", "") or ""))
+        self._update_typography_labels()
         self._current_item_type = item_type
         self.multi_label.hide()
 
@@ -2592,7 +2657,7 @@ class Inspector(QWidget):
                 self.label_cell_style_row.setVisible(bool(data.get("style_locked", False)))
                 self.label_scheme.setCurrentText(data.get("label_scheme", "(a)"))
                 self.label_font.setCurrentText(data.get("label_font_family", "Arial"))
-                self.label_size.setValue(data.get("label_font_size", 12))
+                self.label_size.setValue(float(data.get("label_font_size", 12.0)))
                 self.label_bold.setChecked(data.get("label_font_weight", "bold") == "bold")
                 label_color_hex = data.get("label_color", "#000000")
                 self.label_color.set_color(label_color_hex)
@@ -2765,7 +2830,7 @@ class Inspector(QWidget):
             self.blockSignals(True)
             self.text_content.setText(data.get("text", ""))
             self.font_family.setCurrentText(data.get("font_family", "Arial"))
-            self.font_size.setValue(data.get("font_size_pt", 12))
+            self.font_size.setValue(float(data.get("font_size_pt", 12.0)))
             self.is_bold.setChecked(data.get("font_weight") == "bold")
             
             # Set text color
@@ -2899,7 +2964,8 @@ class Inspector(QWidget):
 
                 # Corner Labels
                 self.corner_label_font.setCurrentText(effective_project_data.get("corner_label_font_family", "Arial"))
-                self.corner_label_size.setValue(effective_project_data.get("corner_label_font_size", 12))
+                self.corner_label_size.setValue(
+                    float(effective_project_data.get("corner_label_font_size", 12.0)))
                 corner_label_color_hex = effective_project_data.get("corner_label_color", "#000000")
                 self.corner_label_color.set_color(corner_label_color_hex)
 
@@ -2933,7 +2999,7 @@ class Inspector(QWidget):
                 self.title_label_font.setCurrentText(
                     effective_project_data.get("title_label_font_family", "Arial"))
                 self.title_label_size.setValue(
-                    int(effective_project_data.get("title_label_font_size", 10)))
+                    float(effective_project_data.get("title_label_font_size", 10.0)))
                 self.title_label_bold.setChecked(
                     effective_project_data.get("title_label_font_weight", "normal") == "bold")
                 self.title_label_color.set_color(
@@ -3021,7 +3087,12 @@ class Inspector(QWidget):
         self.scale_bar_color.set_color(sb_color)
         self.scale_bar_show_text.setChecked(data.get("scale_bar_show_text", True))
         self.scale_bar_custom_text.setText(data.get("scale_bar_custom_text", "") or "")
-        self.scale_bar_text_size.setValue(data.get("scale_bar_text_size_mm", 2.0))
+        if self._typography_mode == 'points':
+            self.scale_bar_text_size.setValue(
+                float(data.get("scale_bar_text_size_pt", 8.0)))
+        else:
+            self.scale_bar_text_size.setValue(
+                float(data.get("scale_bar_text_size_mm", 2.0)))
         self.scale_bar_thickness.setValue(data.get("scale_bar_thickness_mm", 0.5))
         _pos = data.get("scale_bar_position", "bottom_right")
         _pos_values = [v for _, v in self._scale_bar_position_options]

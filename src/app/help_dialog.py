@@ -402,6 +402,7 @@ Cell corner labels provide short annotations anchored to an image corner.</p>
 <p>Enable a scale bar from the cell's context menu or Inspector. Enter the correct source-image calibration
 in µm per pixel, then choose the bar length and appearance. Obtain calibration from the acquisition data;
 do not infer it from screen zoom. Verify the scale bar after cropping, resizing, and export.</p>
+<p>In new projects, label and scale-bar font sizes are final-figure points (1 pt = 1/72 inch), independent of export DPI and canvas zoom. Older projects retain legacy sizing and show a legacy notice; their original numeric values are not silently converted. Math text and text-size groups already use points in both modes.</p>
 """
 
 _LABELS_HTML_ZH = """
@@ -424,6 +425,7 @@ _LABELS_HTML_ZH = """
 <h3>比例尺</h3>
 <p>在单元格右键菜单或检查器中启用比例尺。输入正确的源图像校准值（µm/像素），再设置长度和外观。
 校准值应来自采集数据，不可根据屏幕缩放推断。裁剪、调整尺寸和导出后，均应核对比例尺。</p>
+<p>新建工程中的标注和比例尺字号使用最终成图磅值（1 pt = 1/72 英寸），不随导出 DPI 或画布缩放改变。旧工程保留旧版单位并显示提示，不会静默转换原数值。两种模式中的数学文字和文字大小组都使用磅值。</p>
 """
 
 _TYPOGRAPHY_HTML_EN = """

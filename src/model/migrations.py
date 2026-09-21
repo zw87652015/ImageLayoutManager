@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
-PROJECT_SCHEMA_VERSION = 3
+PROJECT_SCHEMA_VERSION = 4
 
 
 class ProjectMigrationError(ValueError):
@@ -113,6 +113,14 @@ def validate_plot_alignment_group(data):
         raise ProjectMigrationError('Invalid plot alignment row_groups: assign every member to a row.')
 
 
+def _validate_point_sizes(record, keys):
+    for key in keys:
+        if key in record:
+            value = record[key]
+            if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value <= 1000:
+                raise ProjectMigrationError(f'Invalid {key}: expected a positive finite point size up to 1000.')
+
+
 def _validate_structure(data):
     for group in _records(data, 'plot_alignment_groups'):
         validate_plot_alignment_group(group)
@@ -122,12 +130,27 @@ def _validate_structure(data):
         _records(group, 'members')
     if data.get('export_region') is not None and not isinstance(data['export_region'], dict):
         raise ProjectMigrationError('Invalid project export_region: expected an object or null.')
+    if 'typography_mode' in data and data['typography_mode'] not in ('legacy', 'points'):
+        raise ProjectMigrationError('Invalid project typography_mode: expected legacy or points.')
+    points = data.get('typography_mode') == 'points'
+    if points:
+        _validate_point_sizes(data, ('label_font_size', 'title_label_font_size', 'corner_label_font_size'))
+        for item in _records(data, 'text_items'):
+            _validate_point_sizes(item, ('font_size_pt',))
+        for item in _records(data, 'group_labels'):
+            _validate_point_sizes(item, ('font_size_pt',))
+        for group in _records(data, 'svg_text_groups'):
+            _validate_point_sizes(group, ('font_size_pt',))
     stack = list(_records(data, 'cells'))
     while stack:
         cell = stack.pop()
         stack.extend(_records(cell, 'children'))
-        _records(cell, 'pip_items')
+        for pip in _records(cell, 'pip_items'):
+            if points:
+                _validate_point_sizes(pip, ('scale_bar_text_size_pt',))
         _records(cell, 'raster_text_regions')
+        if points:
+            _validate_point_sizes(cell, ('scale_bar_text_size_pt', 'svg_normalize_text_pt'))
         if cell.get('plot_area') is not None:
             validate_plot_area(cell['plot_area'])
 
@@ -214,7 +237,13 @@ def _migrate_schema_2_to_3(data):
     return data
 
 
-SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2, 2: _migrate_schema_2_to_3}
+def _migrate_schema_3_to_4(data):
+    data['typography_mode'] = 'legacy'
+    return data
+
+
+SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2, 2: _migrate_schema_2_to_3,
+                     3: _migrate_schema_3_to_4}
 
 
 def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -236,6 +265,8 @@ def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:
                 f'This project was saved by newer ILM {writer} without a supported schema version. '
                 f'Please upgrade ILM (installed: {APP_VERSION}).')
     _validate_structure(data)
+    if schema == PROJECT_SCHEMA_VERSION and 'typography_mode' not in data:
+        raise ProjectMigrationError('Invalid project: schema 4 requires typography_mode.')
     migrated = copy.deepcopy(data)
     while schema < PROJECT_SCHEMA_VERSION:
         upgrade = SCHEMA_MIGRATIONS.get(schema)

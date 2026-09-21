@@ -608,6 +608,7 @@ _CONTENT_ATTRS = (
     'scale_bar_offset_y',
     'scale_bar_custom_text',
     'scale_bar_text_size_mm',
+    'scale_bar_text_size_pt',
     'scale_bar_unit',
 )
 

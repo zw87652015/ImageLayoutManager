@@ -453,6 +453,7 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_offset_y = 2.0
         self.scale_bar_custom_text = None
         self.scale_bar_text_size_mm = 2.0
+        self.scale_bar_text_size_pt = 8.0
         self.scale_bar_unit = "µm"
         
         # Visual settings
@@ -1002,7 +1003,8 @@ class CellItem(QGraphicsRectItem):
                      scale_bar_position="bottom_right", scale_bar_offset_x=2.0, scale_bar_offset_y=2.0,
                      scale_bar_custom_text=None, scale_bar_text_size_mm=2.0, scale_bar_unit="µm",
                      crop_left=0.0, crop_top=0.0, crop_right=1.0, crop_bottom=1.0,
-                     svg_override_bytes=None, raster_override=None, *, image_placement=None):
+                     svg_override_bytes=None, raster_override=None, *, image_placement=None,
+                     scale_bar_text_size_pt=8.0):
         if self.image_path:
             self.proxy.unsubscribe(self.image_path, self.on_thumbnail_ready)
         self._svg_override_bytes = svg_override_bytes
@@ -1035,6 +1037,7 @@ class CellItem(QGraphicsRectItem):
         self.scale_bar_offset_y = scale_bar_offset_y
         self.scale_bar_custom_text = scale_bar_custom_text
         self.scale_bar_text_size_mm = scale_bar_text_size_mm
+        self.scale_bar_text_size_pt = scale_bar_text_size_pt
         self.scale_bar_unit = scale_bar_unit
         
         if self.image_path:
@@ -1589,6 +1592,18 @@ class CellItem(QGraphicsRectItem):
             painter.drawRect(rect)
         
         if self.label_text:
+            scene = self.scene()
+            project = getattr(scene, 'project', None)
+            from src.utils.typography import uses_points
+            if uses_points(project):
+                from src.utils.label_strip_render import draw_point_strip_label
+                text_rect = rect.translated(self.label_offset_x, self.label_offset_y)
+                draw_point_strip_label(
+                    painter, text_rect, self.label_text, self.label_font_family,
+                    self.label_font_size, self.label_font_weight,
+                    QColor(self.label_color), self.label_vertical,
+                    self.label_align, self.label_valign, self.label_rotation)
+                return
             # QGraphicsTextItem uses 72 DPI internally, so 1pt = 1 scene unit.
             # To match TextGraphicsItem rendering, use font_size_pt directly
             # as the scene-coordinate size (not pt-to-mm converted).
@@ -1827,6 +1842,7 @@ class CellItem(QGraphicsRectItem):
             "show_text": getattr(obj, "scale_bar_show_text", True),
             "custom_text": getattr(obj, "scale_bar_custom_text", None),
             "text_size_mm": getattr(obj, "scale_bar_text_size_mm", 2.0),
+            "text_size_pt": getattr(obj, "scale_bar_text_size_pt", 8.0),
             "thickness_mm": getattr(obj, "scale_bar_thickness_mm", 0.5),
             "position": getattr(obj, "scale_bar_position", "bottom_right"),
             "offset_x": getattr(obj, "scale_bar_offset_x", 2.0),
@@ -1940,13 +1956,20 @@ class CellItem(QGraphicsRectItem):
                 display_val = params["length_um"] / factor
                 text = f"{display_val:.0f} {unit}" if display_val >= 1 or display_val == 0 else f"{display_val:.2f} {unit}"
 
-            base_pt = 24
-            text_scale = params["text_size_mm"] / base_pt
+            project = getattr(self.scene(), 'project', None)
+            if getattr(project, 'typography_mode', 'legacy') == 'points':
+                from src.utils.typography import point_text_item
+                temp_item = point_text_item(text, 'Arial', params["text_size_pt"],
+                                            'normal', params["color"], rich=False)
+                text_scale = temp_item.scale()
+            else:
+                base_pt = 24
+                text_scale = params["text_size_mm"] / base_pt
 
-            temp_item = QGraphicsTextItem()
-            temp_item.setPlainText(text)
-            temp_item.setFont(QFont("Arial", base_pt))
-            temp_item.setDefaultTextColor(QColor(params["color"]))
+                temp_item = QGraphicsTextItem()
+                temp_item.setPlainText(text)
+                temp_item.setFont(QFont("Arial", base_pt))
+                temp_item.setDefaultTextColor(QColor(params["color"]))
 
             br = temp_item.boundingRect()
             tw_mm = br.width() * text_scale
