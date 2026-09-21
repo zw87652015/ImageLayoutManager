@@ -435,6 +435,8 @@ class CellItem(QGraphicsRectItem):
         self.label_rotation = 0.0
         self.label_color = "#000000"
         self.label_align = "center"  # "left", "center", "right"
+        self.label_valign = "center"  # "top", "center", "bottom" for vertical strips
+        self.label_vertical = False  # strip is a left/right column
         self.label_offset_x = 0.0  # mm
         self.label_offset_y = 0.0  # mm
         
@@ -1608,20 +1610,10 @@ class CellItem(QGraphicsRectItem):
 
             painter.save()
             painter.resetTransform()
-            painter.setFont(font)
-            painter.setPen(QPen(QColor(self.label_color)))
-            h_align = Qt.AlignmentFlag.AlignHCenter
-            if self.label_align == "left":
-                h_align = Qt.AlignmentFlag.AlignLeft
-            elif self.label_align == "right":
-                h_align = Qt.AlignmentFlag.AlignRight
-            if self.label_rotation:
-                # Rotate around the strip's centre so alignment still holds.
-                centre = dev_text_rect.center()
-                painter.translate(centre)
-                painter.rotate(self.label_rotation)
-                painter.translate(-centre)
-            painter.drawText(dev_text_rect, h_align | Qt.AlignmentFlag.AlignVCenter, self.label_text)
+            from src.utils.label_strip_render import draw_strip_label
+            draw_strip_label(painter, dev_text_rect, self.label_text, font,
+                             QColor(self.label_color), self.label_vertical,
+                             self.label_align, self.label_valign, self.label_rotation)
             painter.restore()
             
     def _draw_missing_file_icon(self, painter: QPainter, rect: QRectF):

@@ -421,9 +421,10 @@ class CanvasScene(QGraphicsScene):
             litem.label_font_size = text_model.font_size_pt
             litem.label_font_weight = text_model.font_weight
             litem.label_color = text_model.color
-            litem.label_align = getattr(self.project, 'label_align', 'center')
-            litem.label_offset_x = getattr(self.project, 'label_offset_x', 0.0)
-            litem.label_offset_y = getattr(self.project, 'label_offset_y', 0.0)
+            litem.label_align = self.project.effective_label_align(text_model)
+            litem.label_valign = self.project.effective_label_valign(text_model)
+            litem.label_vertical = self.project.label_strip_is_vertical(text_model)
+            litem.label_offset_x, litem.label_offset_y = self.project.effective_label_offsets(text_model)
             litem.label_rotation = getattr(text_model, 'rotation', 0.0) or 0.0
             litem.label_text_item_id = text_model.id
             litem.update()
@@ -1358,7 +1359,9 @@ class CanvasScene(QGraphicsScene):
         ghost.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         strip_rect = label_cell.sceneBoundingRect()
         origin = self._label_letter_point(
-            strip_rect, ghost, getattr(self.project, 'label_align', 'center'))
+            strip_rect, ghost, self.project.effective_label_align(text_model),
+            self.project.effective_label_valign(text_model),
+            self.project.label_strip_is_vertical(text_model))
         ghost.setPos(origin)
         self.addItem(ghost)
         press = getattr(label_cell, '_label_drag_start', None)
@@ -1435,17 +1438,30 @@ class CanvasScene(QGraphicsScene):
         if hit is not None:
             placement = hit[1]
             self.label_placement_dropped.emit(drag["text_item_id"], placement)
+            text_model = next((t for t in getattr(self.project, 'text_items', [])
+                               if t.id == drag["text_item_id"]), None)
             if placement == "in_cell":
                 # In-cell letters sit at their anchor (default: top-left
-                # inside) plus the project offsets — aim the tracer there.
+                # inside) plus the effective offsets — aim the tracer there.
                 rect = hit[0].rect()
-                destination = QPointF(
-                    rect.left() + getattr(self.project, 'label_offset_x', 0.0),
-                    rect.top() + getattr(self.project, 'label_offset_y', 0.0))
+                ox, oy = (self.project.effective_label_offsets(text_model)
+                          if text_model is not None else
+                          (getattr(self.project, 'label_offset_x', 0.0),
+                           getattr(self.project, 'label_offset_y', 0.0)))
+                destination = QPointF(rect.left() + ox, rect.top() + oy)
             else:
                 destination = self._label_letter_point(
                     hit[0].rect(), ghost,
-                    getattr(self.project, 'label_align', 'center'))
+                    self.project.effective_label_align(text_model)
+                    if text_model is not None
+                    else getattr(self.project, 'label_align', 'center'),
+                    self.project.effective_label_valign(text_model)
+                    if text_model is not None
+                    else getattr(self.project, 'label_valign', 'center'),
+                    self.project.label_strip_is_vertical(text_model)
+                    if text_model is not None
+                    else getattr(self.project, 'label_placement', 'in_cell')
+                    in ("label_col_left", "label_col_right"))
         else:
             destination = drag["origin"]
         self._start_label_tracer(ghost, destination)
@@ -1505,9 +1521,19 @@ class CanvasScene(QGraphicsScene):
         finally:
             self._label_preview_transitioning = False
 
-    def _label_letter_point(self, rect: QRectF, ghost, align: str) -> QPointF:
+    def _label_letter_point(self, rect: QRectF, ghost, align: str,
+                            valign: str = "center", vertical: bool = False) -> QPointF:
         """Top-left for the ghost so its text lands where the strip paints it."""
         size = ghost.boundingRect()
+        if vertical:
+            x = rect.center().x() - size.width() / 2
+            if valign == "top":
+                y = rect.top() + 1.0
+            elif valign == "bottom":
+                y = rect.bottom() - size.height() - 1.0
+            else:
+                y = rect.center().y() - size.height() / 2
+            return QPointF(x, y)
         if align == "left":
             x = rect.left() + 1.0
         elif align == "right":

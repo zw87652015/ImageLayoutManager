@@ -2,7 +2,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field, fields
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from .enums import FitMode, LabelPosition, PageSizePreset
 from src.version import APP_VERSION
 from .migrations import (
@@ -37,6 +37,14 @@ class TextItem:
     # One of in_cell | label_row_above | label_row_below | label_col_left |
     # label_col_right. Enables mixed placement within one figure.
     placement: Optional[str] = None
+
+    # Per-label align/offset overrides. None = inherit Project.label_align /
+    # label_valign / label_offset_*; only meaningful for cell labels drawn in
+    # their own strip.
+    label_align: Optional[str] = None
+    label_valign: Optional[str] = None
+    label_offset_x: Optional[float] = None
+    label_offset_y: Optional[float] = None
     
     # For global/floating text: absolute canvas position in MILLIMETRES.
     # Scene coordinates are in mm (page_rect is in mm), so these values are
@@ -72,6 +80,10 @@ class TextItem:
             "label_tier": self.label_tier,
             "style_locked": self.style_locked,
             "placement": self.placement,
+            "label_align": self.label_align,
+            "label_valign": self.label_valign,
+            "label_offset_x": self.label_offset_x,
+            "label_offset_y": self.label_offset_y,
             "x": self.x,
             "y": self.y,
             "rotation": self.rotation,
@@ -737,6 +749,7 @@ class Project:
     label_color: str = "#000000" # black or white (#FFFFFF)
     label_anchor: str = LabelPosition.TOP_LEFT.value
     label_align: str = "center" # "left", "center", "right" — preset for label position in label cells
+    label_valign: str = "center" # "top", "center", "bottom" — vertical preset for labels in a left/right column strip
     label_offset_x: float = 0.0  # mm, horizontal offset for fine-tuning label position
     label_offset_y: float = 0.0  # mm, vertical offset for fine-tuning label position
     label_row_height: float = 0.0  # mm, 0 = auto (computed from font size)
@@ -791,6 +804,20 @@ class Project:
     def effective_label_placement(self, text_item: TextItem) -> str:
         """Placement for *text_item*, resolving the inherit (None) case."""
         return getattr(text_item, "placement", None) or self.label_placement
+
+    def effective_label_align(self, text_item: TextItem) -> str:
+        return getattr(text_item, "label_align", None) or self.label_align
+
+    def effective_label_valign(self, text_item: TextItem) -> str:
+        return getattr(text_item, "label_valign", None) or self.label_valign
+
+    def label_strip_is_vertical(self, text_item: TextItem) -> bool:
+        return self.effective_label_placement(text_item) in ("label_col_left", "label_col_right")
+
+    def effective_label_offsets(self, text_item: TextItem) -> Tuple[float, float]:
+        ox = getattr(text_item, "label_offset_x", None)
+        oy = getattr(text_item, "label_offset_y", None)
+        return (self.label_offset_x if ox is None else ox, self.label_offset_y if oy is None else oy)
 
     def find_group_label(self, group_label_id: str) -> Optional[GroupLabel]:
         for g in self.group_labels:
@@ -889,6 +916,7 @@ class Project:
             "label_color": self.label_color,
             "label_anchor": self.label_anchor,
             "label_align": self.label_align,
+            "label_valign": self.label_valign,
             "label_offset_x": self.label_offset_x,
             "label_offset_y": self.label_offset_y,
             "label_row_height": self.label_row_height,
@@ -952,6 +980,7 @@ class Project:
         p.label_color = data.get("label_color", "#000000")
         p.label_anchor = data.get("label_anchor", LabelPosition.TOP_LEFT.value)
         p.label_align = data.get("label_align", "center")
+        p.label_valign = data.get("label_valign", "center")
         p.label_offset_x = data.get("label_offset_x", 0.0)
         p.label_offset_y = data.get("label_offset_y", 0.0)
         p.label_row_height = data.get("label_row_height", 0.0)

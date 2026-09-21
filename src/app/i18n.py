@@ -255,9 +255,11 @@ _T: dict[str, dict[str, str]] = {
     "lbl_tier":             {"en": "Style Tier",        "zh": "样式层级"},
     "opt_tier_panel":       {"en": "Panel (letters)",   "zh": "图板字母"},
     "opt_tier_title":       {"en": "Title (captions)",  "zh": "标题文字"},
-    "chk_style_lock":       {"en": "Lock style (skip global sync)", "zh": "锁定样式（跳过全局同步）"},
-    "tip_style_lock":       {"en": "Prevents global label style changes from overwriting this label's font.",
-                             "zh": "防止全局标注样式修改覆盖此标注的字体。"},
+    "lbl_style_custom_hint": {"en": "Custom style — figure-wide label style changes skip this label.",
+                              "zh": "自定义样式 — 全局标注样式的修改不会影响此标注。"},
+    "btn_reset_tier_style": {"en": "Reset to Tier Style", "zh": "恢复为层级默认样式"},
+    "tip_reset_tier_style": {"en": "Drop this label's own font, size, weight and colour and follow its tier's defaults again.",
+                             "zh": "放弃此标注的自定义字体、字号、粗细和颜色，重新跟随所属层级的默认样式。"},
     "btn_rotate_label":     {"en": "Rotate Label 90°",  "zh": "标注旋转 90°"},
     "sec_label_hierarchy":  {"en": "<b>Label Hierarchy (sub-panels)</b>", "zh": "<b>标注层级（子面板）</b>"},
     "lbl_sub_scheme":       {"en": "Sub-panel scheme",  "zh": "子面板方案"},
@@ -319,8 +321,8 @@ _T: dict[str, dict[str, str]] = {
     "action_set_export_region":   {"en": "Set Export Region",    "zh": "设置导出区域"},
     "action_clear_export_region": {"en": "Clear Export Region",  "zh": "清除导出区域"},
     "msg_define_export_region_hint": {
-        "en": "Drag on the page to select the export region. Press Esc to cancel.",
-        "zh": "在页面上拖拽以选择导出区域。按 Esc 取消。"
+        "en": "Export region created for the full page. Drag its edges to resize; Clear Export Region restores whole-page output.",
+        "zh": "已创建覆盖整页的导出区域。拖动边缘调整范围；“清除导出区域”恢复整页输出。"
     },
     "action_bake":          {"en": "Convert Grid → Freeform", "zh": "网格转自由布局"},
     "action_grid_mode":     {"en": "Switch to Grid Mode",     "zh": "切换至网格模式"},
@@ -385,6 +387,9 @@ _T: dict[str, dict[str, str]] = {
     "opt_align_left":       {"en": "Left",                  "zh": "左"},
     "opt_align_center":     {"en": "Center",                "zh": "居中"},
     "opt_align_right":      {"en": "Right",                 "zh": "右"},
+    "opt_align_top":        {"en": "Top",                   "zh": "顶部"},
+    "opt_align_middle":     {"en": "Middle",                "zh": "居中"},
+    "opt_align_bottom":     {"en": "Bottom",                "zh": "底部"},
     "opt_row_left":         {"en": "left",                  "zh": "左"},
     "opt_row_center":       {"en": "center",                "zh": "居中"},
     "opt_row_right":        {"en": "right",                 "zh": "右"},
@@ -499,8 +504,13 @@ _T: dict[str, dict[str, str]] = {
     "btn_delete":            {"en": "Delete",              "zh": "删除"},
     "btn_delete_pip":        {"en": "Delete Inset",        "zh": "删除插图"},
     "btn_apply_all":         {"en": "Apply Style to All",   "zh": "将样式应用到全部"},
-    "tip_apply_all":         {"en": "Font, size, weight and colour above change only the selected label. This button copies that style to every label in the same group and makes it the default for new ones.",
-                              "zh": "上方的字体、字号、粗细和颜色仅作用于所选标注。此按钮会将该样式复制到同组的所有标注，并作为新建标注的默认样式。"},
+    "tip_apply_all":         {"en": "Edits above affect only this label. Copy its font, size, weight and colour to all labels in the same style tier (panel letters, titles, or corner labels), and use that style for new labels of that tier.",
+                              "zh": "上方编辑只影响当前标注。此按钮将字体、字号、粗细和颜色复制到同一样式层级（面板编号、标题或角标）的全部标注，并用于该层级的新标注。"},
+    "lbl_this_label":        {"en": "— This label —",        "zh": "— 当前标注 —"},
+    "lbl_all_labels":        {"en": "— All labels —",        "zh": "— 全部标注 —"},
+    "btn_apply_position_all": {"en": "Apply Position to All", "zh": "将位置应用到全部"},
+    "tip_apply_position_all": {"en": "Edits above move only this label. Copy its current alignment axis and X/Y offsets to labels in separate strips, replacing their individual settings. This does not change which side of the image a label is on.",
+                               "zh": "上方编辑只移动当前标注。此按钮将当前对齐方向与 X/Y 偏移复制到独立标注带中的标注，替代各自设置；不会改变标注位于图片的哪一侧。"},
 
     # ── Scale bar mappings dialog ────────────────────────────────
     "sbm_title":            {"en": "Manage Scale Bar Mappings", "zh": "管理比例尺映射"},
@@ -511,8 +521,8 @@ _T: dict[str, dict[str, str]] = {
     "sbm_name":             {"en": "Name:",              "zh": "名称:"},
     "sbm_name_ph":          {"en": "e.g.  10× objective", "zh": "例如 10× 物镜"},
     "sbm_len_per_px":       {"en": "Length per pixel:",  "zh": "每像素长度:"},
-    "sbm_hint":             {"en": "Tip: measure a known feature in pixels and divide its physical size (µm) by that pixel count to obtain this value.",
-                             "zh": "提示：量出一个已知长度的结构占多少像素，拿它的实际长度（µm）除以像素数，就得到这个值。"},
+    "sbm_hint":             {"en": "A calibration records the real length represented by one source-image pixel. Use acquisition metadata or a known reference: physical length (µm) ÷ measured source pixels. This is different from the Length field, which sets how long a distance the scale bar represents.",
+                             "zh": "校准值记录源图一个像素对应的实际长度。请使用采集元数据或已知参照：实际长度（µm）÷ 源图中测得的像素数。它与“长度”字段不同，后者设置比例尺要表示多长的距离。"},
     "sbm_new":              {"en": "New Mapping",        "zh": "新映射"},
     "sbm_del_title":        {"en": "Delete Mapping",     "zh": "删除映射"},
     "sbm_del_body":         {"en": "Delete the mapping \"{name}\"?", "zh": "删除映射「{name}」？"},
@@ -522,8 +532,8 @@ _T: dict[str, dict[str, str]] = {
 
     # ── CMYK ICC dialog ──────────────────────────────────────────
     "cmyk_title":           {"en": "CMYK Colour Management", "zh": "CMYK 色彩管理"},
-    "cmyk_intro":           {"en": "Choose the CMYK ICC profile and rendering intent for this TIFF export.\nThe profile will be embedded in the output file.",
-                             "zh": "为本次 TIFF 导出选择 CMYK ICC 配置文件和渲染意图。\n配置文件将嵌入输出文件。"},
+    "cmyk_intro":           {"en": "Use CMYK when the printer or publisher requests it. Their ICC profile describes how colours should convert for that printing process; rendering intent controls colours that cannot be reproduced exactly. Choose the supplied profile for this TIFF export. It will be embedded in the file.",
+                             "zh": "印刷商或出版社要求 CMYK 时才使用此模式。对方提供的 ICC 配置文件描述颜色应如何转换到相应印刷条件，渲染意图决定如何处理无法准确再现的颜色。请为本次 TIFF 导出选择所提供的配置文件，它会嵌入输出文件。"},
     "cmyk_no_profile":      {"en": "(no CMYK profile found on this system)",
                              "zh": "（系统里没找到 CMYK 配置文件）"},
     "cmyk_custom":          {"en": "Custom file…",       "zh": "自定义文件…"},
@@ -665,6 +675,12 @@ _T: dict[str, dict[str, str]] = {
 
     # ── Welcome page (startup) ─────────────────────────────────────
     "welcome_new":          {"en": "New Project",         "zh": "新建工程"},
+    "welcome_new_tip":      {"en": "Start with two rows of empty image cells. Add or remove cells to suit the images you want to combine.",
+                             "zh": "从两行空图片单元格开始，按需要组合的图片增减单元格。"},
+    "welcome_open_tip":     {"en": "Open a saved editable project (.figlayout or .figpack), not an individual image. To start from image files, choose New Project.",
+                             "zh": "打开已保存的可编辑工程（.figlayout 或 .figpack），不是单张图片。若要从图片文件开始，请选择“新建工程”。"},
+    "welcome_learn_tip":    {"en": "Start with rows and cells in Your first figure, or choose another topic. Practice uses separate sample projects.",
+                             "zh": "从“制作第一张组合图”认识行与单元格，也可选择其他主题。练习使用独立示例工程。"},
     "welcome_open_project": {"en": "Open Project…",       "zh": "打开工程…"},
     "welcome_release_project": {"en": "Release to open your project", "zh": "松开以打开工程"},
     "welcome_drop_project": {"en": "(Drop a project file here to open\n.figpack / .figlayout / .json)",
@@ -759,8 +775,8 @@ _T: dict[str, dict[str, str]] = {
 
     # Files & Editing tab
     "prefs_default_save_format":    {"en": "Default save format:",   "zh": "默认保存格式:"},
-    "prefs_fmt_figlayout":          {"en": ".figlayout (JSON, lightweight)", "zh": ".figlayout（JSON，轻量）"},
-    "prefs_fmt_figpack":            {"en": ".figpack (bundle, portable)",    "zh": ".figpack（项目包，包含素材）"},
+    "prefs_fmt_figlayout":          {"en": ".figlayout (layout + image links)", "zh": ".figlayout（布局与图片链接）"},
+    "prefs_fmt_figpack":            {"en": ".figpack (layout + image files)",    "zh": ".figpack（布局与图片文件）"},
     "prefs_export_dir_policy":      {"en": "Export destination:",    "zh": "导出目录:"},
     "prefs_export_dir_project":     {"en": "Same folder as project", "zh": "与项目同目录"},
     "prefs_export_dir_last":        {"en": "Remember last used folder", "zh": "记住上次使用的目录"},
@@ -791,6 +807,9 @@ _T: dict[str, dict[str, str]] = {
     # ── Cell context menu ─────────────────────────────────────────
     "ctx_delete_label":              {"en": "Delete Label",                    "zh": "删除标注"},
     "ctx_import_image":              {"en": "Import Image…",                   "zh": "导入图片…"},
+    "ctx_reveal_image_source":       {"en": "Reveal Image Source in File Explorer", "zh": "在文件资源管理器中显示图像源文件"},
+    "reveal_image_source_missing":   {"en": "The image source file is unavailable.", "zh": "图像源文件不可用。"},
+    "reveal_image_source_failed":    {"en": "Could not open the system file explorer.", "zh": "无法打开系统文件资源管理器。"},
     "ctx_labels":                    {"en": "Labels",                          "zh": "标注"},
     "ctx_delete_label_cell":         {"en": "Delete Label Cell",               "zh": "删除标注单元格"},
     "ctx_add_label_cell":            {"en": "Add Label Cell",                  "zh": "添加标注单元格"},
@@ -868,9 +887,9 @@ _T: dict[str, dict[str, str]] = {
 
     # ── SVG Text Groups ──────────────────────────────────────────────
     "action_svg_text_groups":        {"en": "SVG Text Groups…",                "zh": "SVG 文字组…"},
-    "ctx_svg_text_inspector":        {"en": "Edit SVG Text Groups…",           "zh": "编辑 SVG 文字组…"},
+    "ctx_svg_text_inspector":        {"en": "Match Text Size…",                "zh": "匹配文字大小…"},
 
-    "svgtxt_inspector_title":        {"en": "SVG Text Inspector",              "zh": "SVG 文字检查器"},
+    "svgtxt_inspector_title":        {"en": "Match Text Size — SVG",           "zh": "匹配文字大小 — SVG"},
     "svgtxt_groups_cell_title":     {"en": "SVG Text Groups",                 "zh": "SVG 文字组"},
     "svgtxt_preview_label":          {"en": "SVG Preview",                     "zh": "SVG 预览"},
     "svgtxt_preview_failed":         {"en": "Could not render SVG preview.",   "zh": "无法渲染 SVG 预览。"},
@@ -888,8 +907,8 @@ _T: dict[str, dict[str, str]] = {
     "svgtxt_font_size_label":        {"en": "Font size:",                      "zh": "字体大小："},
     "svgtxt_apply_size_btn":         {"en": "Apply font size to group",        "zh": "应用字体大小到组"},
     "svgtxt_info_title":             {"en": "Info",                            "zh": "提示"},
-    "svgtxt_select_elements_hint":   {"en": "Please select text elements first.", "zh": "请先选择文字元素。"},
-    "svgtxt_select_group_hint":      {"en": "Please select or create a group first.", "zh": "请先选择或创建一个组。"},
+    "svgtxt_select_elements_hint":   {"en": "Select one or more entries in the Text Elements list, then assign them to a size group.", "zh": "先在文字元素列表中选中一项或多项，再将它们分配到字号组。"},
+    "svgtxt_select_group_hint":      {"en": "Choose a group in Assign to. If the list is empty, use Add Group to create a shared target size first.", "zh": "请在“分配到”中选择一个组。若列表为空，先用“添加组”建立共同的目标字号。"},
     "svgtxt_default_group_name":     {"en": "Text Group",                      "zh": "文字组"},
 
     "svgtxt_groups_list_label":      {"en": "Groups",                          "zh": "组"},
@@ -907,10 +926,10 @@ _T: dict[str, dict[str, str]] = {
     "svgtxt_groups_section_label":   {"en": "Groups",                          "zh": "组"},
 
     # ── Raster text size matching ────────────────────────────────────
-    "ctx_raster_text_inspector":     {"en": "Match Raster Text Size…",           "zh": "匹配位图文字大小…"},
-    "ctx_raster_text_disabled":      {"en": "Match Raster Text Size… (configure OCR in Preferences)",
-                                      "zh": "匹配位图文字大小…（请在偏好设置中配置 OCR）"},
-    "rastertxt_inspector_title":     {"en": "Raster Text Size Matching",          "zh": "位图文字大小匹配"},
+    "ctx_raster_text_inspector":     {"en": "Match Text Size…",                   "zh": "匹配文字大小…"},
+    "ctx_raster_text_disabled":      {"en": "Match Text Size… (configure OCR in Preferences)",
+                                      "zh": "匹配文字大小…（请在偏好设置中配置 OCR）"},
+    "rastertxt_inspector_title":     {"en": "Match Text Size — Raster",           "zh": "匹配文字大小 — 位图"},
     "rastertxt_preview_label":       {"en": "Preview (as rendered)",              "zh": "预览（实际渲染效果）"},
     "rastertxt_show_original":       {"en": "Show original",                      "zh": "显示原图"},
     "rastertxt_legend":              {"en": "Tinted outlines follow the included text. Click an outline to select; "
@@ -920,13 +939,12 @@ _T: dict[str, dict[str, str]] = {
                                             "加深边线：选中或悬停。淡色：已禁用或跳过，详情见列表。"},
     "rastertxt_review_hint":         {"en": "⚑ review: {reason}",                "zh": "⚑ 请确认：{reason}"},
     "rastertxt_disabled_hint":       {"en": "○ unticked — tick to resize",       "zh": "○ 未勾选 — 勾选后才会缩放"},
-    "rastertxt_review_tip":          {"en": "The analysis flagged this box, but it is only a hint. If the box looks "
-                                            "clean to you, tick it (or assign it to a group) to enable resizing.",
-                                      "zh": "分析对该区域给出了提示，但这仅供参考。若你看到框内是干净的，勾选（或分配到组）即可启用缩放。"},
+    "rastertxt_review_tip":          {"en": "Inspect the lettering and nearby lines in the preview. If the region is suitable, assign a target-size group and enable its checkbox. A review warning alone does not prevent resizing, but a collision or image boundary can still make it skip.",
+                                      "zh": "请在预览中检查文字及附近线条。确认区域合适后，分配目标字号组并勾选启用。审查提示本身不会阻止缩放，但内容重叠或图像边界仍可能使处理跳过。"},
     "rastertxt_detect_btn":          {"en": "Detect text (OCR)",                  "zh": "检测文字（OCR）"},
     "rastertxt_ocr_unavailable":     {"en": "OCR unavailable: {reason}",          "zh": "OCR 不可用：{reason}"},
     "rastertxt_ocr_failed":          {"en": "Text detection failed:\n{error}",    "zh": "文字检测失败：\n{error}"},
-    "rastertxt_none_found":          {"en": "No text was detected in this image.", "zh": "未在此图像中检测到文字。"},
+    "rastertxt_none_found":          {"en": "No text regions were detected. Check that the image contains readable lettering, or try another detector in Preferences → Text Detection.", "zh": "未检测到文字区域。请检查图片中是否有清晰可读的文字，或在“偏好设置 → 文字检测”中尝试其他检测器。"},
     "rastertxt_regions_label":       {"en": "Text regions  (tick to enable, select to edit)",
                                       "zh": "文字区域（勾选以启用，选中以编辑）"},
     "rastertxt_size_px":             {"en": "Est. font size",                     "zh": "估计字号"},
@@ -982,18 +1000,16 @@ _T: dict[str, dict[str, str]] = {
                                             "及可选 text / confidence 的对象列表。"},
     "prefs_ocr_test":                {"en": "Check availability",                 "zh": "检查可用性"},
     "prefs_ocr_status_ok":           {"en": "Ready.",                             "zh": "可用。"},
-    "prefs_ocr_hint":                {"en": "Used by “Match Raster Text Size” to locate labels in pixel-based panels. "
-                                            "Only detection geometry is used; recognised text is shown for reference.",
-                                      "zh": "用于“匹配位图文字大小”功能定位像素图中的文字。仅使用检测到的位置；"
-                                            "识别出的文字仅供参考。"},
+    "prefs_ocr_hint":                {"en": "OCR (optical character recognition) locates text in pixel-based images such as PNG and TIFF for “Match Text Size”. ILM resizes the detected lettering pixels; it does not replace them with the recognised words. Leave RapidOCR selected unless you need another detector.",
+                                      "zh": "OCR（光学字符识别）为“匹配文字大小”定位 PNG、TIFF 等像素图片中的文字。ILM 缩放检测到的文字像素，不会用识别出的文字重新打字替换。没有特殊需求时，可保留默认的 RapidOCR。"},
 
     # ── SVG text normalization (per-cell inspector section) ─────────
     "grp_svg_normalize":             {"en": "SVG Text Normalization",          "zh": "SVG 文字标准化"},
     "chk_svg_normalize":             {"en": "Normalize text size",             "zh": "标准化文字大小"},
     "lbl_svg_normalize_pt":          {"en": "Target size:",                    "zh": "目标大小："},
     "tip_svg_normalize":             {
-        "en": "Unifies text size in imported SVGs. For non-text elements and rasterized figures, size them correctly at export time.",
-        "zh": "统一导入 SVG 中的文字大小。非文字元素及栅格化图形请在导出时正确设置尺寸。"
+        "en": "Give editable text in this SVG one size. To keep different sizes for axis titles and tick labels, use Match Text Size and assign them to separate groups instead. Outlined lettering is not editable text.",
+        "zh": "将此 SVG 中可编辑的文字统一为一个大小。若坐标轴标题和刻度文字需要不同字号，请使用“匹配文字大小”，分别分配到不同组。已转为轮廓的文字不属于可编辑文字。"
     },
 
     # ── Sidecar assets dialog ──────────────────────────────────────

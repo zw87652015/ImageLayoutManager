@@ -803,16 +803,14 @@ class PdfExporter:
         if not label_rects:
             return
 
-        align = getattr(project, 'label_align', 'center')
-        ox_mm = getattr(project, 'label_offset_x', 0.0)
-        oy_mm = getattr(project, 'label_offset_y', 0.0)
-
         for t in project.text_items:
             if t.scope != 'cell' or getattr(t, 'subtype', None) == 'corner':
                 continue
             if not t.parent_id or t.parent_id not in label_rects or not t.text:
                 continue
             lx, ly, lw, lh = label_rects[t.parent_id]
+            align = project.effective_label_align(t)
+            ox_mm, oy_mm = project.effective_label_offsets(t)
 
             # The canvas draws strip labels with an explicit pixel size, i.e.
             # one point of label font spans one millimetre on the page (the
@@ -827,26 +825,11 @@ class PdfExporter:
 
             rect_dots = QRectF((lx + ox_mm) * scale, (ly + oy_mm) * scale,
                                lw * scale, lh * scale)
-            if align == 'left':
-                h_align = Qt.AlignmentFlag.AlignLeft
-            elif align == 'right':
-                h_align = Qt.AlignmentFlag.AlignRight
-            else:
-                h_align = Qt.AlignmentFlag.AlignHCenter
-
-            painter.save()
-            painter.setFont(font)
-            painter.setPen(QColor(t.color))
-            rotation = getattr(t, 'rotation', 0.0) or 0.0
-            if rotation:
-                # Rotate about the strip's centre so alignment still holds.
-                centre = rect_dots.center()
-                painter.translate(centre)
-                painter.rotate(rotation)
-                painter.translate(-centre)
-            painter.drawText(rect_dots, h_align | Qt.AlignmentFlag.AlignVCenter,
-                             t.text)
-            painter.restore()
+            from src.utils.label_strip_render import draw_strip_label
+            draw_strip_label(painter, rect_dots, t.text, font, QColor(t.color),
+                             project.label_strip_is_vertical(t), align,
+                             project.effective_label_valign(t),
+                             getattr(t, 'rotation', 0.0) or 0.0)
 
     @staticmethod
     def _draw_group_labels(painter: QPainter, project, layout_result, scale: float):

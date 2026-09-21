@@ -947,7 +947,11 @@ class MainWindow(QMainWindow):
         outcell_btn = QToolButton(self)
         outcell_btn.setDefaultAction(auto_label_outcell_action)
         outcell_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
-        outcell_btn.setMenu(placement_menu)
+        outcell_menu = QMenu(outcell_btn)
+        for value, action in self._placement_actions.items():
+            if value != "in_cell":
+                outcell_menu.addAction(action)
+        outcell_btn.setMenu(outcell_menu)
         outcell_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.toolbar.addWidget(outcell_btn)
 
@@ -1108,6 +1112,7 @@ class MainWindow(QMainWindow):
         self.inspector.pip_delete_requested.connect(self._on_inspector_pip_delete)
         self.inspector.corner_label_changed.connect(self._on_corner_label_changed)
         self.inspector.apply_style_to_group.connect(self._on_apply_style_to_group)
+        self.inspector.apply_label_position_to_all.connect(self._on_apply_label_position_to_all)
         self.inspector.label_text_changed.connect(self._on_label_text_changed)
         self.inspector.subcell_ratio_changed.connect(self._on_subcell_ratio_changed)
         self.inspector.size_group_create_requested.connect(self._on_size_group_create_from_selection)
@@ -1765,6 +1770,7 @@ class MainWindow(QMainWindow):
 
     def _select_cells_by_ids(self, cell_ids: list):
         """Select one or more cells on the canvas by their IDs. Also handles pip_ids from layers panel."""
+        from PyQt6.QtCore import QSignalBlocker
         # Check if these are pip IDs (not cell IDs)
         if len(cell_ids) == 1:
             pip_id = cell_ids[0]
@@ -1773,20 +1779,28 @@ class MainWindow(QMainWindow):
                 if pip:
                     cell_item = self.scene.cell_items.get(cell.id)
                     if cell_item:
-                        cell_item.select_pip(pip_id)
+                        with QSignalBlocker(self.scene):
+                            self.scene.clearSelection()
+                            for other in self.scene.cell_items.values():
+                                if other is not cell_item:
+                                    other.deselect_pip()
+                            cell_item.setSelected(True)
+                            cell_item.select_pip(pip_id)
+                        self._on_selection_changed()
                         self.view.centerOn(cell_item)
                     return
 
-        self.scene.blockSignals(True)
-        self.scene.clearSelection()
         first_item = None
-        for cell_id in cell_ids:
-            item = self.scene.cell_items.get(cell_id)
-            if item:
-                item.setSelected(True)
-                if first_item is None:
-                    first_item = item
-        self.scene.blockSignals(False)
+        with QSignalBlocker(self.scene):
+            self.scene.clearSelection()
+            for item in self.scene.cell_items.values():
+                item.deselect_pip()
+            for cell_id in cell_ids:
+                item = self.scene.cell_items.get(cell_id)
+                if item:
+                    item.setSelected(True)
+                    if first_item is None:
+                        first_item = item
         self._on_selection_changed()  # sync inspector once
         if first_item:
             self.view.centerOn(first_item)
@@ -2463,6 +2477,10 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
 
+        source_path = cell.image_path if pip.pip_type == "zoom" else pip.image_path
+        self._append_reveal_image_source_action(menu, source_path)
+        menu.addSeparator()
+
         remove_act = menu.addAction(tr("pip_ctx_remove"))
         remove_act.triggered.connect(lambda: self._ctx_remove_pip(cell_id, pip))
 
@@ -2629,17 +2647,26 @@ class MainWindow(QMainWindow):
                      if t.scope == "cell" and t.subtype != "corner" and t.parent_id == parent_cell_id),
                     None
                 )
+                eff_ox, eff_oy = (self.project.effective_label_offsets(text_obj)
+                                if text_obj else
+                                (self.project.label_offset_x, self.project.label_offset_y))
                 label_data = {
                     "text_item_id": text_obj.id if text_obj else None,
                     "label_text": text_obj.text if text_obj else "",
                     "label_scheme": self.project.label_scheme,
-                    "label_font_family": self.project.label_font_family,
-                    "label_font_size": self.project.label_font_size,
-                    "label_font_weight": self.project.label_font_weight,
-                    "label_color": self.project.label_color,
-                    "label_align": self.project.label_align,
-                    "label_offset_x": self.project.label_offset_x,
-                    "label_offset_y": self.project.label_offset_y,
+                    "label_font_family": text_obj.font_family if text_obj else self.project.label_font_family,
+                    "label_font_size": text_obj.font_size_pt if text_obj else self.project.label_font_size,
+                    "label_font_weight": text_obj.font_weight if text_obj else self.project.label_font_weight,
+                    "label_color": text_obj.color if text_obj else self.project.label_color,
+                    "label_align": (self.project.effective_label_align(text_obj)
+                                    if text_obj else self.project.label_align),
+                    "label_valign": (self.project.effective_label_valign(text_obj)
+                                     if text_obj else self.project.label_valign),
+                    "strip_vertical": (self.project.label_strip_is_vertical(text_obj)
+                                       if text_obj else self.project.label_placement
+                                       in ("label_col_left", "label_col_right")),
+                    "label_offset_x": eff_ox,
+                    "label_offset_y": eff_oy,
                     "label_row_height": getattr(self.project, 'label_row_height', 0.0),
                     "label_col_width": getattr(self.project, 'label_col_width', 0.0),
                     "placement": getattr(text_obj, 'placement', None) if text_obj else None,
@@ -2906,6 +2933,14 @@ class MainWindow(QMainWindow):
         if "label_tier" in changes:
             changes = dict(changes)
             changes.update(self.project.label_style_fields(changes["label_tier"]))
+            # Adopting a tier means following it: re-apply its fonts and
+            # release any bespoke-style lock in the same step.
+            changes["style_locked"] = False
+        elif {"font_family", "font_size_pt", "font_weight"} & changes.keys() \
+                and text_obj.scope == "cell":
+            # A per-label font would be silently reverted the next time the
+            # tier-wide style is synced, so record the intent by locking it.
+            changes = dict(changes, style_locked=True)
         cmd = MultiPropertyChangeCommand(
             [text_obj], changes, self._refresh_and_update, "Edit Label Item")
         self.undo_stack.push(cmd)
@@ -3290,7 +3325,8 @@ class MainWindow(QMainWindow):
         # So we should convert values before passing to command if needed.
 
         if "label_scheme" in changes:
-            cmd = ChangeLabelSchemeCommand(self.project, changes["label_scheme"], self._refresh_and_update)
+            cmd = ChangeLabelSchemeCommand(self.project, changes["label_scheme"],
+                                           update_callback=self._refresh_and_update)
             self.undo_stack.push(cmd)
             return
 
@@ -3370,9 +3406,12 @@ class MainWindow(QMainWindow):
         # project defaults, so "all" means the selected label's own tier.
         items = self.scene.selectedItems()
         selected = None
-        if items and hasattr(items[0], 'text_item_id'):
-            selected = next((t for t in self.project.text_items
-                             if t.id == items[0].text_item_id), None)
+        if items:
+            selected_id = (getattr(items[0], 'text_item_id', None)
+                           or getattr(items[0], 'label_text_item_id', None))
+            if selected_id:
+                selected = next((t for t in self.project.text_items
+                                 if t.id == selected_id), None)
         tier = getattr(selected, 'label_tier', 'panel') if selected else 'panel'
         corner = subtype == "corner"
         targets = [
@@ -3417,6 +3456,36 @@ class MainWindow(QMainWindow):
             self.undo_stack.push(MultiPropertyChangeCommand(
                 targets, item_changes, self._refresh_and_update,
                 f"Apply style to {len(targets)} {label} label(s)"))
+        finally:
+            self.undo_stack.endMacro()
+
+    def _on_apply_label_position_to_all(self, position: dict):
+        """Make one strip label's align/offsets the project default.
+
+        The per-label overrides are cleared so every strip label inherits the
+        new default; the whole thing is one undo step.
+        """
+        targets = [t for t in self.project.text_items
+                   if t.scope == "cell" and t.subtype != "corner"]
+        project_changes = {
+            k: (float(v) if k.startswith("label_offset") else v)
+            for k, v in position.items()
+            if k in ("label_align", "label_valign", "label_offset_x", "label_offset_y")
+        }
+        item_changes = {k: None for k in project_changes}
+        if (all(getattr(self.project, k) == v for k, v in project_changes.items())
+                and all(all(getattr(t, k) is None for k in item_changes) for t in targets)):
+            return
+        self.undo_stack.beginMacro("Apply label position to all")
+        try:
+            self.undo_stack.push(PropertyChangeCommand(
+                self.project, project_changes,
+                None if targets else self._refresh_and_update,
+                "Set Label Position Default"))
+            if targets:
+                self.undo_stack.push(MultiPropertyChangeCommand(
+                    targets, item_changes, self._refresh_and_update,
+                    "Apply label position to all"))
         finally:
             self.undo_stack.endMacro()
 
@@ -3508,6 +3577,34 @@ class MainWindow(QMainWindow):
                 "Delete Image",
             )
             self.undo_stack.push(cmd)
+
+    def _append_reveal_image_source_action(self, menu, path):
+        action = menu.addAction(tr("ctx_reveal_image_source"))
+        action.setEnabled(bool(path) and os.path.isfile(path))
+        action.setToolTip(path or tr("reveal_image_source_missing"))
+        action.triggered.connect(lambda checked=False: self._reveal_image_source(path))
+
+    def _reveal_image_source(self, path):
+        import subprocess
+        import sys
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        if not path or not os.path.isfile(path):
+            QMessageBox.warning(self, tr("ctx_reveal_image_source"),
+                                tr("reveal_image_source_missing"))
+            return
+        path = os.path.normpath(os.path.abspath(path))
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["explorer.exe", "/select,", path])
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-R", path])
+            elif not QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path))):
+                raise OSError(tr("reveal_image_source_failed"))
+        except OSError:
+            QMessageBox.warning(self, tr("ctx_reveal_image_source"),
+                                tr("reveal_image_source_failed"))
 
     def _on_layers_context_menu(self, cell_ids: list, global_pos):
         """Right-click context menu from the layers panel tree.
@@ -3730,6 +3827,7 @@ class MainWindow(QMainWindow):
         import_action.triggered.connect(lambda: self._ctx_import_image(cell_id))
 
         if has_image:
+            self._append_reveal_image_source_action(menu, cell.image_path)
             delete_img_action = menu.addAction(tr("action_delete_img"))
             delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
             if cell.is_leaf:

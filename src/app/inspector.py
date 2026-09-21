@@ -2,13 +2,13 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QGroupBox, QFormLayout, QHBoxLayout, QGridLayout,
     QLabel, QSpinBox, QDoubleSpinBox, QComboBox, QFontComboBox,
     QLineEdit, QPushButton, QToolButton, QButtonGroup, QCheckBox,
-    QScrollArea, QColorDialog, QFrame
+    QScrollArea, QColorDialog, QFrame, QSizePolicy
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF
+from PyQt6.QtGui import QColor, QPainter, QPalette, QFont, QFontMetrics, QPen
 import os
 from typing import Optional
-from src.app.motion import start_animation
+from src.app.motion import start_animation, MotionTween
 from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
@@ -199,6 +199,228 @@ class ColorPickerWidget(QWidget):
         self.colorChanged.emit(self._color)
 
 
+class LabelAlignPicker(QWidget):
+    """Visual left/center/right picker: three slots inside a label-strip
+    mock-up, with the sample glyph sitting where the label would land."""
+
+    align_changed = pyqtSignal(str)
+
+    _H_ALIGNS = ("left", "center", "right")
+    _H_KEYS = ("opt_align_left", "opt_align_center", "opt_align_right")
+    _V_ALIGNS = ("top", "center", "bottom")
+    _V_KEYS = ("opt_align_top", "opt_align_middle", "opt_align_bottom")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._orientation = "horizontal"
+        self._aligns = self._H_ALIGNS
+        self._keys = self._H_KEYS
+        self._align = "center"
+        self._sample = "(a)"
+        self._hover = -1
+        self._names = [tr(key) for key in self._keys]
+        self._sel = [MotionTween(self, value=0.0) for _ in self._aligns]
+        self._hov = [MotionTween(self, value=0.0) for _ in self._aligns]
+        self._sel[1].set_target(1.0, ms=0)
+        for tween in (*self._sel, *self._hov):
+            tween.updated.connect(lambda _value: self.update())
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedHeight(36)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.retranslate()
+
+    # ── public API ──────────────────────────────────────────────────
+
+    def align(self) -> str:
+        return self._align
+
+    def set_align(self, align: str):
+        if align not in self._aligns:
+            align = "center"
+        self._align = align
+        for i, name in enumerate(self._aligns):
+            self._sel[i].set_target(1.0 if name == align else 0.0, ms=100)
+        self.update()
+
+    def set_sample(self, text: str):
+        self._sample = text or "(a)"
+        self.update()
+
+    def orientation(self) -> str:
+        return self._orientation
+
+    def set_orientation(self, orientation: str):
+        if orientation == self._orientation:
+            return
+        self._orientation = orientation
+        if orientation == "vertical":
+            self._aligns, self._keys = self._V_ALIGNS, self._V_KEYS
+            self.setFixedSize(40, 96)
+            self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        else:
+            self._aligns, self._keys = self._H_ALIGNS, self._H_KEYS
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 36)
+            self.setFixedHeight(36)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        if self._align not in self._aligns:
+            self._align = "center"
+        for i, name in enumerate(self._aligns):
+            self._sel[i].set_target(1.0 if name == self._align else 0.0, ms=0)
+        self.retranslate()
+        self.updateGeometry()
+        self.update()
+
+    def retranslate(self):
+        self._names = [tr(key) for key in self._keys]
+        self.setAccessibleName(tr("lbl_align").rstrip(':：'))
+        self.setToolTip(" / ".join(self._names))
+
+    # ── internals ───────────────────────────────────────────────────
+
+    def sizeHint(self):
+        return QSize(40, 96) if self._orientation == "vertical" else QSize(200, 36)
+
+    def _slot_at(self, x: float, y: float) -> int:
+        if not self.rect().contains(int(x), int(y)):
+            return -1
+        if self._orientation == "vertical":
+            return max(0, min(2, int(y * 3 / max(1, self.height()))))
+        return max(0, min(2, int(x * 3 / max(1, self.width()))))
+
+    def _slot_rect(self, i: int) -> QRect:
+        if self._orientation == "vertical":
+            h = self.height() // 3
+            return QRect(0, h * i, self.width(),
+                         self.height() - h * i if i == 2 else h)
+        w = self.width() // 3
+        return QRect(w * i, 0, self.width() - w * i if i == 2 else w, self.height())
+
+    def _set_hover(self, index: int):
+        if index == self._hover:
+            return
+        self._hover = index
+        for i, tween in enumerate(self._hov):
+            tween.set_target(1.0 if i == index else 0.0, ms=100)
+        if index >= 0:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.setToolTip(self._names[index])
+        else:
+            self.unsetCursor()
+            self.setToolTip(" / ".join(self._names))
+        self.update()
+
+    def _select(self, align: str, emit: bool):
+        changed = align != self._align
+        self.set_align(align)
+        if changed and emit:
+            self.align_changed.emit(align)
+
+    # ── events ──────────────────────────────────────────────────────
+
+    def mouseMoveEvent(self, event):
+        self._set_hover(self._slot_at(event.position().x(), event.position().y()))
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        self._set_hover(-1)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            slot = self._slot_at(event.position().x(), event.position().y())
+            if slot >= 0:
+                self.setFocus(Qt.FocusReason.MouseFocusReason)
+                self._select(self._aligns[slot], emit=True)
+                return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        idx = self._aligns.index(self._align)
+        prev_keys = {Qt.Key.Key_Left, Qt.Key.Key_Up} if self._orientation == "vertical" \
+            else {Qt.Key.Key_Left}
+        next_keys = {Qt.Key.Key_Right, Qt.Key.Key_Down} if self._orientation == "vertical" \
+            else {Qt.Key.Key_Right}
+        if event.key() in prev_keys:
+            self._select(self._aligns[max(0, idx - 1)], emit=True)
+        elif event.key() in next_keys:
+            self._select(self._aligns[min(2, idx + 1)], emit=True)
+        elif event.key() == Qt.Key.Key_Home:
+            self._select(self._aligns[0], emit=True)
+        elif event.key() == Qt.Key.Key_End:
+            self._select(self._aligns[-1], emit=True)
+        else:
+            super().keyPressEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = self.palette()
+        accent = palette.color(QPalette.ColorRole.Highlight)
+        text_color = palette.color(QPalette.ColorRole.Text)
+
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        border = QColor(palette.color(QPalette.ColorRole.Mid))
+        border.setAlpha(120)
+        painter.setPen(QPen(border, 1))
+        painter.setBrush(palette.color(QPalette.ColorRole.Base))
+        painter.drawRoundedRect(rect, 4, 4)
+
+        font = QFont(self.font())
+        font.setWeight(QFont.Weight.Medium)
+        font.setPixelSize(13)
+        painter.setFont(font)
+        metrics = QFontMetrics(font)
+
+        for i, name in enumerate(self._aligns):
+            sel = self._sel[i].value
+            hov = self._hov[i].value
+            slot = self._slot_rect(i)
+            if self._orientation == "vertical":
+                flags = (Qt.AlignmentFlag.AlignHCenter |
+                         {0: Qt.AlignmentFlag.AlignTop,
+                          1: Qt.AlignmentFlag.AlignVCenter,
+                          2: Qt.AlignmentFlag.AlignBottom}[i])
+            else:
+                flags = (Qt.AlignmentFlag.AlignVCenter |
+                         {0: Qt.AlignmentFlag.AlignLeft,
+                          1: Qt.AlignmentFlag.AlignHCenter,
+                          2: Qt.AlignmentFlag.AlignRight}[i])
+            text_rect = QRect(slot)
+            if self._orientation == "vertical":
+                if i == 0:
+                    text_rect.adjust(0, 6, 0, 0)
+                elif i == 2:
+                    text_rect.adjust(0, 0, 0, -6)
+            else:
+                if i == 0:
+                    text_rect.adjust(10, 0, 0, 0)
+                elif i == 2:
+                    text_rect.adjust(0, 0, -10, 0)
+            bound = metrics.boundingRect(text_rect, flags, self._sample)
+
+            pill_alpha = round(12 * hov * (1 - sel) + 28 * sel)
+            if pill_alpha:
+                pill = QColor(accent)
+                pill.setAlpha(pill_alpha)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(pill)
+                painter.drawRoundedRect(QRectF(bound).adjusted(-6, -3, 6, 3), 4, 4)
+
+            color = QColor(*(round(a + (b - a) * sel)
+                             for a, b in zip(text_color.getRgb()[:3], accent.getRgb()[:3])))
+            color.setAlpha(round(70 + (160 - 70) * hov * (1 - sel) + (255 - 70) * sel))
+            painter.setPen(color)
+            painter.drawText(text_rect, flags, self._sample)
+
+        if self.hasFocus():
+            ring = QPen(accent, 1, Qt.PenStyle.DotLine)
+            painter.setPen(ring)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 4, 4)
+
+
 class CollapsibleSection(QWidget):
     """Inspector panel section: clickable uppercase header + collapsible body."""
 
@@ -324,6 +546,7 @@ class Inspector(QWidget):
     project_property_changed = pyqtSignal(dict) # {property: value}
     corner_label_changed = pyqtSignal(dict) # {"anchor": str, "text": str}
     apply_style_to_group = pyqtSignal(str, dict) # (subtype, style) - push the selected label's style to its group
+    apply_label_position_to_all = pyqtSignal(dict) # {label_align, label_offset_x, label_offset_y} - make them the strip-label default
     label_text_changed = pyqtSignal(str, str) # (text_item_id, new_text)
     subcell_ratio_changed = pyqtSignal(str, float) # (cell_id, new_ratio) - change a sub-cell's size ratio
     pip_property_changed = pyqtSignal(dict) # {property: value} for selected PiP
@@ -874,17 +1097,50 @@ class Inspector(QWidget):
         self.label_text_edit.editingFinished.connect(self._on_label_text_edited)
         self.label_cell_layout.addRow(self._fl("lbl_text"), self.label_text_edit)
 
-        self.label_scheme = QComboBox()
-        self.label_scheme.addItems(self._numbering_schemes())
-        self.label_scheme.currentTextChanged.connect(
-            lambda t: self.project_property_changed.emit({"label_scheme": t})
+        self.label_this_label_heading = QLabel(tr("lbl_this_label"))
+        self.label_cell_layout.addRow(self.label_this_label_heading)
+
+        self._label_item_placement_options = [
+            ("opt_placement_inherit", None),
+            ("placement_in_cell",     "in_cell"),
+            ("placement_row_above",   "label_row_above"),
+            ("placement_row_below",   "label_row_below"),
+            ("placement_col_left",    "label_col_left"),
+            ("placement_col_right",   "label_col_right"),
+        ]
+        self._label_cell_placement_options = [
+            (key, value) for key, value in self._label_item_placement_options
+            if value != "in_cell"
+        ]
+        self._label_item_tier_options = [
+            ("opt_tier_panel", "panel"),
+            ("opt_tier_title", "title"),
+        ]
+
+        self.label_cell_placement_combo = QComboBox()
+        for key, _val in self._label_cell_placement_options:
+            self.label_cell_placement_combo.addItem(tr(key))
+        self.label_cell_placement_combo.currentIndexChanged.connect(
+            lambda i: self._emit_label_cell_change(
+                {"placement": self._label_cell_placement_options[i][1]}
+            )
         )
-        self.label_cell_layout.addRow(self._fl("lbl_scheme"), self.label_scheme)
+        self.label_cell_layout.addRow(self._fl("lbl_label_placement"), self.label_cell_placement_combo)
+
+        self.label_cell_tier_combo = QComboBox()
+        for key, _val in self._label_item_tier_options:
+            self.label_cell_tier_combo.addItem(tr(key))
+        self.label_cell_tier_combo.currentIndexChanged.connect(
+            lambda i: self._emit_label_cell_change(
+                {"label_tier": self._label_item_tier_options[i][1]}
+            )
+        )
+        self.label_cell_layout.addRow(self._fl("lbl_tier"), self.label_cell_tier_combo)
 
         self.label_font = QFontComboBox()
         self.label_font.setFontFilters(QFontComboBox.FontFilter.ScalableFonts)
         self.label_font.currentTextChanged.connect(
-            lambda t: self.project_property_changed.emit({"label_font_family": t})
+            lambda t: self._emit_label_cell_change({"font_family": t})
         )
         self.label_cell_layout.addRow(self._fl("lbl_font"), self.label_font)
 
@@ -892,14 +1148,14 @@ class Inspector(QWidget):
         self.label_size.setRange(1, 72)
         self.label_size.setValue(8)
         self.label_size.valueChanged.connect(
-            lambda v: self.project_property_changed.emit({"label_font_size": v})
+            lambda v: self._emit_label_cell_change({"font_size_pt": v})
         )
         self.label_cell_layout.addRow(self._fl("lbl_size_pt"), self.label_size)
 
         self.label_bold = QCheckBox(tr("chk_bold"))
         self.label_bold.setChecked(True)
         self.label_bold.toggled.connect(
-            lambda b: self.project_property_changed.emit({"label_font_weight": "bold" if b else "normal"})
+            lambda b: self._emit_label_cell_change({"font_weight": "bold" if b else "normal"})
         )
         self.label_cell_layout.addRow("", self.label_bold)
 
@@ -907,9 +1163,8 @@ class Inspector(QWidget):
         self.label_color.colorChanged.connect(self._on_label_color_changed)
         self.label_cell_layout.addRow(self._fl("lbl_color"), self.label_color)
 
-        self.label_align = QComboBox()
-        self.label_align.addItems([tr("opt_align_left"), tr("opt_align_center"), tr("opt_align_right")])
-        self.label_align.currentIndexChanged.connect(self._on_label_align_preset_changed)
+        self.label_align = LabelAlignPicker()
+        self.label_align.align_changed.connect(self._on_label_align_preset_changed)
         self.label_cell_layout.addRow(self._fl("lbl_align"), self.label_align)
 
         self.label_offset_x = QDoubleSpinBox()
@@ -919,7 +1174,7 @@ class Inspector(QWidget):
         self.label_offset_x.setSuffix(" mm")
         self.label_offset_x.setValue(0.0)
         self.label_offset_x.valueChanged.connect(
-            lambda v: self.project_property_changed.emit({"label_offset_x": v})
+            lambda v: self._emit_label_cell_change({"label_offset_x": v})
         )
         self.label_cell_layout.addRow(self._fl("lbl_offset_x"), self.label_offset_x)
 
@@ -930,9 +1185,50 @@ class Inspector(QWidget):
         self.label_offset_y.setSuffix(" mm")
         self.label_offset_y.setValue(0.0)
         self.label_offset_y.valueChanged.connect(
-            lambda v: self.project_property_changed.emit({"label_offset_y": v})
+            lambda v: self._emit_label_cell_change({"label_offset_y": v})
         )
         self.label_cell_layout.addRow(self._fl("lbl_offset_y"), self.label_offset_y)
+
+        self._label_cell_rotation = 0.0
+        self.label_cell_rotate_btn = QPushButton(tr("btn_rotate_label"))
+        self.label_cell_rotate_btn.clicked.connect(self._on_label_cell_rotate)
+        self.label_cell_layout.addRow("", self.label_cell_rotate_btn)
+
+        self.label_cell_style_row = QWidget()
+        style_row_layout = QVBoxLayout(self.label_cell_style_row)
+        style_row_layout.setContentsMargins(0, 0, 0, 0)
+        style_row_layout.setSpacing(4)
+        self.label_cell_reset_style_btn = QPushButton(tr("btn_reset_tier_style"))
+        self.label_cell_reset_style_btn.setToolTip(tr("tip_reset_tier_style"))
+        self.label_cell_reset_style_btn.clicked.connect(self._on_label_cell_reset_style)
+        style_row_layout.addWidget(self.label_cell_reset_style_btn)
+        self.label_cell_layout.addRow("", self.label_cell_style_row)
+        self.label_cell_style_row.hide()
+
+        apply_row = QWidget()
+        apply_row_layout = QHBoxLayout(apply_row)
+        apply_row_layout.setContentsMargins(0, 0, 0, 0)
+        apply_row_layout.setSpacing(6)
+        self.label_apply_style_btn = QPushButton(tr("btn_apply_all"))
+        self.label_apply_style_btn.setToolTip(tr("tip_apply_all"))
+        self.label_apply_style_btn.clicked.connect(self._on_apply_label_style_to_all)
+        self.label_apply_position_btn = QPushButton(tr("btn_apply_position_all"))
+        self.label_apply_position_btn.setToolTip(tr("tip_apply_position_all"))
+        self.label_apply_position_btn.clicked.connect(self._on_apply_label_position_to_all)
+        apply_row_layout.addWidget(self.label_apply_style_btn)
+        apply_row_layout.addWidget(self.label_apply_position_btn)
+        self.label_cell_layout.addRow("", apply_row)
+
+        self.label_all_labels_heading = QLabel(tr("lbl_all_labels"))
+        self.label_cell_layout.addRow(self.label_all_labels_heading)
+
+        self.label_scheme = QComboBox()
+        self.label_scheme.addItems(self._numbering_schemes())
+        self.label_scheme.currentTextChanged.connect(
+            lambda t: self.project_property_changed.emit({"label_scheme": t})
+        )
+        self.label_scheme.currentTextChanged.connect(self.label_align.set_sample)
+        self.label_cell_layout.addRow(self._fl("lbl_scheme"), self.label_scheme)
 
         self.label_row_height = QDoubleSpinBox()
         self.label_row_height.setRange(0.0, 50.0)
@@ -969,14 +1265,6 @@ class Inspector(QWidget):
         self._label_item_id = None
 
         self.label_item_placement_combo = QComboBox()
-        self._label_item_placement_options = [
-            ("opt_placement_inherit", None),
-            ("placement_in_cell",     "in_cell"),
-            ("placement_row_above",   "label_row_above"),
-            ("placement_row_below",   "label_row_below"),
-            ("placement_col_left",    "label_col_left"),
-            ("placement_col_right",   "label_col_right"),
-        ]
         for key, _val in self._label_item_placement_options:
             self.label_item_placement_combo.addItem(tr(key))
         self.label_item_placement_combo.currentIndexChanged.connect(
@@ -987,10 +1275,6 @@ class Inspector(QWidget):
         self.label_item_layout.addRow(self._fl("lbl_label_placement"), self.label_item_placement_combo)
 
         self.label_item_tier_combo = QComboBox()
-        self._label_item_tier_options = [
-            ("opt_tier_panel", "panel"),
-            ("opt_tier_title", "title"),
-        ]
         for key, _val in self._label_item_tier_options:
             self.label_item_tier_combo.addItem(tr(key))
         self.label_item_tier_combo.currentIndexChanged.connect(
@@ -1000,12 +1284,19 @@ class Inspector(QWidget):
         )
         self.label_item_layout.addRow(self._fl("lbl_tier"), self.label_item_tier_combo)
 
-        self.label_item_lock_chk = QCheckBox(tr("chk_style_lock"))
-        self.label_item_lock_chk.setToolTip(tr("tip_style_lock"))
-        self.label_item_lock_chk.toggled.connect(
-            lambda v: self._emit_label_item_change({"style_locked": v})
-        )
-        self.label_item_layout.addRow("", self.label_item_lock_chk)
+        self.label_item_style_row = QWidget()
+        item_style_layout = QVBoxLayout(self.label_item_style_row)
+        item_style_layout.setContentsMargins(0, 0, 0, 0)
+        item_style_layout.setSpacing(4)
+        self.label_item_style_hint = QLabel(tr("lbl_style_custom_hint"))
+        self.label_item_style_hint.setWordWrap(True)
+        self.label_item_reset_style_btn = QPushButton(tr("btn_reset_tier_style"))
+        self.label_item_reset_style_btn.setToolTip(tr("tip_reset_tier_style"))
+        self.label_item_reset_style_btn.clicked.connect(self._on_label_item_reset_style)
+        item_style_layout.addWidget(self.label_item_style_hint)
+        item_style_layout.addWidget(self.label_item_reset_style_btn)
+        self.label_item_layout.addRow("", self.label_item_style_row)
+        self.label_item_style_row.hide()
 
         self.label_item_rotate_btn = QPushButton(tr("btn_rotate_label"))
         self.label_item_rotate_btn.clicked.connect(self._on_label_item_rotate)
@@ -1514,6 +1805,12 @@ class Inspector(QWidget):
         self._manage_btn.setText(tr("btn_manage"))
         self.pip_border_enabled.setText(tr("chk_border_enabled"))
         self.label_bold.setText(tr("chk_bold"))
+        self.label_this_label_heading.setText(tr("lbl_this_label"))
+        self.label_all_labels_heading.setText(tr("lbl_all_labels"))
+        self.label_apply_style_btn.setText(tr("btn_apply_all"))
+        self.label_apply_style_btn.setToolTip(tr("tip_apply_all"))
+        self.label_apply_position_btn.setText(tr("btn_apply_position_all"))
+        self.label_apply_position_btn.setToolTip(tr("tip_apply_position_all"))
         self.is_bold.setText(tr("chk_bold"))
         self._subcell_fixed_size_label.setText(tr("lbl_fixed_width"))
 
@@ -1533,8 +1830,10 @@ class Inspector(QWidget):
 
         _retranslate_combo(self.grid_mode,         [tr("opt_grid_stretch"), tr("opt_grid_fixed")])
         _retranslate_combo(self.row_alignment,      [tr("opt_row_left"),     tr("opt_row_center"),    tr("opt_row_right")])
-        _retranslate_combo(self.label_align,        [tr("opt_align_left"),   tr("opt_align_center"),  tr("opt_align_right")])
+        self.label_align.retranslate()
         _retranslate_combo(self.label_placement_combo, [tr(key) for key, _ in self._label_placement_options])
+        _retranslate_combo(self.label_cell_placement_combo, [tr(key) for key, _ in self._label_cell_placement_options])
+        _retranslate_combo(self.label_cell_tier_combo, [tr(key) for key, _ in self._label_item_tier_options])
         _retranslate_combo(self.label_item_placement_combo, [tr(key) for key, _ in self._label_item_placement_options])
         _retranslate_combo(self.label_item_tier_combo, [tr(key) for key, _ in self._label_item_tier_options])
         _retranslate_combo(self.label_sub_scheme_combo, [tr(k) if k else v for k, v in self._label_sub_scheme_options])
@@ -1559,8 +1858,13 @@ class Inspector(QWidget):
         self.gl_color.retranslate_ui()
         self.gl_bracket_color.retranslate_ui()
 
-        self.label_item_lock_chk.setText(tr("chk_style_lock"))
         self.label_item_rotate_btn.setText(tr("btn_rotate_label"))
+        self.label_cell_rotate_btn.setText(tr("btn_rotate_label"))
+        self.label_cell_reset_style_btn.setText(tr("btn_reset_tier_style"))
+        self.label_cell_reset_style_btn.setToolTip(tr("tip_reset_tier_style"))
+        self.label_item_style_hint.setText(tr("lbl_style_custom_hint"))
+        self.label_item_reset_style_btn.setText(tr("btn_reset_tier_style"))
+        self.label_item_reset_style_btn.setToolTip(tr("tip_reset_tier_style"))
         self.apply_style_btn.setText(tr("btn_apply_all"))
         self.apply_style_btn.setToolTip(tr("tip_apply_all"))
         self.label_sub_prefix_chk.setText(tr("chk_sub_prefix"))
@@ -2034,14 +2338,18 @@ class Inspector(QWidget):
         self.blockSignals(False)
         self.project_property_changed.emit({"page_width_mm": w, "page_height_mm": h})
 
+    def _emit_label_cell_change(self, changes: dict):
+        if self._current_label_text_id:
+            self.label_item_property_changed.emit(self._current_label_text_id, dict(changes))
+
     def _on_label_color_changed(self, color_hex: str = None):
-        self.project_property_changed.emit({"label_color": color_hex or self.label_color.get_color()})
+        self._emit_label_cell_change({"color": color_hex or self.label_color.get_color()})
 
     def _on_corner_label_color_changed(self, color_hex: str = None):
         self.project_property_changed.emit({"corner_label_color": color_hex or self.corner_label_color.get_color()})
 
-    def _on_label_align_preset_changed(self, index: int = None):
-        align = ["left", "center", "right"][self.label_align.currentIndex()]
+    def _on_label_align_preset_changed(self, align: str = None):
+        align = align if align is not None else self.label_align.align()
         # Reset offsets to 0 when a preset is selected
         self.label_offset_x.blockSignals(True)
         self.label_offset_y.blockSignals(True)
@@ -2049,8 +2357,10 @@ class Inspector(QWidget):
         self.label_offset_y.setValue(0.0)
         self.label_offset_x.blockSignals(False)
         self.label_offset_y.blockSignals(False)
-        self.project_property_changed.emit({
-            "label_align": align,
+        key = ("label_valign" if self.label_align.orientation() == "vertical"
+               else "label_align")
+        self._emit_label_cell_change({
+            key: align,
             "label_offset_x": 0.0,
             "label_offset_y": 0.0,
         })
@@ -2072,6 +2382,43 @@ class Inspector(QWidget):
         """Handle label text edit in the Label Cell Settings panel."""
         if self._current_label_text_id:
             self.label_text_changed.emit(self._current_label_text_id, self.label_text_edit.text())
+
+    def _on_apply_label_style_to_all(self):
+        """Push the selected strip label's style onto every strip label."""
+        self.apply_style_to_group.emit("numbering", {
+            "font_family": self.label_font.currentText(),
+            "font_size_pt": self.label_size.value(),
+            "font_weight": "bold" if self.label_bold.isChecked() else "normal",
+            "color": self.label_color.get_color(),
+        })
+
+    def _on_label_cell_rotate(self):
+        """Cycle the selected strip label's rotation by 90°."""
+        new_rotation = (getattr(self, "_label_cell_rotation", 0.0) + 90.0) % 360.0
+        self._label_cell_rotation = new_rotation
+        self._emit_label_cell_change({"rotation": new_rotation})
+
+    def _on_label_cell_reset_style(self):
+        """Drop the strip label's bespoke style; it follows its tier again."""
+        tier = self._label_item_tier_options[
+            self.label_cell_tier_combo.currentIndex()][1]
+        self._emit_label_cell_change({"label_tier": tier})
+
+    def _on_label_item_reset_style(self):
+        """Drop the in-cell label's bespoke style; it follows its tier again."""
+        tier = self._label_item_tier_options[
+            self.label_item_tier_combo.currentIndex()][1]
+        self._emit_label_item_change({"label_tier": tier})
+
+    def _on_apply_label_position_to_all(self):
+        """Make the selected strip label's align/offsets the project default."""
+        key = ("label_valign" if self.label_align.orientation() == "vertical"
+               else "label_align")
+        self.apply_label_position_to_all.emit({
+            key: self.label_align.align(),
+            "label_offset_x": self.label_offset_x.value(),
+            "label_offset_y": self.label_offset_y.value(),
+        })
 
     # --- Label item (per-label overrides) helpers ---
 
@@ -2103,7 +2450,7 @@ class Inspector(QWidget):
         self.label_item_placement_combo.setCurrentIndex(idx)
         tier = data.get("label_tier", "panel")
         self.label_item_tier_combo.setCurrentIndex(1 if tier == "title" else 0)
-        self.label_item_lock_chk.setChecked(bool(data.get("style_locked", False)))
+        self.label_item_style_row.setVisible(bool(data.get("style_locked", False)))
         self.blockSignals(False)
         self.label_item_group.show()
 
@@ -2235,25 +2582,44 @@ class Inspector(QWidget):
                 self.blockSignals(True)
                 self._current_label_text_id = data.get("text_item_id")
                 self.label_text_edit.setText(data.get("label_text", ""))
+                self._label_cell_rotation = float(data.get("rotation", 0.0) or 0.0)
+                placement = data.get("placement", None)
+                self.label_cell_placement_combo.setCurrentIndex(next(
+                    (i for i, (_k, v) in enumerate(self._label_cell_placement_options)
+                     if v == placement), 0))
+                self.label_cell_tier_combo.setCurrentIndex(
+                    1 if data.get("label_tier", "panel") == "title" else 0)
+                self.label_cell_style_row.setVisible(bool(data.get("style_locked", False)))
                 self.label_scheme.setCurrentText(data.get("label_scheme", "(a)"))
                 self.label_font.setCurrentText(data.get("label_font_family", "Arial"))
                 self.label_size.setValue(data.get("label_font_size", 12))
                 self.label_bold.setChecked(data.get("label_font_weight", "bold") == "bold")
                 label_color_hex = data.get("label_color", "#000000")
                 self.label_color.set_color(label_color_hex)
-                label_align = data.get("label_align", "center")
-                align_map = {"left": 0, "center": 1, "right": 2}
-                self.label_align.setCurrentIndex(align_map.get(label_align, 1))
+                vertical = bool(data.get("strip_vertical"))
+                self.label_align.set_orientation("vertical" if vertical else "horizontal")
+                self.label_align.set_align(
+                    data.get("label_valign", "center") if vertical
+                    else data.get("label_align", "center"))
                 self.label_offset_x.setValue(data.get("label_offset_x", 0.0))
                 self.label_offset_y.setValue(data.get("label_offset_y", 0.0))
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
                 self.label_col_width_spin.setValue(data.get("label_col_width", 0.0))
                 self.blockSignals(False)
 
-                if data.get("text_item_id"):
-                    self._populate_label_item_group(data["text_item_id"], data)
-                else:
-                    self.label_item_group.hide()
+                enabled = bool(self._current_label_text_id)
+                self.label_apply_style_btn.setEnabled(enabled)
+                self.label_apply_position_btn.setEnabled(enabled)
+                self.label_cell_rotate_btn.setEnabled(enabled)
+                # Strip labels own their per-label controls here; the shared
+                # Selected Label section is for in-cell numbering labels only.
+                self.label_item_group.hide()
+            else:
+                self._current_label_text_id = None
+                self.label_apply_style_btn.setEnabled(False)
+                self.label_apply_position_btn.setEnabled(False)
+                self.label_cell_rotate_btn.setEnabled(False)
+                self.label_cell_style_row.hide()
             return
 
         if item_type == 'group_label':

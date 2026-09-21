@@ -138,15 +138,18 @@ class WelcomeWindow(QWidget):
 
         self._btn_new = QPushButton(tr("welcome_new"))
         self._btn_new.setObjectName("welcomePrimary")
+        self._btn_new.setToolTip(tr("welcome_new_tip"))
         self._btn_new.clicked.connect(self._mw._dismiss_welcome)
         btn_col.addWidget(self._btn_new)
 
         self._btn_open = QPushButton(tr("welcome_open_project"))
+        self._btn_open.setToolTip(tr("welcome_open_tip"))
         self._btn_open.clicked.connect(self._mw._on_open_project)
         btn_col.addWidget(self._btn_open)
 
         self._btn_learn = QPushButton(tr('tutorials_welcome'))
         self._btn_learn.setFlat(True)
+        self._btn_learn.setToolTip(tr("welcome_learn_tip"))
         self._btn_learn.clicked.connect(self._mw._on_show_tutorials)
         btn_col.addWidget(self._btn_learn)
 
@@ -241,8 +244,11 @@ class WelcomeWindow(QWidget):
         self._title.setText(tr("about_app_name"))
         self.setWindowTitle(tr("about_app_name"))
         self._btn_new.setText(tr("welcome_new"))
+        self._btn_new.setToolTip(tr("welcome_new_tip"))
         self._btn_open.setText(tr("welcome_open_project"))
+        self._btn_open.setToolTip(tr("welcome_open_tip"))
         self._btn_learn.setText(tr('tutorials_welcome'))
+        self._btn_learn.setToolTip(tr("welcome_learn_tip"))
         self._btn_close.setText(tr("welcome_close"))
         self._recent_header.setText(tr("welcome_recent"))
         self._drop_hint.setText(tr("welcome_drop_project"))

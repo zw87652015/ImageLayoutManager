@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
-PROJECT_SCHEMA_VERSION = 2
+PROJECT_SCHEMA_VERSION = 3
 
 
 class ProjectMigrationError(ValueError):
@@ -161,7 +161,8 @@ def _migrate_schema_0_to_1(data):
         'label_scheme': '(a)', 'label_scheme_sub': '', 'label_sub_prefix_parent': False,
         'label_sub_separator': '', 'label_placement': 'in_cell', 'label_font_family': 'Arial',
         'label_font_size': 12, 'label_font_weight': 'bold', 'label_color': '#000000',
-        'label_anchor': 'top_left', 'label_align': 'center', 'label_offset_x': 0.0,
+        'label_anchor': 'top_left', 'label_align': 'center', 'label_valign': 'center',
+        'label_offset_x': 0.0,
         'label_offset_y': 0.0, 'label_row_height': 0.0, 'label_col_width': 10.0,
         'figure_number': '', 'figure_title': '', 'tiff_color_mode': 'rgb',
         'cmyk_icc_profile_path': None, 'cmyk_rendering_intent': 1,
@@ -203,7 +204,17 @@ def _migrate_schema_1_to_2(data):
     return data
 
 
-SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2}
+def _migrate_schema_2_to_3(data):
+    data.setdefault('label_valign', 'center')
+    for item in data.get('text_items', []):
+        item.setdefault('label_align', None)
+        item.setdefault('label_valign', None)
+        item.setdefault('label_offset_x', None)
+        item.setdefault('label_offset_y', None)
+    return data
+
+
+SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2, 2: _migrate_schema_2_to_3}
 
 
 def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:

@@ -134,15 +134,15 @@ def _shortcuts_page() -> QWidget:
 
 _GETTING_STARTED_HTML_EN = """
 <h2 style="margin-top:0">Your First Figure</h2>
+<p>ILM combines existing images into one figure. In grid mode, the page contains rows, and each row contains image slots called <b>cells</b>. The row's column count is its number of cells; different rows can have different counts. A <b>panel</b> is one image in the composed figure.</p>
+<p>Start with the images you want readers to compare, then choose a layout for them. For example, three charts viewed side by side need one row with three cells. This is an example, not a required figure shape.</p>
 <p>Prefer hands-on learning? Use <b>Guided Tutorials…</b> below or in the Help menu.
 Choose a lesson to practice in a separate sample tab. You can exit and replay anytime.</p>
 <ol>
   <li>At the welcome window, choose <b>New Project</b> to reveal the initial 2×2 grid,
       or <b>Open Project…</b> to resume work. Recent projects are listed below the buttons.</li>
-  <li>In the main window, use <b>File → Open Images as Grid…</b>, or drop several image files
-      or a folder onto the window. ILM chooses a grid and runs Auto Layout.</li>
-  <li>Set the final page width and height in millimetres, margins, gap, and export DPI in
-      the Inspector's <b>Global Project Settings</b>.</li>
+  <li>To fill the starting cells, use <b>File → Import Images…</b> or drag one image onto an empty cell. If you want ILM to build a new layout for a batch of files instead, use <b>File → Open Images as Grid…</b>; save existing work first because this replaces the current layout.</li>
+  <li>Click empty canvas space to show <b>Global Project Settings</b> in the Inspector. Set the page width and height for the final printed or displayed figure, then margins and the gap between cells. These are millimetres, not screen zoom.</li>
   <li>Arrange the panels, add labels, and use the <b>Text Sizes</b> guide tab to match text across panels.</li>
   <li>Save the editable project, then use the toolbar's <b>Export</b> menu to create a figure file.</li>
 </ol>
@@ -172,14 +172,15 @@ its version fields manually.</p>
 
 _GETTING_STARTED_HTML_ZH = """
 <h2 style="margin-top:0">制作第一张组合图</h2>
+<p>ILM 用于把已有图片组合成一张图。网格模式先分行，每行再放置用于容纳图片的<b>单元格</b>。一行的列数就是其中的单元格数量，各行可以不同。组合图中的一幅图片也称为<b>面板</b>。</p>
+<p>先确定希望读者一起比较哪些图片，再为它们安排布局。例如，三张左右并排的图表需要一行三个单元格；这只是示例，不是必须遵循的形状。</p>
 <p>希望边做边学？点击下方或帮助菜单中的<b>引导教程…</b>，选择一个教程，
 在独立示例标签页中练习。可随时退出或重新学习。</p>
 <ol>
   <li>在欢迎窗口选择<b>新建工程</b>，进入初始的 2×2 网格；或选择<b>打开工程…</b>继续工作。
       按钮下方列出了最近打开的工程。</li>
-  <li>在主窗口使用<b>文件 → 新建图片网格…</b>，或将多张图片、一个文件夹拖入窗口。
-      ILM 会选择网格行列数并执行自动布局。</li>
-  <li>在右侧检查器的<b>全局排版设置</b>中，设置最终页面的宽高（毫米）、边距、间距和导出 DPI。</li>
+  <li>填充当前空单元格时，使用<b>文件 → 导入图片…</b>，或将单张图片拖到空格子上。如果希望 ILM 根据一批文件重新搭建布局，使用<b>文件 → 新建图片网格…</b>；它会替换当前布局，请先保存已有工作。</li>
+  <li>点击画布空白处，在检查器中展开<b>全局排版设置</b>。按最终印刷或显示需求设置页面宽高，再设置边距和单元格间距。单位是毫米，与屏幕缩放无关。</li>
   <li>安排面板、添加标注；如需统一各面板中的文字大小，请阅读<b>文字大小</b>页。</li>
   <li>先保存可编辑工程，再通过工具栏的<b>导出</b>菜单生成图像文件。</li>
 </ol>
@@ -210,7 +211,7 @@ _IMAGES_HTML_EN = """
 <h2 style="margin-top:0">Import and Prepare Images</h2>
 <h3>Choose the Right Import Method</h3>
 <ul>
-  <li><b>One panel:</b> right-click a cell → <b>Import Image…</b>, or drop one image onto it.</li>
+  <li><b>One panel:</b> drop one image onto an <b>empty</b> cell, or right-click the cell → <b>Import Image…</b> (this also replaces an existing image).</li>
   <li><b>Fill an existing grid:</b> <b>File → Import Images…</b> fills empty cells in layout order.
       Add cells first if there are not enough empty positions.</li>
   <li><b>Create a layout:</b> <b>File → Open Images as Grid…</b>, or drop multiple images/a folder
@@ -222,9 +223,8 @@ The welcome window accepts saved projects, not image folders: choose New Project
 <p>Dropping one image onto an occupied cell replaces its image, except when you target the inset drop zone.
 Dragging an existing cell onto another swaps their images. Use Ctrl+click to select multiple cells;
 check the highlighted destination before releasing a drag.</p>
-<p>To add an external inset, drag a single image over a filled panel and release over its inset drop zone.
-Select the inset to move it or edit <b>Inset Image Properties</b> in the Inspector.
-Right-click the inset for resize and other inset operations.</p>
+<p>To add an external inset, drag a single image over a filled panel and release over its top-right inset drop zone.
+Drag the inset to move it. To resize it, select its own row under the parent cell in <b>Layers</b>, or click it on the canvas, then edit the size fields in the Inspector's <b>Inset Image Properties</b>. Right-click for <b>Remove Inset</b> or <b>Reveal Image Source in File Explorer</b>.</p>
 <h3>Fit, Crop, and Rotate</h3>
 <ul>
   <li><b>Scale to Fit:</b> keeps the entire image visible, with space left over if the proportions differ.</li>
@@ -245,7 +245,7 @@ _IMAGES_HTML_ZH = """
 <h2 style="margin-top:0">导入与准备图片</h2>
 <h3>选择合适的导入方式</h3>
 <ul>
-  <li><b>单个面板：</b>右键单元格 → <b>导入图片…</b>，或将一张图片拖到该单元格。</li>
+  <li><b>单个面板：</b>将一张图片拖到<b>空</b>单元格上，或右键单元格 → <b>导入图片…</b>（也会替换已有图片）。</li>
   <li><b>填充已有网格：</b><b>文件 → 导入图片…</b>按布局顺序填充空单元格。
       若空位不足，请先添加单元格。</li>
   <li><b>新建布局：</b><b>文件 → 新建图片网格…</b>，或将多张图片／文件夹拖入主窗口。
@@ -256,8 +256,8 @@ _IMAGES_HTML_ZH = """
 <h3>替换、交换与插图</h3>
 <p>将单张图片拖到已占用的单元格通常会替换图片；拖到插图投放区则会添加插图。
 将画布上的一个单元格拖到另一个上可交换图片。Ctrl+点击可多选，松开拖动前请确认高亮的目标位置。</p>
-<p>添加外部插图时，将单张图片拖到已有图片的面板上，在插图投放区松开。
-选中插图后可移动，或在检查器的<b>插图属性</b>中调整。右键插图可进入调整大小等操作。</p>
+<p>添加外部插图时，将单张图片拖到已有图片的面板上，在右上角的插图投放区松开。
+拖动插图主体可移动它。调整大小时，在<b>图层</b>中选择主单元格下的插图条目，或直接点击画布上的插图，再修改检查器<b>插图属性</b>中的尺寸字段。右键菜单提供<b>移除插图</b>和<b>在文件资源管理器中显示图像源文件</b>。</p>
 <h3>适应、裁剪与旋转</h3>
 <ul>
   <li><b>适应 (Scale to Fit)：</b>完整显示图片；比例不一致时保留空白。</li>
@@ -275,12 +275,11 @@ _IMAGES_HTML_ZH = """
 _CELLS_HTML_EN = """
 <h2 style="margin-top:0">Arrange Panels</h2>
 <h3>Grid and Sub-Cells</h3>
-<p>Use rows and columns for regular figures. Each row can have its own column count and height ratio.
-Select a row or cell to edit its properties in the Inspector.</p>
+<p>In grid mode, build rows first, then choose how many image cells each row contains. Adding a cell to one row does not add a column to all rows. Row height ratios share out vertical space; they are not fixed heights in millimetres. Select a cell to find its row settings in the Inspector.</p>
 <ul>
   <li>Use the canvas <b>+</b> controls or right-click → <b>Insert</b> to add rows and columns.</li>
   <li>For mixed-size panels, right-click → <b>Add Sub-Cell / Subdivide</b>.
-      Add a sibling above, below, left, or right; a leaf cell can also be split into several rows or columns.</li>
+      Add a sibling above, below, left, or right; a cell that has not yet been subdivided can also be split into several rows or columns.</li>
   <li>Drag dividers or use <b>Sub-Cell Layout</b> in the Inspector to adjust the split.</li>
   <li>Use the right-click <b>Delete</b> menu to remove layout cells. This is different from
       <code>Ctrl+Delete</code>, which removes the image but keeps the cell.</li>
@@ -293,21 +292,19 @@ Check the result and undo if it is not appropriate. Set the page dimensions and 
 from the <b>Layout</b> menu, or directly from an image panel's right-click menu.
 The main Auto Layout button and <code>Ctrl+Shift+A</code> still arrange panels as before.</p>
 <ol>
-  <li>Check at least two image panels. An empty or single-panel selection never silently selects all images.
-      A selection belonging to one alignment opens that group for editing; the group selector also offers existing groups and <b>New alignment</b>.</li>
+  <li>A plot area is the rectangle where a chart draws its data, inside the axes. Use this tool when those rectangles should line up even though the files have different margins. Click <b>New group</b>, name the alignment, and check at least two panels. To edit an existing group, choose it in the group selector.</li>
   <li>Select each checked panel and drag around the plot interior, excluding axis labels, titles and legends.
       This is a <b>marker, not a crop</b>: source labels remain visible. There is no automatic axis detection.
       The editor always shows the full, unrotated source. Drag edges/corners to resize, drag inside to move,
       use the wheel to zoom, and middle-drag or Space-drag to pan. Redraw, Clear mark and Next unmarked help review the panels.</li>
-  <li>Choose the reference. <b>Match reference exactly</b> keeps its placement and scale unchanged.
-      <b>Fit within cells</b> may shrink or move the reference so all panels fit their available slots.
+  <li>Choose a reference image whose plot height and bottom line the others should match. <b>Match reference exactly</b> keeps its placement and size while all panels fit. If the reference size would cut off content, the group is reduced together and a notice explains the change. <b>Fit within cells</b> allows the reference to shrink or move to fit the available space.
       Only plot height is matched; image aspect ratios are always preserved. Neither mode moves or resizes cells,
       in either grid or freeform layouts.</li>
   <li>Use <b>Grid rows</b> to keep each grid row's bottom baseline separate, or <b>Custom rows</b> for explicit grouping.
       Panels with the same number in the table's <b>Baseline</b> column share one bottom axis. Freeform defaults to suggested
       numbers based on current vertical positions; review and retype them rather than flattening a multi-row figure. <b>One baseline</b> is only for panels that should share one line.</li>
   <li><b>Preview alignment</b> shows a separate project copy, the target height in millimetres and temporary plot/baseline guides.
-      Exact-reference overflow disables Apply: explicitly choose Fit, change membership, or adjust the layout.
+      If the group was reduced to fit, review the notice and preview before applying. If no valid fit is possible, adjust the layout or group membership; Apply stays unavailable until the problem is resolved.
       Cropped-out plot areas, missing sources, changed sources and overlapping group membership also require repair.</li>
 </ol>
 <p><b>Apply</b> saves markers and alignment groups in one undoable change, without editing source files.
@@ -327,18 +324,17 @@ positions to remain visually unchanged. Save a copy before major rearrangements.
 <h3>Selection and Consistent Sizes</h3>
 <p>Click a cell, Ctrl+click to extend the selection, or drag a selection rectangle from empty canvas space.
 Arrow keys navigate between cells when the canvas has focus; they do not nudge a panel.
-Use a shared <b>Sync Size Group</b> in the Inspector when items need linked dimensions.</p>
+To give cells linked width and height, select them and right-click → <b>Create Size Group</b>. Select a member to edit the group's dimensions under <b>Image Cell Properties</b>. This controls cell size, not the axes drawn inside the images.</p>
 """
 
 _CELLS_HTML_ZH = """
 <h2 style="margin-top:0">安排面板</h2>
 <h3>网格与子单元格</h3>
-<p>规则组合图可使用行列网格。每行可设置不同的列数和高度比例。
-选中行或单元格后，在检查器中修改对应属性。</p>
+<p>网格模式先分行，再决定每行有几个图片单元格。给一行添加单元格，不会给所有行都增加一列。行高比例用于分配上下方向的空间，并不是固定的毫米高度。选中单元格后，可在检查器中找到它所在行的设置。</p>
 <ul>
   <li>使用画布上的 <b>+</b> 控件，或右键 → <b>插入</b>，添加行列。</li>
   <li>混合尺寸面板可通过右键 → <b>细分为子单元格</b>实现。
-      在上下左右添加同级单元格；叶子单元格还可一次拆分为多行或多列。</li>
+      在上下左右添加同级单元格；尚未细分的单元格还可一次拆分为多行或多列。</li>
   <li>拖动分隔条，或通过检查器的<b>子单元格排版</b>调整分割。</li>
   <li>右键<b>删除</b>菜单用于删除布局单元格；<code>Ctrl+Delete</code> 则仅移除图片，保留单元格。</li>
 </ul>
@@ -349,21 +345,20 @@ _CELLS_HTML_ZH = """
 <p>点击工具栏“自动布局”旁的下拉箭头，或通过<b>布局 → 对齐绘图区…</b>、图像面板右键菜单中的
 <b>对齐绘图区…</b>打开。自动布局主按钮及 <code>Ctrl+Shift+A</code> 仍保持原来的面板排布功能。</p>
 <ol>
-  <li>勾选至少两个图像面板。未选择或只选择一个面板时，不会自动勾选全部图片。
-      若选择涉及一个已有对齐组，会直接编辑该组；也可通过组选择器切换已有组或<b>新建对齐</b>。</li>
+  <li>绘图区是坐标轴内绘制数据的矩形区域。如果文件留白不同，但这些矩形需要对齐，可使用此工具。点击<b>新建对齐组</b>、命名，再勾选至少两个面板。修改已有组时，从组选择器中选择它。</li>
   <li>逐个选择已勾选面板，手动框选绘图区内部，排除坐标标签、标题及图例。
       这是<b>标记而非裁剪</b>，源图标签会保留，不会自动检测坐标轴。
       编辑器始终显示完整、未旋转的源图。拖动边角调整范围，内部拖动移动标记，滚轮缩放，中键或空格拖动平移。
       可使用重画、清除标记和下一个未标记按钮。</li>
-  <li>选择参照图。<b>精确匹配参照图</b>保持参照图位置及缩放不变；<b>适应单元格边界</b>可能缩小或移动参照图，
-      使全部图片适应各自可用空间。仅匹配绘图区高度，始终保持图像宽高比。
+  <li>选择参照图，其他图将匹配它的绘图区高度和底部对齐线。<b>精确匹配参照图</b>在所有面板都能容纳时保持其位置与大小；若参照尺寸会裁掉内容，整组会一起缩小并显示原因。<b>适应单元格边界</b>允许参照图缩小或移动，以适应可用空间。
+      仅匹配绘图区高度，始终保持图像宽高比。
       网格及自由布局下均不会移动或调整单元格尺寸。</li>
   <li><b>按网格行</b>分别对齐各行底部基线；<b>自定义分行</b>中相同编号的面板共用基线。
       表格“基线组”列中编号相同的面板共用一条底部基线。自由布局默认依据当前垂直位置建议编号，
       请检查并重新输入，不要将多行图无意压到同一基线。
       仅在确实需要所有面板共用一条基线时选择<b>同一基线</b>。</li>
   <li><b>预览对齐</b>使用独立项目副本，显示目标高度（毫米）及临时绘图区和基线辅助线。
-      精确匹配超出边界时无法应用，需主动选择适应边界、改变成员或调整布局。
+      若提示整组已缩小，请先检查提示和预览再应用。若仍无法容纳，请调整布局或组成员；问题解决前无法应用。
       标记超出裁剪范围、源文件缺失或更改、面板同时属于多个对齐组时，也需先修复。</li>
 </ol>
 <p><b>应用</b>将标记及对齐组保存为一次可撤销操作，不修改源文件；<b>取消</b>不更改项目或撤销历史。
@@ -381,7 +376,7 @@ _CELLS_HTML_ZH = """
 <h3>选择与尺寸一致性</h3>
 <p>点击选择单元格，Ctrl+点击扩展选择，或从画布空白处拖动框选。
 画布获得焦点时，方向键用于在单元格之间导航，不用于微移面板。
-需要联动尺寸时，可在检查器中使用相同的<b>尺寸同步组</b>。</p>
+需要关联宽高时，选中单元格并右键 → <b>创建尺寸组</b>。选中组成员后，在<b>图像单元格属性</b>中编辑共同尺寸。它控制单元格大小，不负责对齐图片内部的坐标轴。</p>
 """
 
 _LABELS_HTML_EN = """
@@ -390,8 +385,7 @@ _LABELS_HTML_EN = """
 <p>Use <b>Edit → Auto In-Cell Labels</b> (<code>Ctrl+Shift+L</code>) to place a, b, c… labels inside panels.
 <b>Auto Above-Cell Labels</b> (<code>Ctrl+Shift+K</code>) puts them in a separate band above the images.
 <b>Layout → All Labels Placement</b> provides other placement choices.</p>
-<p>Set label appearance and placement rules in the Inspector. Select a label to edit its text and style;
-use the available <b>Apply to All</b> controls only when you intend a wider change.</p>
+<p>Select a panel letter to edit that label, or select its separate band to open <b>Label Cell Properties</b>. Font, colour, alignment, and offsets there affect the selected label. <b>Apply Style to All</b> copies the style to labels in the same tier (panel letters or titles); <b>Apply Position to All</b> copies the current alignment axis and offsets to strip labels. The <b>All labels</b> section holds the shared numbering scheme and strip dimensions.</p>
 <h3>Shared Row and Column Titles</h3>
 <ol>
   <li>Select the cells that should share a title.</li>
@@ -402,7 +396,7 @@ use the available <b>Apply to All</b> controls only when you intend a wider chan
 <p>A shared label occupies its own band. It is not a text-size group: shared labels add annotations,
 whereas text-size groups adjust text already inside source panels.</p>
 <h3>Free Text and Corner Labels</h3>
-<p><b>Edit → Add Text Box</b> adds a movable annotation. Adjust its font, point size, and colour in the Inspector.
+<p><b>Edit → Add Text Box</b> adds a movable annotation. Adjust its font, size, and colour in the Inspector.
 Cell corner labels provide short annotations anchored to an image corner.</p>
 <h3>Scale Bars</h3>
 <p>Enable a scale bar from the cell's context menu or Inspector. Enter the correct source-image calibration
@@ -416,8 +410,7 @@ _LABELS_HTML_ZH = """
 <p><b>编辑 → 自动图内标注</b>（<code>Ctrl+Shift+L</code>）将 a、b、c… 放在面板内部。
 <b>自动图外标注</b>（<code>Ctrl+Shift+K</code>）将编号放在图片上方的独立标注带中。
 <b>布局 → 全部标注位置</b>提供其他放置方式。</p>
-<p>在检查器中设置标注样式与位置规则。选中标注可修改文字和样式；
-仅在确实需要批量修改时，使用相应的<b>应用到全部</b>控件。</p>
+<p>选中面板编号可编辑该标注，选中独立标注带则打开<b>独立标注单元格属性</b>。其中的字体、颜色、对齐和偏移只修改当前标注。<b>将样式应用到全部</b>复制到同一样式层级（面板编号或标题）的标注；<b>将位置应用到全部</b>将当前对齐方向和偏移应用到独立标注带。<b>全部标注</b>部分设置共享的编号方案和标注带尺寸。</p>
 <h3>共享行列标题</h3>
 <ol>
   <li>选中需要共用标题的单元格。</li>
@@ -426,7 +419,7 @@ _LABELS_HTML_ZH = """
 </ol>
 <p>共享标注占据独立的标注带。它与文字大小组不同：共享标注添加新注释，文字大小组则调整源面板中已有的文字。</p>
 <h3>自由文字与角标</h3>
-<p><b>编辑 → 添加文本框</b>用于创建可移动的注释，在检查器中调整字体、磅值和颜色。
+<p><b>编辑 → 添加文本框</b>用于创建可移动的注释，在检查器中调整字体、大小和颜色。
 单元格角标用于将简短注释固定在图片的角落。</p>
 <h3>比例尺</h3>
 <p>在单元格右键菜单或检查器中启用比例尺。输入正确的源图像校准值（µm/像素），再设置长度和外观。
@@ -435,12 +428,11 @@ _LABELS_HTML_ZH = """
 
 _TYPOGRAPHY_HTML_EN = """
 <h2 style="margin-top:0">Match Text Sizes Across Panels</h2>
-<p>Text-size groups are shared across the <b>whole project</b>, including SVG and raster panels.
-A group's size is a target in <b>points in the final figure</b>, not source pixels or screen pixels.
-ILM compensates for each panel's scale. Use separate groups for axis labels, tick labels, and other roles.</p>
+<p>When charts come from different tools, matching the image sizes may still leave their lettering inconsistent. A <b>text-size group</b> links text that should use one size, such as the axis titles across several panels. Groups are shared across the <b>whole project</b>, including SVG and raster images. Assign matching text to the same group; use separate groups for roles that need different sizes.</p>
+<p>The group's target is in <b>points (pt) in the final figure</b>, not source pixels or screen pixels. ILM compensates for each panel's scale. Choose targets for your final figure size and submission requirements, not from a universal preset.</p>
 <h3>SVG Panels</h3>
 <ol>
-  <li>Right-click an SVG image cell → <b>Edit SVG Text Groups…</b>.</li>
+  <li>Right-click an SVG image cell → <b>Match Text Size…</b>.</li>
   <li>Select text elements from the list; use Ctrl or Shift for multiple selections.</li>
   <li>Click <b>Add Group</b>, give it a meaningful name, and set its point size.</li>
   <li>Choose the group in <b>Assign to</b>, then click <b>Assign selected to group</b>.</li>
@@ -454,7 +446,7 @@ Grouping changes font size, not the wording of axis labels or measured values.</
   <li>Open <b>Edit → Preferences… → Text Detection</b>. RapidOCR is the built-in default.
       Use <b>Check availability</b>, then Apply any changes. Tesseract requires a separate installation;
       a custom command is an advanced alternative.</li>
-  <li>Right-click a raster image cell → <b>Match Raster Text Size…</b>, then <b>Detect text (OCR)</b>.
+  <li>Right-click a raster image cell → <b>Match Text Size…</b>, then <b>Detect text (OCR)</b>.
       Detection runs in the background; Cancel stops waiting for that result.</li>
   <li>Review the detected regions in the list and preview. Selecting a region is different from
       ticking it: the checkbox enables resizing.</li>
@@ -476,19 +468,16 @@ cannot recover missing detail. Raster font-size estimates are approximate.</p>
   <li>The source files are not overwritten. Raster resizing does change pixels in the composed figure:
       check that nearby data, ticks, symbols, and lines remain correct, and follow your journal's image policy.</li>
 </ul>
-<p><b>Export check:</b> inspect the actual exported figure, not just the preview.
-SVG group text can currently differ from its target point size in PDF output; verify important font sizes
-before submission.</p>
+<p><b>Export check:</b> open the actual exported figure at its intended size. Check that lettering is readable and that resized raster text has not disturbed nearby data or lines. The preview alone cannot confirm the exported file's appearance.</p>
 """
 
 _TYPOGRAPHY_HTML_ZH = """
 <h2 style="margin-top:0">统一各面板的文字大小</h2>
-<p>文字大小组在<b>整个工程</b>中共享，可包含 SVG 和位图面板。
-组字号是<b>最终图中的磅值（pt）</b>，不是源图片像素或屏幕像素；ILM 会补偿各面板的缩放比例。
-建议为坐标轴标题、刻度文字等不同用途分别建组。</p>
+<p>不同软件导出的图表，即使图片大小已经一致，文字仍可能大小不一。<b>文字大小组</b>用于关联需要采用同一字号的文字，例如几张图中的坐标轴标题。组在<b>整个工程</b>中共享，可包含 SVG 和位图。应统一的文字放入同一组；需要不同大小的文字分别建组。</p>
+<p>组目标字号是<b>最终成图中的磅值（pt）</b>，不是源图片像素或屏幕像素，ILM 会补偿面板缩放。请按最终成图尺寸和投稿要求选择目标，而不是套用一个通用数值。</p>
 <h3>SVG 面板</h3>
 <ol>
-  <li>右键 SVG 图片单元格 → <b>编辑 SVG 文字组…</b>。</li>
+  <li>右键 SVG 图片单元格 → <b>匹配文字大小…</b>。</li>
   <li>在列表中选择文字元素，Ctrl 或 Shift 可多选。</li>
   <li>点击<b>添加组</b>，输入便于识别的名称，设置磅值。</li>
   <li>在<b>分配到</b>中选择组，再点击<b>将所选分配到组</b>。</li>
@@ -501,7 +490,7 @@ _TYPOGRAPHY_HTML_ZH = """
 <ol>
   <li>打开<b>编辑 → 偏好设置… → 文字检测</b>。默认内置 RapidOCR。
       点击<b>检查可用性</b>，修改后应用设置。Tesseract 需要另行安装；自定义命令适合高级用户。</li>
-  <li>右键位图单元格 → <b>匹配位图文字大小…</b>，再点击<b>检测文字（OCR）</b>。
+  <li>右键位图单元格 → <b>匹配文字大小…</b>，再点击<b>检测文字（OCR）</b>。
       检测在后台进行，“取消”可停止等待该次结果。</li>
   <li>在列表和预览中检查检测区域。选中区域与勾选区域不同：勾选才会启用缩放。</li>
   <li>新建或选择组，选中区域并分配到组，设置组字号（pt）。按需调整锚点或竖排文字选项。</li>
@@ -520,8 +509,7 @@ ILM 缩放提取的前景像素，而非重新打字，因此放大低分辨率�
   <li>源文件不会被覆盖。但位图文字缩放会改变组合图中的像素，
       请核对邻近数据、刻度、符号和线条，并遵守期刊的图像处理要求。</li>
 </ul>
-<p><b>导出检查：</b>请检查实际导出文件，而不只是预览。
-目前 PDF 输出中的 SVG 文字组字号可能与目标磅值不同，投稿前应核对重要文字的实际大小。</p>
+<p><b>导出检查：</b>按最终使用尺寸打开实际导出文件。核对文字是否清楚，以及位图文字缩放是否影响附近数据或线条。仅凭预览无法确认导出文件的实际效果。</p>
 """
 
 _EXPORT_HTML_EN = """
@@ -549,9 +537,7 @@ The project, its links, and its saved state are unchanged.</p>
 <p>Increasing DPI does not recover detail missing from a source image. Follow the journal's requirements
 for photographs, line art, and mixed figures instead of assuming one DPI suits all cases.
 Vector geometry is resolution-independent, but raster panels and rasterized effects are not.</p>
-<p><b>Layout → Set Export Region</b> lets you drag a region on the page; Esc cancels the selection gesture.
-<b>Clear Export Region</b> restores whole-page output. Check for a saved export region if an export
-unexpectedly omits part of the page.</p>
+<p><b>Layout → Set Export Region</b> creates a rectangle covering the full page. Drag its edges to include only the part you want to export; content outside stays in the project. <b>Clear Export Region</b> restores whole-page output. Check for a saved region if an export unexpectedly omits part of the page.</p>
 <h3>Before Submission</h3>
 <ol>
   <li>Save the editable project. Use a <code>.figpack</code> copy when sharing source assets with collaborators.</li>
@@ -586,8 +572,7 @@ _EXPORT_HTML_ZH = """
 <p><code>像素数 ≈ (尺寸毫米 / 25.4) × DPI</code></p>
 <p>提高 DPI 不能恢复源图像缺失的细节。请分别遵循期刊对照片、线图和混合图的要求，
 不要假设同一 DPI 适合所有图。矢量几何不依赖分辨率，但位图面板和栅格化效果仍受分辨率限制。</p>
-<p><b>布局 → 设置导出区域</b>允许在页面上拖选区域；Esc 取消本次选择操作。
-<b>清除导出区域</b>恢复整页输出。若导出意外缺少页面的一部分，请检查是否保存了导出区域。</p>
+<p><b>布局 → 设置导出区域</b>创建一个覆盖整页的矩形。拖动边缘，使其只包含要导出的部分；区域外内容仍保留在工程中。<b>清除导出区域</b>恢复整页输出。若导出意外缺少部分内容，请检查是否保存了导出区域。</p>
 <h3>投稿前检查</h3>
 <ol>
   <li>保存可编辑工程。需要与合作者共享源素材时，使用 <code>.figpack</code> 副本。</li>

@@ -161,15 +161,7 @@ class RasterTextRegionDelegate(QStyledItemDelegate):
             tint = QColor(warning_color)
             tint.setAlpha(15)
             painter.fillRect(status_rect.adjusted(-3, -2, 3, 2), tint)
-            icon_kind = QStyle.StandardPixmap.SP_MessageBoxWarning
-        elif details['severity'] == 'applied':
-            icon_kind = QStyle.StandardPixmap.SP_DialogApplyButton
-        else:
-            icon_kind = QStyle.StandardPixmap.SP_MessageBoxInformation
-        side = min(16, line_h)
-        style.standardIcon(icon_kind).paint(painter, QRect(left, status_rect.top(), side, side))
         painter.setPen(text if warning else subtle)
-        status_rect.adjust(side + 6, 0, 0, 0)
         painter.drawText(status_rect, Qt.AlignmentFlag.AlignVCenter,
                          metrics.elidedText(details['status'], Qt.TextElideMode.ElideRight, status_rect.width()))
         if details['warning'] or details['note']:
@@ -180,10 +172,7 @@ class RasterTextRegionDelegate(QStyledItemDelegate):
             tint = QColor(palette.color(QPalette.ColorRole.BrightText) if details['warning'] else accent)
             tint.setAlpha(15)
             painter.fillRect(note_rect.adjusted(-3, -2, 3, 2), tint)
-            kind = QStyle.StandardPixmap.SP_MessageBoxWarning if details['warning'] else QStyle.StandardPixmap.SP_MessageBoxInformation
-            style.standardIcon(kind).paint(painter, QRect(left, note_rect.top(), side, side))
             painter.setPen(text)
-            note_rect.adjust(side + 6, 0, 0, 0)
             painter.drawText(note_rect, Qt.AlignmentFlag.AlignVCenter,
                              metrics.elidedText(note, Qt.TextElideMode.ElideRight, note_rect.width()))
         if option.state & QStyle.StateFlag.State_HasFocus:

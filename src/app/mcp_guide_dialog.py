@@ -74,6 +74,8 @@ _HTML_EN = """\
 to ImageLayoutManager so the AI can build and edit
 multi-panel figures for you.</p>
 
+<p>MCP is the connection protocol between an AI assistant and ILM. This setup is optional; you do not need it to build figures manually. Save a project copy before letting an assistant edit it.</p>
+
 <hr>
 
 <h3>How it works</h3>
@@ -131,14 +133,14 @@ this in a JSON file with the same format:</p>
     <ul>
       <li><i>"Create a 2×3 figure from the images in D:\\data\\panels"</i></li>
       <li><i>"Make the top row taller"</i></li>
-      <li><i>"Make all panel labels 10 pt bold with a little padding"</i></li>
-      <li><i>"Add 10 µm scale bars to the microscopy panels"</i></li>
+      <li><i>"Make the panel letters bold, keeping their current size"</i></li>
+      <li><i>"Help me add scale bars; ask me for each image's pixel calibration before setting them"</i></li>
       <li><i>"Add a zoom inset to panel b and give it a white border"</i></li>
       <li><i>"Save the project as figure.figlayout"</i></li>
     </ul>
   </li>
 </ol>
-<p>Every change appears live in this window. Undo any step with <b>Ctrl+Z</b>.</p>
+<p>Review changes in this window before saving or exporting. <b>Ctrl+Z</b> can reverse undoable layout edits, but do not assume every automated action can be undone.</p>
 
 <p><b>Current MCP capabilities:</b> AI can create/open/save/export projects,
 reshape rows and cells, import images, split panels, switch to freeform
@@ -172,6 +174,8 @@ _HTML_ZH = """\
 （<b>Claude Desktop</b>、<b>Claude Code</b>、<b>Cursor</b>、
 <b>Windsurf</b>、<b>Cline</b> 等）
 接入 ImageLayoutManager，让 AI 帮你自动排版和编辑多图版组图。</p>
+
+<p>MCP 是 AI 助手与 ILM 之间的连接协议。此配置为可选功能，手动制作组合图不需要它。让助手编辑前，请先另存工程副本。</p>
 
 <hr>
 
@@ -228,14 +232,14 @@ AI 助手  ── stdio (MCP) ──►  ImageLayoutManager --mcp  ── WebSoc
     <ul>
       <li><i>"用 D:\\data\\panels 里的图片拼一个 2×3 的图版"</i></li>
       <li><i>"把第一行调高一些"</i></li>
-      <li><i>"把所有面板标签改成 10 pt 粗体，并留一点边距"</i></li>
-      <li><i>"给显微图加 10 µm 比例尺"</i></li>
+      <li><i>"把面板编号改成粗体，保留当前大小"</i></li>
+      <li><i>"帮我添加比例尺，设置前先向我确认每张图片的像素校准值"</i></li>
       <li><i>"给 b 面板加一个放大插图，并设置白色边框"</i></li>
       <li><i>"保存为 figure.figlayout"</i></li>
     </ul>
   </li>
 </ol>
-<p>每次操作都会实时显示在本窗口中，随时 <b>Ctrl+Z</b> 撤销。</p>
+<p>保存或导出前，请在本窗口检查更改。<b>Ctrl+Z</b> 可恢复支持撤销的布局编辑，但不要假设每项自动化操作都能撤销。</p>
 
 <p><b>当前 MCP 能力：</b>AI 可以新建/打开/保存/导出项目，调整行列与单元格，
 导入图片，分割面板，切换自由布局，裁剪/旋转/加边距/对齐图片，调整标签和文本样式，
