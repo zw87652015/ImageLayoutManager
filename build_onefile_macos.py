@@ -125,6 +125,8 @@ def main() -> int:
         "--collect-submodules=PyQt6",
         # Pillow plugins sometimes require hidden imports
         "--collect-submodules=PIL",
+        # rapidocr ships YAML configs and .onnx models as package data
+        "--collect-all=rapidocr",
         # stdlib modules that PyInstaller can miss in --windowed mode
         "--hidden-import=encodings",
         "--hidden-import=codecs",
