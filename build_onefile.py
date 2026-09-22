@@ -60,6 +60,10 @@ def main() -> int:
     assets_dir = project_root / "assets"
     icon_path = assets_dir / "icon.ico"
 
+    from build_licenses import prepare_licenses
+    legal_dir = prepare_licenses(project_root)
+    print(f"License staging: {legal_dir}")
+
     # PyQt6 modules actually used by this application.
     used_qt_modules = [
         "PyQt6.QtCore",
@@ -126,10 +130,9 @@ def main() -> int:
             matplotlib_datas = matplotlib_datas + collect_data_files(pkg)
         except Exception:
             pass
+    datas_list = [(str(legal_dir), 'licenses')] + matplotlib_datas
     if assets_dir.exists():
-        datas_list = [(str(assets_dir), 'assets')] + matplotlib_datas
-    else:
-        datas_list = matplotlib_datas
+        datas_list = [(str(assets_dir), 'assets')] + datas_list
     datas_arg = f"    datas={datas_list!r},"
     entry_arg = f"    [{str(entry)!r}],"
     pathex_arg = f"    pathex=[{src_path!r}],"

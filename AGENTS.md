@@ -111,3 +111,27 @@
   backend that can: RapidOCR word boxes, Tesseract `image_to_boxes`, command JSON `chars`): a blob under
   a character in `_FLOATING_CHARS` / with a combining mark / CJK is text; under a plain letter it's
   foreign. With no char info, geometry falls back to x-height band + centred-diacritic rules.
+
+## Licensing / release preparation
+- `licenses/` contains vendored full license texts plus `origins.json` (source + SHA256). Never paraphrase license text; re-vendor exact upstream files if a version bumps.
+- `python build_licenses.py` stages `build/licenses-*` (or `--output <new dir>`): per-component license/METADATA copies from installed RECORD files, `components.json` inventory (`source_status: incomplete`), `index.html` viewer, Python runtime license, and `ImageLayoutManager-<ver>-application-source.zip` (application source only — NOT a complete corresponding-source bundle). `--check-release` always exits 2 while pending items remain; there is no "approved" override.
+- `prepare_licenses()` is called by `build_installer_windows.py`, `build_onefile.py`, `build_onefile_macos.py` and bundled via `--add-data` into `licenses/`; the About dialog's "Licenses and source…" (`src/app/license_dialog.py`) reads `sys._MEIPASS/licenses` when frozen, repo `licenses/` + NOTICE in development, and renders plain text only (no network).
+- Missing license files for a distribution are a hard error unless an entry in `build_licenses.FALLBACKS` matches the exact installed version AND the SHA256 recorded in `licenses/origins.json`.
+- Known limitation: the manifest intentionally marks `source_status: incomplete` — native-library/dependency corresponding-source auditing and publication are still open items; do not treat the staging output as release clearance.
+- Verify with `python -m unittest verify_licenses test_windows_packaging`.
+
+### Corresponding-source index
+- `python build_source_index.py collect` requires a built candidate matching `src/version.py` (`build/store-candidate-*/dist/ImageLayoutManager/_internal/licenses/components.json`) plus the recorded manifests in `build/provenance-keep/`; `render` writes `SOURCES.md` and `check` verifies both stay in sync.
+- `SOURCES.md` is generated - edit `build_source_index.py`, never the Markdown. Recorded per-component status strings are reproduced verbatim and must never be upgraded by hand.
+- Regenerate `licenses/sources.json` and `SOURCES.md` whenever the app version or any dependency version changes.
+- `source_status` in `components.json` stays `incomplete` - publishing the index does not by itself make correspondence verified.
+- Verify with `python -m unittest verify_source_index`.
+
+## Windows Store / MSIX packaging
+- Fresh isolated onedir (preserves existing outputs): `python build_installer_windows.py --onedir-only --output-root build\store-candidate-<unique>` -- the output root must not already exist; Inno Setup/winget are skipped on this path.
+- Package layout + unsigned MSIX: `python build_msix.py --bundle <out>\dist\ImageLayoutManager --output <new-dir> --identity-name <name> --publisher <CN=...> --publisher-display-name <name> [--makeappx <path-to-makeappx.exe>]`. Without `--makeappx` it writes layout only (no fake .msix). MakeAppx.exe can be obtained locally from the `Microsoft.Windows.SDK.BuildTools` NuGet package extracted under `build/sdk-tools-*` (no system install); verify its Microsoft Authenticode signature before use.
+- `python -m unittest verify_msix` covers manifest structure/escaping, version rules, path containment and isolated-build routing.
+- Isolated builds spawn separate PyInstaller processes with a child-only PATH restricted to the selected interpreter and Windows directories; blanket Qt binary/data collection and matplotlib submodule collection are omitted. This prevents unrelated installed applications or the base Conda environment from supplying DLLs. The default Inno route is unchanged.
+- `python audit_release.py inventory --bundle <onedir> --output <new-audit-dir>` records relative paths, file hashes and embedded Python modules. `python audit_release.py sources --inventory <audit-json> --output <new-source-dir>` downloads exact PyPI sdists with SHA256/size checks. RECORD matches are provenance candidates, not proof of complete license or corresponding-source coverage. Keep audit outputs and downloads under ignored `build/`.
+- Frozen Windows rendering checks must use the native `windows` Qt platform, not the fontless offscreen test setup. Put math-text fixtures in Python files rather than double-quoted PowerShell command strings, which expand `$` expressions before Python sees them.
+- `licenses/native/**` holds upstream notices extracted from version-matched native sources (Qt modules incl. QtPdf/Chromium, Mesa, LLVM, MuPDF, GEOS, Conda runtime packages). Their `origins.json` records add `component`, `component_version`, optional `platform`, and a required `binding`: `distribution` (installed package version must match) or `runtime_file` (a path under `sys.prefix` whose SHA256 must match). `build_licenses._native_notice_components()` groups them into extra manifest components after the Python distributions; every origins entry — not just the mandatory seven — is hash-verified. Tests that stage licenses with mocked distributions must filter out `component` records, since their bindings reference real installed packages.

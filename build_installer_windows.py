@@ -1,3 +1,5 @@
+import argparse
+import os
 import re
 import sys
 import subprocess
@@ -143,7 +145,31 @@ def ensure_iscc() -> Path | None:
     return None
 
 
-def main() -> int:
+def isolated_build_environment():
+    env = os.environ.copy()
+    prefix = Path(sys.prefix)
+    windows = Path(os.environ.get('SystemRoot', r'C:\Windows'))
+    paths = [prefix, prefix / 'Library' / 'mingw-w64' / 'bin',
+             prefix / 'Library' / 'usr' / 'bin', prefix / 'Library' / 'bin',
+             prefix / 'Scripts', prefix / 'bin',
+             windows / 'System32', windows]
+    env['PATH'] = os.pathsep.join(str(p) for p in paths if p.is_dir())
+    env['CONDA_PREFIX'] = str(prefix)
+    for key in ('PYTHONPATH', 'PYTHONHOME', 'QT_PLUGIN_PATH',
+                'QML2_IMPORT_PATH', 'QML_IMPORT_PATH'):
+        env.pop(key, None)
+    return env
+
+
+def run_pyinstaller(args, *, isolated, runner):
+    if isolated:
+        subprocess.run([sys.executable, '-m', 'PyInstaller', *args],
+                       env=isolated_build_environment(), check=True)
+    else:
+        runner(args)
+
+
+def main(argv=None) -> int:
     """Build a Windows installer using PyInstaller (--onedir) + Inno Setup.
 
     Workflow
@@ -160,6 +186,23 @@ def main() -> int:
     - Inno Setup 6  https://jrsoftware.org/isdl.php
     """
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--onedir-only', action='store_true')
+    parser.add_argument('--output-root', type=Path)
+    parser.add_argument('--additional-requirement', action='append',
+                        default=[])
+    ns = parser.parse_args(argv)
+    if ns.additional_requirement and not ns.onedir_only:
+        parser.error('--additional-requirement requires --onedir-only')
+    if ns.output_root is not None and not ns.onedir_only:
+        parser.error('--output-root requires --onedir-only')
+    project_root = Path(__file__).resolve().parent
+    output_root = ns.output_root.resolve() if ns.output_root else project_root
+    if ns.onedir_only and ns.output_root is None:
+        parser.error('--onedir-only requires a fresh --output-root')
+    if ns.output_root is not None:
+        output_root.mkdir(parents=True, exist_ok=False)
+
     if sys.platform != "win32":
         print("This script is intended for Windows only.")
         print(f"Current platform: {sys.platform}")
@@ -173,16 +216,26 @@ def main() -> int:
         print(f"Import error: {e}")
         return 1
 
-    iscc = ensure_iscc()
-    if iscc is None:
-        return 1
+    if not ns.onedir_only:
+        iscc = ensure_iscc()
+        if iscc is None:
+            return 1
 
-    project_root = Path(__file__).resolve().parent
     entry = project_root / "main.py"
 
     if not entry.exists():
         print(f"Entry file not found: {entry}")
         return 1
+
+    if ns.onedir_only:
+        from build_licenses import prepare_licenses
+        legal_dir = prepare_licenses(
+            project_root, output_root / 'licenses',
+            additional_requirements=ns.additional_requirement)
+    else:
+        from build_licenses import prepare_licenses
+        legal_dir = prepare_licenses(project_root)
+    print(f"License staging: {legal_dir}")
 
     src_path = str(project_root / "src")
     assets_dir = project_root / "assets"
@@ -216,7 +269,8 @@ def main() -> int:
     print(f"Publisher   : {app_publisher}")
     print(f"Copyright   : {app_copyright}")
 
-    build_dir = project_root / "build"
+    build_dir = output_root / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
     gui_version_file = build_dir / "version_info_gui.txt"
     cli_version_file = build_dir / "version_info_cli.txt"
     write_version_info_file(
@@ -288,9 +342,12 @@ def main() -> int:
         "imageio_ffmpeg",
     ]
 
-    args = [
-        "--noconfirm",
-        "--clean",
+    isolated_args = [f'--distpath={output_root / "dist"}', f'--workpath={build_dir / "pyinstaller"}', f'--specpath={build_dir}'] if ns.onedir_only else []
+
+    args = []
+    if not ns.onedir_only:
+        args += ["--noconfirm", "--clean"]
+    args += [
         # --onedir: all files stay extracted in dist/ImageLayoutManager/
         # No runtime extraction on launch → instant startup.
         "--onedir",
@@ -298,6 +355,7 @@ def main() -> int:
         "--name=ImageLayoutManager",
         f"--paths={src_path}",
         "--noupx",
+        *isolated_args,
     ]
 
     if icon_path.exists():
@@ -310,6 +368,8 @@ def main() -> int:
     if assets_dir.exists():
         args.append(f"--add-data={assets_dir};assets")
 
+    args.append(f"--add-data={legal_dir};licenses")
+
     docs_dir = project_root / "docs"
     if docs_dir.exists():
         args.append(f"--add-data={docs_dir};docs")
@@ -318,10 +378,12 @@ def main() -> int:
         args.append(f"--collect-submodules={mod}")
 
     # Ensure Qt6 C++ DLLs, platform plugins (e.g., qwindows.dll), styles, and data files are bundled.
-    args.append("--collect-binaries=PyQt6")
-    args.append("--collect-data=PyQt6")
+    if not ns.onedir_only:
+        args.append("--collect-binaries=PyQt6")
+        args.append("--collect-data=PyQt6")
     args.append("--hidden-import=PyQt6.sip")
-    args.append("--hidden-import=shiboken6")
+    if not ns.onedir_only:
+        args.append("--hidden-import=shiboken6")
 
     # websockets is used by the MCP adapter (--mcp mode) and the
     # in-app agent server.  collect-submodules catches the legacy
@@ -333,7 +395,8 @@ def main() -> int:
     # mathtext config); collect-submodules pulls in lazy-imported
     # backends/parsers PyInstaller's static analysis misses.
     args.append("--collect-data=matplotlib")
-    args.append("--collect-submodules=matplotlib")
+    if not ns.onedir_only:
+        args.append("--collect-submodules=matplotlib")
     args.append("--hidden-import=matplotlib.backends.backend_agg")
     args.append("--hidden-import=matplotlib.backends.backend_pdf")
     args.append("--hidden-import=matplotlib.backends.backend_svg")
@@ -352,9 +415,10 @@ def main() -> int:
     for a in args:
         print(f"  {a}")
 
-    pyinstaller_run(args)
+    run_pyinstaller(args, isolated=ns.onedir_only,
+                    runner=pyinstaller_run)
 
-    dist_dir = project_root / "dist" / "ImageLayoutManager"
+    dist_dir = output_root / "dist" / "ImageLayoutManager"
     if not dist_dir.exists():
         print("PyInstaller finished but output directory not found:")
         print(f"  {dist_dir}")
@@ -410,29 +474,35 @@ def main() -> int:
     if not cli_entry.exists():
         print(f"CLI entry not found, skipping CLI build: {cli_entry}")
     else:
-        cli_args = [
-            "--noconfirm",
-            "--clean",
+        cli_args = []
+        if not ns.onedir_only:
+            cli_args += ["--noconfirm", "--clean"]
+        cli_args += [
             "--onedir",
             "--console",            # CLI needs stdout/stderr
             "--name=imagelayout-cli",
             f"--paths={src_path}",
             "--noupx",
             f"--version-file={cli_version_file}",
+            *isolated_args,
         ]
         if assets_dir.exists():
             cli_args.append(f"--add-data={assets_dir};assets")
+        cli_args.append(f"--add-data={legal_dir};licenses")
         if docs_dir.exists():
             cli_args.append(f"--add-data={docs_dir};docs")
         for mod in used_qt_modules:
             cli_args.append(f"--collect-submodules={mod}")
-        cli_args.append("--collect-binaries=PyQt6")
-        cli_args.append("--collect-data=PyQt6")
+        if not ns.onedir_only:
+            cli_args.append("--collect-binaries=PyQt6")
+            cli_args.append("--collect-data=PyQt6")
         cli_args.append("--hidden-import=PyQt6.sip")
-        cli_args.append("--hidden-import=shiboken6")
+        if not ns.onedir_only:
+            cli_args.append("--hidden-import=shiboken6")
         cli_args.append("--collect-submodules=websockets")
         cli_args.append("--collect-data=matplotlib")
-        cli_args.append("--collect-submodules=matplotlib")
+        if not ns.onedir_only:
+            cli_args.append("--collect-submodules=matplotlib")
         cli_args.append("--hidden-import=matplotlib.backends.backend_agg")
         cli_args.append("--hidden-import=matplotlib.backends.backend_pdf")
         cli_args.append("--hidden-import=matplotlib.backends.backend_svg")
@@ -445,9 +515,10 @@ def main() -> int:
         print("\nBuilding CLI (imagelayout-cli.exe)...")
         for a in cli_args:
             print(f"  {a}")
-        pyinstaller_run(cli_args)
+        run_pyinstaller(cli_args, isolated=ns.onedir_only,
+                        runner=pyinstaller_run)
 
-        cli_dist = project_root / "dist" / "imagelayout-cli"
+        cli_dist = output_root / "dist" / "imagelayout-cli"
         if not cli_dist.exists():
             print(f"CLI build failed: {cli_dist} not found")
             return 2
@@ -494,7 +565,10 @@ def main() -> int:
     # ``app_publisher_url`` are read once near the top of main() from
     # src/version.py and reused here.
 
-    iss_path = project_root / "build" / "installer.iss"
+    if ns.onedir_only:
+        return 0
+
+    iss_path = build_dir / "installer.iss"
     iss_path.parent.mkdir(parents=True, exist_ok=True)
 
     icon_iss = str(icon_path) if icon_path.exists() else ""

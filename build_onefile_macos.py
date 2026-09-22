@@ -97,7 +97,9 @@ def main() -> int:
 
     assets_dir = project_root / "assets"
     # PyInstaller --add-data syntax:  src:dest  (dest is relative inside bundle)
-    add_data_args = []
+    from build_licenses import prepare_licenses
+    legal_dir = prepare_licenses(project_root)
+    add_data_args = [f"--add-data={legal_dir}:licenses"]
     if assets_dir.exists():
         add_data_args.append(f"--add-data={assets_dir}:assets")
 

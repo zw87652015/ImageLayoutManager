@@ -15,31 +15,50 @@ limitations under the License.
 
 ----
 
-This product bundles third-party components governed by their own
-licenses. Most are dynamically imported Python packages installed from
-PyPI/conda; redistributable copies appear inside the PyInstaller
-``_internal/`` directory of installed builds. Runtime dependencies:
+Third-party software and combined distributions
 
-  - PyQt6                 (GPL v3 / commercial)
-  - PyMuPDF (fitz)        (AGPL-3.0 / commercial, Artifex Software)
-  - Pillow                (MIT-CMU / HPND)
-  - matplotlib            (Matplotlib License, BSD-style)
-  - numpy                 (BSD-3-Clause)
-  - websockets            (BSD-3-Clause)
-  - mcp (Python SDK)      (MIT)
+ImageLayoutManager-authored source files remain licensed under Apache-2.0.
+Third-party components retain their own copyright and license terms.
+The open-source binary distribution combines PyQt6 (GPL version 3) and
+PyMuPDF/MuPDF (AGPL version 3). Distribution of that combined application
+must comply with the applicable GPLv3/AGPLv3 terms; the complete binary
+bundle is not licensed solely under Apache-2.0. This does not replace
+or remove the original licenses of its constituent components.
 
-IMPORTANT — licensing of distributed binaries:
+You may use, study, modify and redistribute the covered software under
+its applicable licenses. It is provided WITHOUT ANY WARRANTY, to the
+extent permitted by law. See the full license texts for details.
 
-The ImageLayoutManager *source code* in this repository is licensed
-under Apache-2.0. However, the official pre-built binaries bundle
-PyQt6 (GPL v3) and PyMuPDF (AGPL-3.0). As a combined work, each
-distributed binary is therefore governed by the terms of the
-GNU Affero General Public License v3.0 in addition to Apache-2.0.
-If you redistribute the binaries, or build and distribute your own
-binaries including these components, you must comply with the
-GPL v3 / AGPL-3.0 (source availability, license preservation), or
-obtain commercial licenses from Riverbank Computing (PyQt6) and
-Artifex Software (PyMuPDF) respectively.
+The licenses directory contains full GNU license texts and third-party
+notices. Packaged builds additionally contain a generated component index,
+installed dependency versions and copied license files. That index is a
+build-environment dependency inventory, not a certification that every
+native library or asset in a final binary has been cleared.
 
-End users running the official binaries should consult each package's
-own license file for the full text.
+Primary dependencies include PyQt6, Qt, PyQt6-sip, PyMuPDF/MuPDF, Pillow,
+matplotlib, NumPy, websockets, the MCP Python SDK, RapidOCR and ONNX Runtime.
+Their transitive dependencies and native libraries have additional terms.
+Matplotlib includes font notices for DejaVu and STIX. Shapely includes GEOS
+under LGPL terms. PyInstaller's license includes a bootloader exception.
+
+RapidOCR 3.9.1 engineering code is Copyright (c) 2021 RapidOCR Authors.
+Its upstream project attributes OCR model copyright to Baidu and releases
+the project under Apache-2.0:
+https://github.com/RapidAI/RapidOCR/tree/v3.9.1
+PaddleOCR upstream: https://github.com/PaddlePaddle/PaddleOCR
+Bundled model identities must be checked against their upstream checksums;
+user-supplied models and fonts are not covered by this statement.
+
+Corresponding source
+
+Repository: https://github.com/zw87652015/ImageLayoutManager
+The repository link alone is not a complete corresponding-source offer.
+The build preparation tool creates an ILM application-source snapshot and
+an installed-version inventory. The snapshot excludes dependency sources
+and is explicitly labelled as application source only.
+Before distributing a binary, its distributor must provide the complete
+corresponding source required by the applicable licenses, including the
+relevant dependency/native-library sources, modifications and build scripts,
+and make the matching source location clearly available to recipients.
+Copying this notice or collecting license texts does not fulfill those
+source-distribution obligations by itself.

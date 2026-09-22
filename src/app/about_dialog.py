@@ -173,7 +173,7 @@ class AboutDialog(QDialog):
         info_layout = QVBoxLayout()
         info_layout.setSpacing(8)
 
-        def info_row(label_text, value_text, link=None):
+        def info_row(label_text, value_text, link=None, wrap=False):
             row = QHBoxLayout()
             lbl = QLabel(label_text)
             lbl.setStyleSheet("color: #888888; font-size: 12px;")
@@ -184,19 +184,31 @@ class AboutDialog(QDialog):
             )
             val.setStyleSheet("font-size: 12px;")
             val.setOpenExternalLinks(True)
+            if wrap:
+                val.setWordWrap(True)
             row.addWidget(lbl)
-            row.addWidget(val)
-            row.addStretch()
+            row.addWidget(val, 1)
+            if not wrap:
+                row.addStretch()
             info_layout.addLayout(row)
 
         info_row(tr("about_developer"), f'<a href="https://github.com/{GITHUB_OWNER}" '
                               f'style="color:#4A90E2;">@{GITHUB_OWNER}</a>')
         info_row(tr("about_website"),    "luojiajiang.uk", link=WEBSITE_URL)
         info_row(tr("about_repository"), "GitHub", link=GITHUB_URL)
-        info_row(tr("about_license"),    "Apache-2.0 (source) · GPLv3/AGPLv3 deps, see NOTICE")
+        info_row(tr("about_license"),    tr("about_license_summary"), wrap=True)
 
         root.addLayout(info_layout)
-        root.addSpacing(16)
+        root.addSpacing(12)
+
+        licenses_btn = QPushButton(tr("about_licenses"))
+        licenses_btn.setFlat(True)
+        licenses_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        licenses_btn.setStyleSheet(
+            "color: #4A90E2; font-size: 12px; border: none; padding: 2px;")
+        licenses_btn.clicked.connect(self._show_licenses)
+        root.addWidget(licenses_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        root.addSpacing(8)
 
         # ── Copyright / attribution line ──────────────
         # Matches the LegalCopyright string embedded in the .exe and the
@@ -263,6 +275,11 @@ class AboutDialog(QDialog):
         btn_row.addWidget(close_btn)
 
         root.addLayout(btn_row)
+
+    def _show_licenses(self):
+        from src.app.license_dialog import LicenseDialog
+        dlg = LicenseDialog(self)
+        dlg.exec()
 
     def _toggle_changelog(self):
         show = not self._changelog_view.isVisible()

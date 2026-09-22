@@ -9,6 +9,18 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.4.3", "2026-09-22", [
+        {"en": "About now has Licenses and source, which lists the licences of this app and every bundled component and reads them offline.",
+         "zh": "“关于”新增“许可协议与源码”，可离线查看本软件及所有随附组件的许可协议。"},
+        {"en": "Installed builds include the full licence texts and notices of their bundled components, including the Qt, PDF, image, text-recognition and system runtime libraries.",
+         "zh": "安装后的版本随附各组件的完整许可文本与声明，涵盖 Qt、PDF、图像、文字识别和系统运行库等组件。"},
+        {"en": "Each release also carries a snapshot of this app's own source code, matching the installed version.",
+         "zh": "每个发行版还附带与所安装版本一致的本软件源码快照。"},
+        {"en": "Windows builds no longer pick up unrelated libraries from other software installed on the build computer.",
+         "zh": "Windows 打包不再引入打包电脑上其他软件的无关库文件。"},
+        {"en": "No changes to figures, text sizing or project files: projects saved by 3.4.2 and this version are interchangeable.",
+         "zh": "成图、文字大小和工程文件均无变化：3.4.2 与本版本保存的工程可互相打开。"},
+    ]),
     ("3.4.2", "2026-09-21", [
         {"en": "New projects use true final-size points (pt) for labels, titles, annotations and scale-bar text, with fractional sizes such as 7.5 pt and consistent sizing across canvas and exports.",
          "zh": "新建工程的标注、标题、注释和比例尺文字使用真实的最终成图磅值（pt），支持 7.5 pt 等小数字号，并统一画布与导出中的大小。"},
