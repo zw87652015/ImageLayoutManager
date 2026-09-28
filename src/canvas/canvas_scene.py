@@ -28,6 +28,7 @@ class CanvasScene(QGraphicsScene):
     text_item_changed = pyqtSignal(str, dict) # text_item_id, changes_dict
     selection_changed_custom = pyqtSignal(list) # list of selected item ids
     cell_context_menu = pyqtSignal(str, bool, object) # cell_id, is_label_cell, QPointF(screen_pos)
+    cell_double_clicked = pyqtSignal(str)  # cell_id (regular leaf cell only)
     empty_context_menu = pyqtSignal(object, object)   # scene_pos (QPointF, in mm), screen_pos (QPoint)
     insert_row_requested = pyqtSignal(int)   # insert at row_index
     insert_cell_requested = pyqtSignal(int, int)  # row_index, insert_col_index
@@ -113,6 +114,9 @@ class CanvasScene(QGraphicsScene):
         # Crop isolation veil
         self._crop_veil_item = None
         self._active_crop_cell = None
+        # item -> (accepted_buttons, accepts_hover, cursor_or_None) saved
+        # while crop mode blocks interaction above the veil.
+        self._crop_blocked = {}
 
     # ------------------------------------------------------------------
     # Theme
@@ -339,7 +343,8 @@ class CanvasScene(QGraphicsScene):
                 x, y, w, h = rect_key
                 item.setRect(0, 0, w, h)
                 item.setPos(x, y)
-                item.setZValue(getattr(cell, 'z_index', 0))
+                if item is not self._active_crop_cell:
+                    item.setZValue(getattr(cell, 'z_index', 0))
 
                 item.update_data(
                     cell.image_path,
@@ -998,6 +1003,62 @@ class CanvasScene(QGraphicsScene):
             for div in self._divider_items:
                 div.setVisible(False)
 
+        # Items rebuilt during the refresh (dividers, add buttons) are
+        # born unblocked — re-apply the crop-mode interaction block.
+        if self._active_crop_cell is not None:
+            self._block_interaction_for_crop()
+
+    def _block_interaction_for_crop(self):
+        """Disable mouse/hover interaction on items above the crop veil
+        (Z >= 200) so only the crop cell and its crop handles respond."""
+        crop = self._active_crop_cell
+        if crop is None or self._crop_veil_item is None:
+            return
+        # Prune stale records for items no longer in this scene.
+        for it in [i for i in self._crop_blocked if i.scene() is not self]:
+            del self._crop_blocked[it]
+
+        def _block(item):
+            if item in self._crop_blocked:
+                return
+            cursor = item.cursor() if item.hasCursor() else None
+            self._crop_blocked[item] = (
+                item.acceptedMouseButtons(),
+                item.acceptHoverEvents(),
+                cursor,
+            )
+            item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            item.setAcceptHoverEvents(False)
+            if cursor is not None:
+                item.unsetCursor()
+            if getattr(item, '_hovered', False):
+                item._hovered = False
+                item.update()
+
+        for item in self.items():
+            if item.parentItem() is not None:
+                continue
+            if item is crop or item is self._crop_veil_item:
+                continue
+            if item.zValue() < self._crop_veil_item.zValue():
+                continue
+            _block(item)
+        # Freeform resize handles sit at Z 1000 relative to the cell and
+        # stay visible while it's selected — block them too.
+        for handle in getattr(crop, '_resize_handles', []) or []:
+            _block(handle)
+
+    def _restore_crop_blocked(self):
+        """Undo _block_interaction_for_crop for items still in the scene."""
+        for item, (buttons, hover, cursor) in self._crop_blocked.items():
+            if item.scene() is not self:
+                continue
+            item.setAcceptedMouseButtons(buttons)
+            item.setAcceptHoverEvents(hover)
+            if cursor is not None:
+                item.setCursor(cursor)
+        self._crop_blocked.clear()
+
     def _divider_live_update(self, div: 'DividerItem'):
         """Apply ratio changes live (without undo) so the user sees instant feedback."""
         if not self.project:
@@ -1611,11 +1672,13 @@ class CanvasScene(QGraphicsScene):
         self._crop_veil_item.setZValue(200)
         self._crop_veil_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self._active_crop_cell = crop_cell_item
+        self._block_interaction_for_crop()
         self.crop_mode_active.emit(True)
 
     def hide_crop_veil(self, _emit=True):
         """Remove the isolation veil."""
         was_active = self._active_crop_cell is not None
+        self._restore_crop_blocked()
         if self._crop_veil_item is not None:
             if self._crop_veil_item.scene() is self:
                 self.removeItem(self._crop_veil_item)

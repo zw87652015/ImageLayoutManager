@@ -456,7 +456,15 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     from src.utils.typography import uses_points
     precise = uses_points(project)
 
-    if not do_normalize and not overrides:
+    # Cheap cached metadata probe BEFORE reading the file — ordinary SVGs
+    # with no overrides/normalization must not re-read bytes per layout.
+    try:
+        from src.plot_editor.document import has_plot_metadata
+        native = has_plot_metadata(path)
+    except Exception:
+        native = False
+
+    if not native and not do_normalize and not overrides:
         return None
 
     try:
@@ -465,6 +473,31 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     except OSError:
         return None
 
+    # Native editable plot (ilm-plot metadata): re-render the embedded
+    # document so fonts/line widths come out at true final-figure points for
+    # this cell's placed size. A corrupt/future metadata payload keeps the
+    # stored vector snapshot (display only — the editor explains the issue).
+    native_doc = None
+    if native:
+        try:
+            from src.plot_editor.render import load_rendered_document
+            native_doc = load_rendered_document(path)
+        except Exception:
+            native_doc = None
+
+    mm_per_unit = None
+    if native_doc is not None:
+        mm_per_unit = svg_mm_per_unit(project, cell, base_bytes,
+                                      layout_result, content_size_mm)
+        if mm_per_unit > 0:
+            try:
+                from src.plot_editor.render import render_document
+                base_bytes = render_document(
+                    native_doc,
+                    style_scale=(25.4 / 72.0) / mm_per_unit).svg
+            except Exception:
+                pass  # fall back to the stored snapshot bytes
+
     if overrides:
         # A group size is points in the final figure, so convert it to the
         # SVG's own user units and write it as "px" (1 px = 1 user unit).
@@ -472,15 +505,17 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         # QtSvg resolves pt at ~1.24 px/pt rather than the 96/72 the page
         # maths assumes, which rendered synced text ~7% too small and left
         # it inconsistent with raster panels in the same group.
-        mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result, content_size_mm)
+        if mm_per_unit is None:
+            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result, content_size_mm)
         overrides = {key: (size * 25.4 / 72.0) / mm_per_unit for key, size in overrides.items()}
 
     # Step 1 — normalise
     if do_normalize:
         target_pt = float(getattr(cell, 'svg_normalize_text_pt', 8.0))
         if precise:
-            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result,
-                                          content_size_mm)
+            if mm_per_unit is None:
+                mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result,
+                                              content_size_mm)
             base_bytes = normalize_svg_text(
                 base_bytes, (target_pt * 25.4 / 72.0) / mm_per_unit,
                 unit='px', precise=True)
@@ -494,4 +529,6 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         if result:
             return _positioned_text_runs(result) if precise else result
 
-    return _positioned_text_runs(base_bytes) if do_normalize and precise else base_bytes if do_normalize else None
+    changed = native_doc is not None or do_normalize
+    return _positioned_text_runs(base_bytes) if changed and precise \
+        else base_bytes if changed else None

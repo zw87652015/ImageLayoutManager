@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import math
 import uuid
 from typing import Optional, Tuple, List, Dict
@@ -766,6 +767,18 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        self._act_new_plot = QAction(tr("action_new_plot"), self)
+        self._act_new_plot.setToolTip(tr("tooltip_new_plot"))
+        self._act_new_plot.triggered.connect(lambda: self._on_new_plot())
+        file_menu.addAction(self._act_new_plot)
+
+        self._act_open_plot_editor = QAction(tr("action_open_plot_editor"), self)
+        self._act_open_plot_editor.setToolTip(tr("tooltip_open_plot_editor"))
+        self._act_open_plot_editor.triggered.connect(self._on_open_plot_editor)
+        file_menu.addAction(self._act_open_plot_editor)
+
+        file_menu.addSeparator()
+
         # File menu — export
         export_pdf_action = QAction(tr("action_export_pdf"), self)
         export_pdf_action.triggered.connect(self._on_export_pdf)
@@ -1181,6 +1194,7 @@ class MainWindow(QMainWindow):
         tab.scene.pip_origin_changed.connect(self._on_pip_origin_changed)
         tab.scene.pip_context_menu.connect(self._on_pip_context_menu)
         tab.scene.pip_removed.connect(self._on_pip_removed)
+        tab.scene.cell_double_clicked.connect(self._on_cell_double_clicked)
         tab.view.zoom_changed.connect(self._on_zoom_changed)
         tab.view.mouse_scene_pos_changed.connect(self._on_mouse_pos_changed)
         tab.view.navigate_cell.connect(self._on_navigate_cell)
@@ -1237,6 +1251,7 @@ class MainWindow(QMainWindow):
             tab.scene.pip_origin_changed.disconnect(self._on_pip_origin_changed)
             tab.scene.pip_context_menu.disconnect(self._on_pip_context_menu)
             tab.scene.pip_removed.disconnect(self._on_pip_removed)
+            tab.scene.cell_double_clicked.disconnect(self._on_cell_double_clicked)
             tab.view.zoom_changed.disconnect(self._on_zoom_changed)
             tab.view.mouse_scene_pos_changed.disconnect(self._on_mouse_pos_changed)
             tab.view.navigate_cell.disconnect(self._on_navigate_cell)
@@ -1637,6 +1652,11 @@ class MainWindow(QMainWindow):
         self._act_reload.setText(tr("action_reload"))
         self._act_export_sources.setText(tr("action_export_sources"))
         self._act_export_sources.setToolTip(tr("tooltip_export_sources"))
+        if hasattr(self, '_act_new_plot'):
+            self._act_new_plot.setText(tr("action_new_plot"))
+            self._act_new_plot.setToolTip(tr("tooltip_new_plot"))
+            self._act_open_plot_editor.setText(tr("action_open_plot_editor"))
+            self._act_open_plot_editor.setToolTip(tr("tooltip_open_plot_editor"))
         self._act_export_pdf.setText(tr("action_export_pdf"))
         self._act_export_tiff.setText(tr("action_export_tiff"))
         self._act_export_jpg.setText(tr("action_export_jpg"))
@@ -3797,6 +3817,11 @@ class MainWindow(QMainWindow):
         root = (self._settings.value("figpack_cache_root", "") or "").strip()
         return pasted_images_root(root or None)
 
+    def _plot_documents_root(self) -> str:
+        root = (self._settings.value("figpack_cache_root", "") or "").strip()
+        from src.utils.editable_plot import plot_documents_root
+        return plot_documents_root(root or None)
+
     def _clamp_to_page(self, x_mm: float, y_mm: float) -> Tuple[float, float]:
         page_w = float(getattr(self.project, "page_width_mm", 210.0))
         page_h = float(getattr(self.project, "page_height_mm", 297.0))
@@ -4039,6 +4064,17 @@ class MainWindow(QMainWindow):
                 align_action = menu.addAction(tr("action_align_plots"))
                 align_action.setToolTip(tr("tooltip_align_plots"))
                 align_action.triggered.connect(lambda checked=False, ids=scope: self._on_align_plot_areas(list(ids)))
+
+        if cell.is_leaf:
+            from src.utils.editable_plot import is_editable_plot
+            if has_image and is_editable_plot(cell.image_path):
+                edit_plot_action = menu.addAction(tr("ctx_edit_plot"))
+                edit_plot_action.triggered.connect(
+                    lambda: self._on_edit_plot(cell_id))
+            elif not has_image:
+                new_plot_action = menu.addAction(tr("ctx_new_plot"))
+                new_plot_action.triggered.connect(
+                    lambda: self._on_new_plot(cell_id))
 
         menu.addSeparator()
 
@@ -4560,6 +4596,206 @@ class MainWindow(QMainWindow):
 
             tab.undo_stack.push(SetPlotAlignmentCommand(
                 project, dialog.plot_areas, dialog.alignment_groups, refresh))
+        finally:
+            dialog.deleteLater()
+
+    # ------------------------------------------------------------------
+    # ILM Plot Editor integration
+    # ------------------------------------------------------------------
+
+    def _plot_editor_tab_guard(self, project, tab):
+        """Refresh callback that is safe if the originating tab closed."""
+        def refresh():
+            if tab not in self._tabs or tab.project is not project:
+                return
+            if self.project is project:
+                self._refresh_and_update()
+            else:
+                tab.scene.refresh_layout()
+        return refresh
+
+    def _leaf_cell_for_id(self, cell_id):
+        cell = self.project.find_cell_by_id(cell_id) if self.project else None
+        return cell if cell is not None and cell.is_leaf else None
+
+    def _cell_size_mm(self, cell_id):
+        """Content-box size of a leaf cell in mm (padding-aware in grid
+        mode; freeform content rects already have zero padding)."""
+        try:
+            from src.model.layout_engine import LayoutEngine
+            from src.utils.plot_alignment import content_rect
+            layout = LayoutEngine.calculate_layout(self.project)
+            rect = layout.cell_rects.get(cell_id)
+            cell = self.project.find_cell_by_id(cell_id)
+            if rect is None or cell is None:
+                return None
+            w, h = content_rect(
+                cell, rect,
+                getattr(self.project, 'layout_mode', 'grid'))[2:]
+            if w > 0 and h > 0:
+                return float(w), float(h)
+        except Exception:
+            pass
+        return None
+
+    def _on_open_plot_editor(self):
+        """File → Open Plot Editor: a truly separate application process.
+
+        Sharing a QApplication would make the standalone editor mutate
+        ILM's palette/language settings — launch it detached instead.
+        """
+        from PyQt6.QtCore import QProcess
+        if getattr(sys, 'frozen', False):
+            exe = sys.executable
+            args = ['--plot-editor']
+            workdir = os.path.dirname(sys.executable)
+        else:
+            exe = sys.executable
+            script = os.path.join(os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__)))), 'main.py')
+            args = [script, '--plot-editor']
+            workdir = os.path.dirname(script)
+        started, _pid = QProcess.startDetached(exe, args, workdir)
+        if not started:
+            QMessageBox.warning(self, tr("action_open_plot_editor"),
+                                tr("pe_editor_launch_failed"))
+
+    def _on_new_plot(self, cell_id=None):
+        """File → New Plot / context menu on an empty leaf cell."""
+        from src.plot_editor.document import PlotDocument
+        project = self.project
+        tab = next((t for t in self._tabs if t.project is project), None)
+        if project is None or tab is None:
+            return
+        if cell_id is None:
+            selected = [c for c in self._selected_leaf_cells()]
+            if len(selected) == 1:
+                cell = selected[0]
+            elif not selected:
+                cell = next(
+                    (c for c in project.get_all_leaf_cells()
+                     if not c.image_path or c.is_placeholder), None)
+                if cell is None:
+                    QMessageBox.information(
+                        self, tr("action_new_plot"),
+                        tr("pe_select_cell_new"))
+                    return
+            else:
+                QMessageBox.information(
+                    self, tr("action_new_plot"), tr("pe_select_one_cell"))
+                return
+        else:
+            cell = self._leaf_cell_for_id(cell_id)
+            if cell is None:
+                return
+        doc = PlotDocument()
+        size = self._cell_size_mm(cell.id)
+        if size is not None:
+            w, h = size
+            if 5.0 <= w <= 1000.0 and 5.0 <= h <= 1000.0:
+                doc.width_mm, doc.height_mm = w, h
+        self._open_plot_editor_dialog(project, tab, cell.id, doc,
+                                      source_path=None, is_new=True)
+
+    def _on_edit_plot(self, cell_id):
+        """Edit the native plot document held by *cell_id*'s SVG source."""
+        from src.plot_editor.document import load_document, PlotDocumentError
+        project = self.project
+        tab = next((t for t in self._tabs if t.project is project), None)
+        cell = self._leaf_cell_for_id(cell_id)
+        if project is None or tab is None or cell is None:
+            return
+        path = cell.image_path
+        if not path:
+            return
+        try:
+            doc = load_document(path)
+        except PlotDocumentError as e:
+            QMessageBox.warning(self, tr("pe_edit_error_title"), str(e))
+            return
+        except OSError as e:
+            QMessageBox.warning(self, tr("pe_edit_error_title"), str(e))
+            return
+        self._open_plot_editor_dialog(project, tab, cell_id, doc,
+                                      source_path=path, is_new=False)
+
+    def _on_cell_double_clicked(self, cell_id: str):
+        """Double-click on an editable native plot opens the plot editor."""
+        cell = self._leaf_cell_for_id(cell_id)
+        if cell is None or not cell.image_path or cell.is_placeholder:
+            return
+        from src.utils.editable_plot import is_editable_plot
+        if is_editable_plot(cell.image_path):
+            self._on_edit_plot(cell_id)
+
+    def _open_plot_editor_dialog(self, project, tab, cell_id, doc,
+                                 *, source_path, is_new):
+        """Run the modal for_ilm editor; apply via SetPlotDocumentCommand.
+
+        All undo/state goes to the *originating* tab (not whatever tab is
+        active when the dialog closes). Baseline source path + digest are
+        captured up front; on accept we re-verify the live cell still
+        shows that untouched source — a swapped or modified file warns
+        instead of silently discarding the accepted edit.
+        """
+        from src.app.commands import SetPlotDocumentCommand
+        from src.model.data_model import PlotArea
+        from src.plot_editor.window import PlotEditorWindow
+        from src.utils.editable_plot import store_plot_document
+        from src.utils.plot_alignment import source_digest
+
+        cell0 = project.find_cell_by_id(cell_id)
+        old_path = (cell0.image_path if cell0 is not None else None) \
+            or source_path
+        old_placeholder = bool(cell0.is_placeholder) if cell0 else True
+        try:
+            old_digest = source_digest(old_path) if old_path else None
+        except OSError:
+            old_digest = None
+        dialog = PlotEditorWindow(doc, parent=self, for_ilm=True)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            result = dialog.result_document
+            if result is None:
+                return
+            # The project may have changed while the modal editor was open:
+            # the originating tab/cell must still be there and the source
+            # must be untouched before we swap paths.
+            if tab not in self._tabs or tab.project is not project:
+                return
+            cell = project.find_cell_by_id(cell_id)
+            if cell is None or not cell.is_leaf:
+                return
+            changed_target = False
+            if cell.image_path != old_path:
+                changed_target = True
+            elif bool(cell.is_placeholder) != old_placeholder:
+                changed_target = True
+            elif old_path:
+                try:
+                    if source_digest(old_path) != old_digest:
+                        changed_target = True
+                except OSError:
+                    changed_target = old_digest is not None
+            if changed_target:
+                QMessageBox.warning(self, tr("pe_edit_error_title"),
+                                    tr("pe_target_changed"))
+                return
+            if not is_new and result.to_dict() == doc.to_dict():
+                return  # accepted with no changes
+            try:
+                new_path, render = store_plot_document(
+                    result, root=self._plot_documents_root())
+            except Exception as e:
+                QMessageBox.warning(self, tr("pe_save_error_title"), str(e))
+                return
+            plot_area = PlotArea(*render.plot_area)
+            tab.undo_stack.push(SetPlotDocumentCommand(
+                project, cell_id, new_path, plot_area,
+                reset_image=is_new,
+                update_callback=self._plot_editor_tab_guard(project, tab)))
+            tab.assets_dirty = True
         finally:
             dialog.deleteLater()
 
@@ -5641,6 +5877,13 @@ class MainWindow(QMainWindow):
                     return False
                 pasted_assets_dir, pasted_copied = relocate_pasted_images(
                     self.project, path, self._pasted_images_root())
+                # Native plot documents are persistent user assets too —
+                # relocate them alongside pasted images, but without
+                # triggering the pasted-image notification.
+                from src.utils.editable_plot import (
+                    plot_documents_root, relocate_plot_documents)
+                relocate_plot_documents(
+                    self.project, path, self._plot_documents_root())
                 self.project.save_to_file(path)
             self._current_project_path = path
             # Keep active tab's path in sync

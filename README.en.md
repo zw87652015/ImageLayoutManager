@@ -190,6 +190,10 @@ SVG files are also supported and render as vector graphics in PDF and SVG export
 
 **DPI** controls output pixel dimensions for raster exports and the internal rendering resolution for PDF. It does not affect physical layout size.
 
+## Editable plots
+
+The bundled **ILM Plot Editor** creates editable line plots saved as self-contained `*.ilmplot.svg` files (vector snapshot + editable data in one file). Use File → New Plot… / Open Plot Editor…, or Edit Plot… from the cell context menu / double-click on a native plot cell, or the "ILM Plot Editor" Start Menu shortcut. See [`docs/PLOT_EDITOR.md`](docs/PLOT_EDITOR.md).
+
 ## License
 
 The source code is licensed under Apache-2.0. See `LICENSE`.

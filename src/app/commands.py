@@ -2,7 +2,7 @@ from PyQt6.QtGui import QUndoCommand
 import copy
 import uuid
 import time
-from src.model.data_model import RowTemplate, Cell, PiPItem, PlotArea, PlotAlignmentGroup
+from src.model.data_model import RowTemplate, Cell, PiPItem, PlotArea, PlotAlignmentGroup, SvgTextMember
 
 # Commands that occur within this window (seconds) on the same property are merged.
 MERGE_TIMEOUT = 5.0
@@ -66,6 +66,115 @@ class SetPlotAlignmentCommand(QUndoCommand):
 
     def undo(self):
         self._apply(self.old_areas, self.old_groups)
+
+
+class SetPlotDocumentCommand(QUndoCommand):
+    """Swap a cell's image to a (new, immutable) generated plot document.
+
+    The command resolves the live cell by id on every undo/redo — structural
+    undo can replace descendant Cell objects, so a held reference might be
+    detached. Group memberships keyed on the old source path gain members for
+    the new path when the same element keys still exist in it; members
+    referencing the old path are kept (other cells may share that source).
+    """
+
+    def __init__(self, project, cell_id: str, new_path: str,
+                 plot_area: PlotArea | None, *, reset_image: bool = False,
+                 update_callback=None):
+        super().__init__('Set Plot Document')
+        self.project = project
+        self.cell_id = cell_id
+        self.new_path = new_path
+        self.reset_image = reset_image
+        self.update_callback = update_callback
+        cell = project.find_cell_by_id(cell_id)
+        self.old_path = cell.image_path if cell is not None else None
+        self.old_is_placeholder = bool(cell.is_placeholder) if cell is not None else True
+        self.old_original_source_path = (getattr(cell, 'original_source_path', None)
+                                         if cell is not None else None)
+        self.old_plot_area = copy.deepcopy(cell.plot_area) if cell is not None else None
+        self.old_crop = ((cell.crop_left, cell.crop_top,
+                          cell.crop_right, cell.crop_bottom)
+                         if cell is not None else None)
+        self.old_rotation = cell.rotation if cell is not None else 0
+        self.old_svg_normalize = ((cell.svg_normalize_text,
+                                   cell.svg_normalize_text_pt)
+                                  if cell is not None else (False, 8.0))
+        self.new_plot_area = copy.deepcopy(plot_area)
+        if self.new_plot_area is not None:
+            from src.utils.plot_alignment import source_digest
+            self.new_plot_area.source_digest = source_digest(new_path)
+        self._group_deltas = []  # [(group_id, old_members, new_members)]
+        # Only an *edit* of the same document keeps text-group membership —
+        # a NEW plot replacement (reset_image) must not inherit keys from
+        # the unrelated previous source.
+        if self.old_path and self.old_path != new_path and not reset_image:
+            new_keys = self._element_keys(new_path)
+            for group in getattr(project, 'svg_text_groups', []) or []:
+                affected = [m.element_key for m in group.members
+                            if m.svg_path == self.old_path]
+                if not affected:
+                    continue
+                old_members = copy.deepcopy(group.members)
+                new_members = list(group.members)
+                for key in affected:
+                    if key in new_keys and not any(
+                            m.svg_path == new_path and m.element_key == key
+                            for m in new_members):
+                        new_members.append(SvgTextMember(
+                            svg_path=new_path, element_key=key))
+                if len(new_members) != len(old_members):
+                    self._group_deltas.append(
+                        (group.id, old_members, new_members))
+
+    @staticmethod
+    def _element_keys(svg_path: str) -> set:
+        try:
+            from src.utils.svg_text_utils import get_svg_text_elements
+            return {e['key'] for e in get_svg_text_elements(svg_path)}
+        except Exception:
+            return set()
+
+    def _set_group_members(self, pick_new: bool):
+        for gid, old_members, new_members in self._group_deltas:
+            group = next((g for g in getattr(self.project, 'svg_text_groups', [])
+                          if g.id == gid), None)
+            if group is not None:
+                group.members = copy.deepcopy(
+                    new_members if pick_new else old_members)
+
+    def redo(self):
+        cell = self.project.find_cell_by_id(self.cell_id)
+        if cell is not None:
+            cell.image_path = self.new_path
+            cell.is_placeholder = False
+            cell.original_source_path = None
+            cell.plot_area = copy.deepcopy(self.new_plot_area)
+            if self.reset_image:
+                cell.crop_left, cell.crop_top = 0.0, 0.0
+                cell.crop_right, cell.crop_bottom = 1.0, 1.0
+                cell.rotation = 0
+                cell.svg_normalize_text = False
+            self._set_group_members(True)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        cell = self.project.find_cell_by_id(self.cell_id)
+        if cell is not None:
+            cell.image_path = self.old_path
+            cell.is_placeholder = self.old_is_placeholder
+            cell.original_source_path = self.old_original_source_path
+            cell.plot_area = copy.deepcopy(self.old_plot_area)
+            if self.old_crop is not None:
+                (cell.crop_left, cell.crop_top,
+                 cell.crop_right, cell.crop_bottom) = self.old_crop
+            cell.rotation = self.old_rotation
+            cell.svg_normalize_text, cell.svg_normalize_text_pt = \
+                self.old_svg_normalize
+            self._set_group_members(False)
+        if self.update_callback:
+            self.update_callback()
 
 
 class FreeformGeometryCommand(QUndoCommand):

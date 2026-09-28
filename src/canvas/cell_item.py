@@ -761,6 +761,19 @@ class CellItem(QGraphicsRectItem):
             self._emit_freeform_geometry()
 
 
+    def mouseDoubleClickEvent(self, event):
+        # Double-click on a plain leaf cell asks the scene to route an edit
+        # request (e.g. open the plot editor for native plot SVGs). Label
+        # cells, active crop mode and PiP selection keep their existing
+        # behavior — the receiver no-ops for anything it cannot edit.
+        if (not self.is_label_cell and not self._in_crop_mode
+                and self._selected_pip_id is None
+                and event.button() == Qt.MouseButton.LeftButton):
+            scene = self.scene()
+            if scene is not None and hasattr(scene, 'cell_double_clicked'):
+                scene.cell_double_clicked.emit(self.cell_id)
+        super().mouseDoubleClickEvent(event)
+
     def mousePressEvent(self, event):
         if self._in_crop_mode:
             if event.button() == Qt.MouseButton.LeftButton:
