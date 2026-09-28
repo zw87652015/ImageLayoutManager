@@ -20,13 +20,12 @@ HTTPS_SHA_TYPES = ('pypi_sdist', 'release_archive', 'conda_recipe_upstream')
 
 def _fixture(overrides=None):
     data = {
-        'schema_version': 1,
+        'schema_version': 2,
         'app_version': APP_VERSION,
         'python_version': '3.13.15',
         'index_status': 'pointers_recorded',
         'source_status': 'incomplete',
         'application_source_archive': 'app-source.zip',
-        'application_source_sha256': 'a' * 64,
         'build_steps': ['step one'],
         'component_count': 3,
         'no_open_source_counterpart': [],
@@ -65,6 +64,11 @@ class TestCommittedIndex(unittest.TestCase):
         if not SOURCES_JSON.is_file():
             raise unittest.SkipTest('licenses/sources.json not committed')
         cls.data = json.loads(SOURCES_JSON.read_text(encoding='utf-8'))
+
+    def test_no_self_referential_application_source_hash(self):
+        self.assertEqual(self.data['schema_version'],
+                         build_source_index.SCHEMA_VERSION)
+        self.assertNotIn('application_source_sha256', self.data)
 
     def test_every_component_has_source_or_unresolved(self):
         unresolved = {u['name'] for u in self.data['unresolved']}
@@ -160,6 +164,51 @@ class TestMirrorCanonicalisation(unittest.TestCase):
         self.assertEqual(source['sha256'], 'e' * 64)
 
 
+class TestProvenanceDiscovery(unittest.TestCase):
+
+    def test_manifest_selection_uses_versions_not_directory_names(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            wrong = root / 'newest-random-name.json'
+            right = root / 'archived-without-a-candidate-name.json'
+            wrong.write_text(json.dumps({
+                'scope': 'Exact-version PyPI sdists from another release',
+                'components': [{'name': 'Example_Pkg', 'version': '2.0'}],
+            }), encoding='utf-8')
+            right.write_text(json.dumps({
+                'scope': 'Exact-version PyPI sdists checked upstream',
+                'components': [{'name': 'Example_Pkg', 'version': '1.0'}],
+            }), encoding='utf-8')
+            data = build_source_index._matching_manifest(
+                [wrong, right], 'test source', {'example-pkg': '1.0'},
+                exact=True, scope_prefix='Exact-version PyPI sdists')
+            self.assertEqual(data['components'][0]['version'], '1.0')
+
+    def test_manifest_selection_rejects_stale_versions(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'source.json'
+            path.write_text(json.dumps({
+                'components': [{'name': 'example', 'version': '1.0'}],
+            }), encoding='utf-8')
+            with self.assertRaises(SystemExit):
+                build_source_index._matching_manifest(
+                    [path], 'test source', {'example': '2.0'}, exact=True)
+
+    def test_single_record_selection_uses_name_and_version(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = root / 'old.json'
+            current = root / 'current.json'
+            old.write_text(json.dumps({'name': 'MuPDF', 'version': '1.0'}),
+                           encoding='utf-8')
+            current.write_text(json.dumps(
+                {'name': 'mupdf', 'version': '2.0', 'status': 'verified'}),
+                encoding='utf-8')
+            record = build_source_index._matching_record(
+                [old, current], 'MuPDF source', 'mupdf', '2.0')
+            self.assertEqual(record['status'], 'verified')
+
+
 class TestCheckFailures(unittest.TestCase):
 
     def _staged(self, td, data, write_md=True):
@@ -179,9 +228,21 @@ class TestCheckFailures(unittest.TestCase):
                 (Path(td) / 'sources.json').unlink()
                 self.assertEqual(build_source_index.main(['check']), 2)
 
+    def test_schema_mismatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            data = _fixture({'schema_version': 1})
+            with self._staged(td, data):
+                self.assertEqual(build_source_index.main(['check']), 2)
+
     def test_version_mismatch(self):
         with tempfile.TemporaryDirectory() as td:
             data = _fixture({'app_version': '0.0.0'})
+            with self._staged(td, data):
+                self.assertEqual(build_source_index.main(['check']), 2)
+
+    def test_self_referential_archive_hash_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            data = _fixture({'application_source_sha256': 'a' * 64})
             with self._staged(td, data):
                 self.assertEqual(build_source_index.main(['check']), 2)
 

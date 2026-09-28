@@ -21,6 +21,7 @@ class CanvasView(QGraphicsView):
 
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
         
         # Rendering hints for quality
         self.setRenderHint(QPainter.RenderHint.Antialiasing)

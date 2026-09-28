@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from build_licenses import _app_version, _is_reparse
+from build_source_index import index_errors, render
 
 ROOT = Path(__file__).resolve().parent
 
@@ -224,6 +225,28 @@ def main(argv=None) -> int:
     if repo_version != manifest_version:
         print(f'error: bundle app_version {manifest_version} does not match '
               f'repo version {repo_version}')
+        return 1
+
+    source_index_path = manifest_path.parent / 'licenses' / 'sources.json'
+    sources_md_path = manifest_path.parent / 'SOURCES.md'
+    if not source_index_path.is_file() or not sources_md_path.is_file():
+        print('error: bundle is missing SOURCES.md or licenses/sources.json')
+        return 1
+    try:
+        source_index = json.loads(
+            source_index_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        print(f'error: cannot parse source index: {exc}')
+        return 1
+    if not isinstance(source_index, dict):
+        print('error: source index must be a JSON object')
+        return 1
+    errors = index_errors(source_index, manifest['app_version'])
+    if errors:
+        print(f'error: invalid source index: {errors[0]}')
+        return 1
+    if sources_md_path.read_text(encoding='utf-8') != render(source_index):
+        print('error: SOURCES.md does not match licenses/sources.json')
         return 1
     version = manifest_version
 

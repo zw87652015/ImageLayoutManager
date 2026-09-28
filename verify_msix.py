@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 import build_licenses
 import build_msix
+import build_source_index
 
 REPO_VERSION = build_licenses._app_version(ROOT)
 IDENTITY = 'Example.ImageLayoutManager'
@@ -41,6 +42,25 @@ def _fake_bundle(td):
     (internal / 'components.json').write_text(json.dumps(
         {'source_status': 'incomplete',
          'app_version': REPO_VERSION}), encoding='utf-8')
+    source_index = {
+        'schema_version': build_source_index.SCHEMA_VERSION,
+        'app_version': REPO_VERSION,
+        'python_version': '3.13.15',
+        'index_status': 'pointers_recorded',
+        'source_status': 'incomplete',
+        'application_source_archive': 'app-source.zip',
+        'build_steps': [],
+        'component_count': 0,
+        'no_open_source_counterpart': [],
+        'components': [],
+        'unresolved': [],
+    }
+    source_dir = internal / 'licenses'
+    source_dir.mkdir()
+    (source_dir / 'sources.json').write_text(
+        json.dumps(source_index), encoding='utf-8')
+    (internal / 'SOURCES.md').write_text(
+        build_source_index.render(source_index), encoding='utf-8')
     return bundle
 
 
@@ -207,6 +227,30 @@ class TestLayoutAndRejects(unittest.TestCase):
                     (bundle / '_internal' / 'licenses'
                      / 'components.json').write_text(
                         text, encoding='utf-8')
+                    out = Path(td) / 'o'
+                    self.assertEqual(self._run(bundle, out), 1)
+                    self.assertFalse(out.exists())
+
+    def test_invalid_source_index_rejected(self):
+        for case in ('missing', 'malformed', 'self_hash', 'stale_markdown'):
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory() as td:
+                    bundle = _fake_bundle(td)
+                    legal = bundle / '_internal' / 'licenses'
+                    source_path = legal / 'licenses' / 'sources.json'
+                    if case == 'missing':
+                        source_path.unlink()
+                    elif case == 'malformed':
+                        source_path.write_text('{bad json', encoding='utf-8')
+                    elif case == 'self_hash':
+                        data = json.loads(source_path.read_text(
+                            encoding='utf-8'))
+                        data['application_source_sha256'] = 'a' * 64
+                        source_path.write_text(json.dumps(data),
+                                               encoding='utf-8')
+                    else:
+                        (legal / 'SOURCES.md').write_text(
+                            'stale\n', encoding='utf-8')
                     out = Path(td) / 'o'
                     self.assertEqual(self._run(bundle, out), 1)
                     self.assertFalse(out.exists())

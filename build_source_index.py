@@ -31,7 +31,7 @@ from src.version import APP_VERSION
 ROOT = Path(__file__).resolve().parent
 SOURCES_JSON = ROOT / 'licenses' / 'sources.json'
 SOURCES_MD = ROOT / 'SOURCES.md'
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Native notice components whose corresponding source is recorded elsewhere.
 # Maps the components.json name to (manifest key, source record locator).
@@ -87,6 +87,51 @@ def _records_by_name(items, key='name'):
     for item in items:
         out[str(item[key])] = item
     return out
+
+
+def _version_map(items):
+    return {canonicalize_name(str(item['name'])): str(item['version'])
+            for item in items}
+
+
+def _matching_manifest(paths, description, expected, *, list_key='components',
+                       exact=False, scope_prefix=None):
+    candidates = sorted({Path(path) for path in paths if Path(path).is_file()},
+                        key=lambda path: (path.stat().st_mtime, str(path)),
+                        reverse=True)
+    for path in candidates:
+        try:
+            data = _load(path)
+            items = data[list_key]
+            actual = _version_map(items)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if scope_prefix and not str(data.get('scope', '')).startswith(
+                scope_prefix):
+            continue
+        matches = actual == expected if exact else all(
+            actual.get(name) == version for name, version in expected.items())
+        if matches:
+            return data
+    versions = ', '.join(f'{name} {version}'
+                         for name, version in sorted(expected.items()))
+    raise SystemExit(f'no {description} manifest matches: {versions}')
+
+
+def _matching_record(paths, description, name, version):
+    candidates = sorted({Path(path) for path in paths if Path(path).is_file()},
+                        key=lambda path: (path.stat().st_mtime, str(path)),
+                        reverse=True)
+    for path in candidates:
+        try:
+            record = _load(path)
+        except (OSError, ValueError, TypeError):
+            continue
+        if (canonicalize_name(str(record.get('name', '')))
+                == canonicalize_name(name)
+                and str(record.get('version')) == str(version)):
+            return record
+    raise SystemExit(f'no {description} record matches: {name} {version}')
 
 
 def _sha(value):
@@ -169,34 +214,84 @@ def collect(build_dir: Path) -> dict:
             f'no built candidate for version {APP_VERSION} found under '
             f'{build}; run a build first')
 
-    py_records = _records_by_name(
-        _load(build / 'provenance-keep' / 'store-candidate-20260922-113109'
-              '__dependency-sources__source-downloads.json')['components'])
-    tagged = _records_by_name(
-        _load(next(build.glob('tagged-sources-*/tagged-source-downloads.json'))
-              )['components'])
-    native = {}
-    native.update(_records_by_name(
-        _load(next(build.glob('qt-native-review-*/source-downloads.json')))[
-            'components']))
-    native.update(_records_by_name(
-        _load(next(build.glob('conda-native-sources-*'
-                              '/conda-source-downloads.json')))['components']))
-    qt_modules = _records_by_name(
-        _load(next(build.glob('qt-module-sources-*/qt-source-downloads.json'))
-              )['modules'])
-    resumed = next(build.glob('qt-module-sources-*/qtbase-resumed-download'
-                              '.json'), None)
-    if resumed is not None:
-        record = _load(resumed)
+    python_expected = {
+        canonicalize_name(str(comp['name'])): str(comp['version'])
+        for comp in manifest['components']
+        if not str(comp.get('role', '')).startswith('native')}
+    native_expected = {
+        NATIVE_SOURCE_KEYS[comp['name']]: str(comp['version'])
+        for comp in manifest['components']
+        if comp['name'] in NATIVE_SOURCE_KEYS}
+
+    py_manifest = _matching_manifest(
+        build.rglob('*source-downloads.json'), 'exact-version Python source',
+        python_expected, exact=True,
+        scope_prefix='Exact-version PyPI sdists')
+    py_records = {
+        canonicalize_name(name): record
+        for name, record in _records_by_name(
+            py_manifest['components']).items()}
+    tagged_expected = {
+        name: version for name, version in python_expected.items()
+        if name != 'pyqt6-qt6'
+        and _python_source(py_records.get(name, {})) is None}
+    tagged = {}
+    if tagged_expected:
+        tagged_manifest = _matching_manifest(
+            build.rglob('*tagged-source-downloads.json'),
+            'tagged Git source', tagged_expected, exact=True)
+        tagged = {
+            canonicalize_name(name): record
+            for name, record in _records_by_name(
+                tagged_manifest['components']).items()}
+
+    conda_keys = {'bzip2', 'libexpat', 'libffi', 'libmpdec', 'libzlib',
+                  'openssl', 'python', 'vc14-runtime', 'xz'}
+    conda_expected = {
+        canonicalize_name(name): version
+        for name, version in native_expected.items()
+        if canonicalize_name(name) in conda_keys}
+    conda_manifest = _matching_manifest(
+        build.rglob('*conda-source-downloads.json'), 'Conda source',
+        conda_expected, exact=True)
+
+    qt_expected = {
+        canonicalize_name(name): version
+        for name, version in native_expected.items()
+        if name in {'qtbase', 'qtsvg', 'qtimageformats'}}
+    qt_manifest = _matching_manifest(
+        build.rglob('*qt-source-downloads.json'), 'Qt module source',
+        qt_expected, list_key='modules')
+    qt_modules = _records_by_name(qt_manifest['modules'])
+    qtbase_records = list(build.rglob('*qtbase-resumed-download.json'))
+    if qtbase_records:
+        record = _matching_record(qtbase_records, 'Qt Base resumed source',
+                                  'qtbase', native_expected['qtbase'])
         if record.get('status') == 'upstream_hash_verified':
             qt_modules['qtbase'] = record
+
+    qt_native_expected = {
+        canonicalize_name(name): version
+        for name, version in native_expected.items()
+        if name in {'mesa', 'llvm', 'qtwebengine'}}
+    qt_native_manifest = _matching_manifest(
+        build.rglob('*source-downloads.json'), 'native Qt source',
+        qt_native_expected,
+        scope_prefix='Native source archives and Qt binary provenance')
+
+    native = _records_by_name(conda_manifest['components'])
     native.update(qt_modules)
-    native['mupdf'] = _load(
-        next(build.glob('*/mupdf-source-download.json')))
-    native['geos'] = _load(next(build.glob('*/geos-download.json')))
-    native['python'] = {**native.get('python', {}),
-                        **_load(next(build.glob('*/python-download.json')))}
+    native.update(_records_by_name(qt_native_manifest['components']))
+    native['mupdf'] = _matching_record(
+        build.rglob('*mupdf-source-download.json'), 'MuPDF source', 'mupdf',
+        native_expected['mupdf'])
+    native['geos'] = _matching_record(
+        build.rglob('*geos-download.json'), 'GEOS source', 'geos',
+        native_expected['geos'])
+    python_record = _matching_record(
+        build.rglob('*python-download.json'), 'Python source', 'python',
+        native_expected['python'])
+    native['python'] = {**native.get('python', {}), **python_record}
 
     entries = []
     unresolved = []
@@ -282,8 +377,6 @@ def collect(build_dir: Path) -> dict:
         'source_status': manifest.get('source_status', 'incomplete'),
         'application_source_archive':
             manifest.get('application_source_archive'),
-        'application_source_sha256':
-            manifest.get('application_source_sha256'),
         'build_steps': BUILD_STEPS,
         'component_count': len(entries),
         'no_open_source_counterpart': [
@@ -401,6 +494,20 @@ def render(data: dict) -> str:
     return '\n'.join(lines)
 
 
+def index_errors(data, app_version=APP_VERSION):
+    errors = []
+    if data.get('schema_version') != SCHEMA_VERSION:
+        errors.append(f'schema_version {data.get("schema_version")} != '
+                      f'{SCHEMA_VERSION}')
+    if data.get('app_version') != app_version:
+        errors.append(f'app_version {data.get("app_version")} != '
+                      f'{app_version}')
+    if 'application_source_sha256' in data:
+        errors.append('application_source_sha256 is self-referential; '
+                      'components.json owns that hash')
+    return errors
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog='build_source_index.py')
     sub = parser.add_subparsers(dest='command', required=True)
@@ -430,9 +537,9 @@ def main(argv=None) -> int:
         print(f'{SOURCES_MD.name} written from {SOURCES_JSON.name}')
         return 0
 
-    if data.get('app_version') != APP_VERSION:
-        print(f'error: sources.json app_version {data.get("app_version")} '
-              f'!= {APP_VERSION}')
+    errors = index_errors(data)
+    if errors:
+        print(f'error: sources.json {errors[0]}')
         return 2
     expected = render(data)
     if not SOURCES_MD.is_file() or SOURCES_MD.read_text(

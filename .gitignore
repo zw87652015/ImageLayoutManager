@@ -36,3 +36,5 @@ plan.md
 .DS_Store
 _smoke_gui_out.txt
 /test_*.py
+!/test_canvas_pan.py
+!/test_clipboard_paste.py

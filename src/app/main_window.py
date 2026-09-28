@@ -62,6 +62,11 @@ from src.utils.figpack import (
     BundleError, WorkingDir, cleanup_orphans, open_bundle, pack_project,
     register_pre_delete_hook,
 )
+from src.utils.figpack.cache_manager import pasted_images_root
+from src.utils.clipboard_paste import (
+    image_matches, read_clipboard, relocate_pasted_images,
+    store_clipboard_image,
+)
 from src.utils.presence_lock import PresenceLock, PresenceLockError
 from src.utils.crash_recovery import SnapshotStore
 
@@ -479,6 +484,7 @@ class MainWindow(QMainWindow):
         # original source file changes (plan §3.5).
         self._original_to_cache: Dict[str, List[str]] = {}
         self.view = None
+        self._crop_active = False
         self._current_project_path = None
         self._current_theme = LIGHT
 
@@ -797,6 +803,12 @@ class MainWindow(QMainWindow):
         add_text_action.triggered.connect(self._on_add_text)
         edit_menu.addAction(add_text_action)
         self._act_add_text = add_text_action
+
+        paste_action = QAction(tr("action_paste_clipboard"), self)
+        paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        paste_action.triggered.connect(self._on_paste_clipboard)
+        edit_menu.addAction(paste_action)
+        self._act_paste = paste_action
 
         delete_text_action = QAction(tr("action_delete_sel"), self)
         delete_text_action.setShortcut(QKeySequence.StandardKey.Delete)
@@ -1255,7 +1267,7 @@ class MainWindow(QMainWindow):
         tab = ProjectTabState(project, path, bundle_workdir=bundle_workdir)
 
         # Apply GPU acceleration if available
-        if HAS_OPENGL:
+        if HAS_OPENGL and os.environ.get('ILM_CANVAS_OPENGL') == '1':
             tab.view.setViewport(QOpenGLWidget())
 
         # Apply current undo limit from settings
@@ -1633,6 +1645,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_act_export_svg'):
             self._act_export_svg.setText(tr("action_export_svg"))
         self._act_add_text.setText(tr("action_add_text"))
+        self._act_paste.setText(tr("action_paste_clipboard"))
         self._act_delete_sel.setText(tr("action_delete_sel"))
         self._act_delete_img.setText(tr("action_delete_img"))
         self._act_auto_label_incell.setText(tr("action_auto_label_incell"))
@@ -3491,9 +3504,8 @@ class MainWindow(QMainWindow):
         finally:
             self.undo_stack.endMacro()
 
-    def _on_add_text(self):
-        """Create a floating (canvas-anchored) text item. Position is in mm,
-        absolute to canvas (0,0), so it survives page/DPI changes."""
+    def _default_text_position(self) -> Tuple[float, float]:
+        """Staggered default spawn point for floating text (mm)."""
         # Default near top-left inside the content margins, stagger each add
         # so consecutive items don't pile up on top of each other.
         base_x = float(getattr(self.project, "margin_left_mm", 10.0)) + 2.0
@@ -3502,10 +3514,17 @@ class MainWindow(QMainWindow):
             1 for t in self.project.text_items if t.scope == "global"
         )
         stagger = 4.0  # mm
+        return (base_x + existing_floating * stagger,
+                base_y + existing_floating * stagger)
+
+    def _on_add_text(self):
+        """Create a floating (canvas-anchored) text item. Position is in mm,
+        absolute to canvas (0,0), so it survives page/DPI changes."""
+        x_mm, y_mm = self._default_text_position()
         item = TextItem(
             text="Text",
-            x=base_x + existing_floating * stagger,
-            y=base_y + existing_floating * stagger,
+            x=x_mm,
+            y=y_mm,
             scope="global",
             rotation=0.0,
         )
@@ -3739,6 +3758,12 @@ class MainWindow(QMainWindow):
             add_action = menu.addAction(tr("ctx_add_floating_text_here"))
             add_action.triggered.connect(lambda: self._ctx_add_floating_text_at(x_mm, y_mm))
 
+            cb = read_clipboard(QApplication.clipboard().mimeData())
+            paste_text_action = menu.addAction(tr("ctx_paste_text"))
+            paste_text_action.setEnabled(bool(cb.text))
+            paste_text_action.triggered.connect(
+                lambda: self._ctx_paste_text_at(x_mm, y_mm))
+
             # ── Export ────────────────────────────────────────────────────
             menu.addSeparator()
             menu.addAction(self._act_export_pdf)
@@ -3755,10 +3780,11 @@ class MainWindow(QMainWindow):
 
         QTimer.singleShot(0, _show)
 
-    def _ctx_add_floating_text_at(self, x_mm: float, y_mm: float):
+    def _ctx_add_floating_text_at(self, x_mm: float, y_mm: float,
+                                  text: str = "Text"):
         """Create a floating text item at the given canvas (mm) position."""
         item = TextItem(
-            text="Text",
+            text=text,
             x=x_mm,
             y=y_mm,
             scope="global",
@@ -3766,6 +3792,168 @@ class MainWindow(QMainWindow):
         )
         cmd = AddTextCommand(self.project, item, self._refresh_and_update)
         self.undo_stack.push(cmd)
+
+    def _pasted_images_root(self) -> str:
+        root = (self._settings.value("figpack_cache_root", "") or "").strip()
+        return pasted_images_root(root or None)
+
+    def _clamp_to_page(self, x_mm: float, y_mm: float) -> Tuple[float, float]:
+        page_w = float(getattr(self.project, "page_width_mm", 210.0))
+        page_h = float(getattr(self.project, "page_height_mm", 297.0))
+        return (max(0.0, min(x_mm, page_w - 5.0)),
+                max(0.0, min(y_mm, page_h - 5.0)))
+
+    def _cell_scene_center(self, cell) -> Optional[Tuple[float, float]]:
+        """Scene-mm centre of *cell*'s canvas item, or None."""
+        from src.canvas.cell_item import CellItem
+        try:
+            items = self.scene.items() if self.scene is not None else []
+        except RuntimeError:
+            return None
+        for it in items:
+            if isinstance(it, CellItem) and getattr(it, "cell_id", None) == cell.id:
+                c = it.sceneBoundingRect().center()
+                return c.x(), c.y()
+        return None
+
+    def _scene_mm_from_screen(self, screen_pos) -> Optional[Tuple[float, float]]:
+        """Map a global screen point through the active view's viewport to
+        scene mm, or None when it is not over the viewport."""
+        from PyQt6.QtCore import QPoint
+        view = getattr(self, "view", None)
+        if view is None:
+            return None
+        vp = view.viewport().mapFromGlobal(
+            QPoint(int(screen_pos.x()), int(screen_pos.y())))
+        if not view.viewport().rect().contains(vp):
+            return None
+        sp = view.mapToScene(vp)
+        return sp.x(), sp.y()
+
+    def _page_contains(self, x_mm: float, y_mm: float) -> bool:
+        page_w = float(getattr(self.project, "page_width_mm", 210.0))
+        page_h = float(getattr(self.project, "page_height_mm", 297.0))
+        return 0.0 <= x_mm <= page_w and 0.0 <= y_mm <= page_h
+
+    def _paste_text_position(self, cells) -> Tuple[float, float]:
+        """Cursor-over-page → selected cell centre → staggered default."""
+        from PyQt6.QtGui import QCursor
+        view = getattr(self, "view", None)
+        if view is not None:
+            vp = view.viewport().mapFromGlobal(QCursor.pos())
+            if view.viewport().rect().contains(vp):
+                sp = view.mapToScene(vp)
+                if self._page_contains(sp.x(), sp.y()):
+                    return self._clamp_to_page(sp.x(), sp.y())
+        if cells:
+            center = self._cell_scene_center(cells[0])
+            if center is not None:
+                return self._clamp_to_page(*center)
+        return self._clamp_to_page(*self._default_text_position())
+
+    def _on_paste_clipboard(self):
+        """Ctrl+V: image into selected cell(s), or text as floating text."""
+        if self._crop_active or self.project is None:
+            return
+        # Never steal paste from an in-canvas text item being edited.
+        try:
+            focus = self.scene.focusItem() if self.scene is not None else None
+        except RuntimeError:
+            focus = None
+        flags = getattr(focus, "textInteractionFlags", None)
+        if flags is not None and (
+                flags() & Qt.TextInteractionFlag.TextEditorInteraction):
+            return
+        content = read_clipboard(QApplication.clipboard().mimeData())
+        if content.preferred is None:
+            self.statusBar().showMessage(
+                tr("status_paste_web_image_link") if content.web_image_link
+                else tr("status_paste_empty"), 4000)
+            return
+        cells = self._selected_leaf_cells()
+        if content.preferred == "image":
+            if not cells:
+                self.statusBar().showMessage(
+                    tr("status_paste_select_cell"), 4000)
+                return
+            if len(cells) > 1:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Warning)
+                box.setWindowTitle(tr("msg_paste_multi_title"))
+                box.setText(tr("msg_paste_multi_text").format(n=len(cells)))
+                paste_btn = box.addButton(
+                    tr("btn_paste_anyway"), QMessageBox.ButtonRole.AcceptRole)
+                box.addButton(QMessageBox.StandardButton.Cancel)
+                box.exec()
+                if box.clickedButton() is not paste_btn:
+                    return
+            self._paste_image_into_cells(cells, content)
+        else:
+            x_mm, y_mm = self._paste_text_position(cells)
+            self._ctx_add_floating_text_at(x_mm, y_mm, text=content.text)
+            if content.web_image_link:
+                self.statusBar().showMessage(
+                    tr("status_paste_web_image_link"), 6000)
+
+    def _paste_image_into_cells(self, cells, content) -> bool:
+        """Paste the clipboard image into every cell whose image differs,
+        as a single undo step. Returns True when a command was pushed."""
+        differing = [
+            c for c in cells
+            if not image_matches(
+                c.image_path if not c.is_placeholder else None, content)
+        ]
+        if not differing:
+            self.statusBar().showMessage(tr("status_paste_same_image"), 4000)
+            return False
+        path = content.image_path or store_clipboard_image(
+            content, self._pasted_images_root())
+        if len(differing) == 1:
+            cmd = DropImageCommand(
+                differing[0], path, self._refresh_and_update)
+            cmd.setText("Paste Image")
+            self.undo_stack.push(cmd)
+        else:
+            self.undo_stack.beginMacro("Paste Image")
+            for c in differing:
+                self.undo_stack.push(
+                    DropImageCommand(c, path, self._refresh_and_update))
+            self.undo_stack.endMacro()
+        if 0 <= self._active_tab_idx < len(self._tabs):
+            self._tabs[self._active_tab_idx].assets_dirty = True
+        return True
+
+    def _ctx_paste_image(self, cell_id: str):
+        """Cell menu: paste the clipboard image into this cell only."""
+        cell = self.project.find_cell_by_id(cell_id)
+        if cell is None:
+            return
+        content = read_clipboard(QApplication.clipboard().mimeData())
+        if not content.has_image:
+            return
+        self._paste_image_into_cells([cell], content)
+
+    def _ctx_paste_text_at(self, x_mm: float, y_mm: float):
+        """Paste clipboard plain text as a floating text item."""
+        content = read_clipboard(QApplication.clipboard().mimeData())
+        if not content.text:
+            return
+        self._ctx_add_floating_text_at(x_mm, y_mm, text=content.text)
+
+    def _ctx_paste_text(self, cell_id: str, screen_pos):
+        """Cell menu: floating text at the right-click point when it is
+        over the page, else at the cell's centre."""
+        content = read_clipboard(QApplication.clipboard().mimeData())
+        if not content.text:
+            return
+        pos = self._scene_mm_from_screen(screen_pos)
+        if pos is None or not self._page_contains(*pos):
+            cell = self.project.find_cell_by_id(cell_id)
+            pos = self._cell_scene_center(cell) if cell is not None else None
+            if pos is None:
+                pos = self._default_text_position()
+        x_mm, y_mm = self._clamp_to_page(*pos)
+        self._ctx_add_floating_text_at(x_mm, y_mm, text=content.text)
 
     def _append_size_group_menu(self, menu, cell):
         """Append Size Group create/add/remove entries to the given QMenu.
@@ -3827,6 +4015,19 @@ class MainWindow(QMainWindow):
         # --- Import / Delete Image ---
         import_action = menu.addAction(tr("ctx_import_image"))
         import_action.triggered.connect(lambda: self._ctx_import_image(cell_id))
+
+        cb = read_clipboard(QApplication.clipboard().mimeData())
+        paste_img_action = menu.addAction(tr("ctx_paste_image"))
+        paste_img_action.setEnabled(cb.has_image)
+        if cb.web_image_link:
+            menu.setToolTipsVisible(True)
+            paste_img_action.setToolTip(tr("status_paste_web_image_link"))
+        paste_img_action.triggered.connect(
+            lambda: self._ctx_paste_image(cell_id))
+        paste_text_action = menu.addAction(tr("ctx_paste_text"))
+        paste_text_action.setEnabled(bool(cb.text))
+        paste_text_action.triggered.connect(
+            lambda: self._ctx_paste_text(cell_id, screen_pos))
 
         if has_image:
             self._append_reveal_image_source_action(menu, cell.image_path)
@@ -4317,6 +4518,7 @@ class MainWindow(QMainWindow):
         self.undo_stack.push(cmd)
 
     def _on_crop_mode_active(self, active: bool):
+        self._crop_active = active
         if active:
             self.statusbar.showMessage(tr("crop_hint"))
         else:
@@ -5346,7 +5548,8 @@ class MainWindow(QMainWindow):
 
     def _on_save_project(self):
         if self._current_project_path:
-            return self._save_project_to_path(self._current_project_path)
+            return self._save_project_to_path(
+                self._current_project_path, notify_pasted=True)
         return self._on_save_project_as()
 
     def _on_convert_to_bundle(self) -> bool:
@@ -5417,14 +5620,16 @@ class MainWindow(QMainWindow):
             if ret != QMessageBox.StandardButton.Yes:
                 return False
 
-        ok = self._save_project_to_path(path)
+        ok = self._save_project_to_path(path, notify_pasted=True)
         if ok and format_change:
             self.undo_stack.clear()
         return ok
 
-    def _save_project_to_path(self, path: str) -> bool:
+    def _save_project_to_path(self, path: str, *, notify_pasted: bool = False) -> bool:
         try:
             self.project.name = os.path.splitext(os.path.basename(path))[0]
+            pasted_assets_dir = ""
+            pasted_copied: list = []
             if path.lower().endswith(".figpack"):
                 if not self._save_figpack(path):
                     return False
@@ -5434,6 +5639,8 @@ class MainWindow(QMainWindow):
                 # next time the figpack cache is purged. Plan §3.5.
                 if not self._handle_bundle_to_figlayout(path):
                     return False
+                pasted_assets_dir, pasted_copied = relocate_pasted_images(
+                    self.project, path, self._pasted_images_root())
                 self.project.save_to_file(path)
             self._current_project_path = path
             # Keep active tab's path in sync
@@ -5454,6 +5661,18 @@ class MainWindow(QMainWindow):
             if 0 <= self._active_tab_idx < len(self._tabs):
                 self._snapshots.remove(
                     self._tabs[self._active_tab_idx].autosave_key)
+            if notify_pasted and pasted_copied:
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Icon.Information)
+                box.setWindowTitle(tr("msg_pasted_saved_title"))
+                box.setText(tr("msg_pasted_saved_text").format(
+                    n=len(pasted_copied), assets_dir=pasted_assets_dir))
+                figpack_btn = box.addButton(
+                    tr("btn_save_as_figpack"), QMessageBox.ButtonRole.AcceptRole)
+                box.addButton(QMessageBox.StandardButton.Ok)
+                box.exec()
+                if box.clickedButton() is figpack_btn:
+                    self._on_convert_to_bundle()
             return True
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to save project: {e}")

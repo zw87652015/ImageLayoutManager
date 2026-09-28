@@ -52,6 +52,10 @@ from src.utils.figpack.file_lock import ExclusiveLock, LockHeldError, is_locked
 LOCK_FILENAME = ".lock"
 EXTRACTING_SENTINEL = ".extracting"
 
+# Clipboard-pasted bitmaps live in this subdirectory of the cache root.
+# It is user data, not a working dir: cleanup_orphans must never reap it.
+PASTED_IMAGES_DIRNAME = "pasted_images"
+
 # A dir whose .extracting sentinel is older than this *and* whose lock
 # is unheld is considered "crashed mid-extraction" and may be reaped.
 EXTRACTING_GRACE_SECONDS = 10 * 60
@@ -146,6 +150,14 @@ def default_cache_root() -> str:
 
     os.makedirs(root, exist_ok=True)
     _try_mark_not_indexed(root)
+    return root
+
+
+def pasted_images_root(cache_root: Optional[str] = None) -> str:
+    """Return the clipboard-paste image store, creating it if needed."""
+    root = os.path.join(
+        cache_root or default_cache_root(), PASTED_IMAGES_DIRNAME)
+    os.makedirs(root, exist_ok=True)
     return root
 
 
@@ -275,6 +287,8 @@ def cleanup_orphans(cache_root: Optional[str] = None) -> List[str]:
         return []
     deleted: List[str] = []
     for name in os.listdir(root):
+        if name == PASTED_IMAGES_DIRNAME:
+            continue
         sub = os.path.join(root, name)
         if os.path.isdir(sub) and _should_reap(sub) and _safe_rmtree(sub):
             deleted.append(sub)
