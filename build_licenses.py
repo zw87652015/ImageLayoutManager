@@ -421,6 +421,35 @@ def _license_expression(dist):
     return None
 
 
+def _python_interpreter_license():
+    """Locate the interpreter's PSF license file.
+
+    Windows/conda and python.org installs ship ``LICENSE.txt`` at the
+    prefix; Homebrew instead stores it as ``LICENSE`` at the formula
+    prefix, several levels above ``sys.base_prefix``.  Candidates are
+    validated against a PSF marker so an unrelated ``LICENSE`` (e.g.
+    the application's own Apache-2.0 text) is never picked up.
+    """
+    seen = set()
+    for base in (Path(sys.base_prefix), Path(sys.prefix)):
+        candidates = [base / name for name in
+                      ('LICENSE_PYTHON.txt', 'LICENSE.txt', 'LICENSE')]
+        candidates += [parent / 'LICENSE' for parent in base.parents]
+        for p in candidates:
+            if p in seen:
+                continue
+            seen.add(p)
+            if not p.is_file():
+                continue
+            try:
+                head = p.read_bytes()[:4096]
+            except OSError:
+                continue
+            if b'Python Software Foundation' in head:
+                return p
+    return None
+
+
 def prepare_licenses(project_root: Path = ROOT,
                      output: Path | None = None,
                      additional_requirements=()) -> Path:
@@ -506,15 +535,7 @@ def prepare_licenses(project_root: Path = ROOT,
         components.append(entry)
     components.extend(_native_notice_components(license_dir))
 
-    python_license = None
-    for base in (Path(sys.base_prefix), Path(sys.prefix)):
-        for cand in ('LICENSE_PYTHON.txt', 'LICENSE.txt'):
-            p = base / cand
-            if p.is_file():
-                python_license = p
-                break
-        if python_license:
-            break
+    python_license = _python_interpreter_license()
     if python_license is None:
         raise RuntimeError('Python interpreter license file not found.')
     py_dir = staging / 'python'

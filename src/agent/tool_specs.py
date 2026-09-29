@@ -61,7 +61,8 @@ _PAGE_SIZE = {
 
 _MARGINS = {
     "type": "object",
-    "description": "Per-side page margins in mm.",
+    "description": "Per-side page margins in mm. Defaults to 0 on every "
+                   "side; only set when the user asks for margins.",
     "properties": {
         "top":    {"type": "number", "minimum": 0},
         "right":  {"type": "number", "minimum": 0},
@@ -109,7 +110,9 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "CLI transport replaces the in-memory project. "
             "Defaults to A4 portrait at 600 DPI with a 2×2 placeholder "
             "grid — reshape with row_add / row_remove / cell_split before "
-            "importing images if you want a different topology."
+            "importing images if you want a different topology. Page "
+            "margins default to 0 mm; omit `margins` unless the user "
+            "explicitly asks for page margins."
         ),
         "input_schema": _obj({
             "page_size": _PAGE_SIZE,
@@ -834,7 +837,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "picture row (pick this when overlays would obscure content). "
             "`sub_scheme` switches to hierarchical numbering for split "
             "panels (A → A-i, A-ii…); `sub_prefix` controls whether "
-            "children carry the parent label as a prefix."
+            "children carry the parent label as a prefix. Labels default "
+            "to 12 pt with no offsets; keep that unless the user asks "
+            "otherwise. Labelling is not the final step: check with "
+            "`view_screenshot`, then run `auto_layout` again last."
         ),
         "input_schema": _obj({
             "scheme": {"type": "string",
@@ -858,8 +864,10 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         "description": (
             "Run ILM's deterministic best-fit pass: re-balances row "
             "heights and column widths based on imported images' aspect "
-            "ratios. **Grid mode only.** Re-run after importing images "
-            "or changing topology so cells aren't sized arbitrarily."
+            "ratios. **Grid mode only.** Always make this the LAST edit "
+            "before the final `view_screenshot` / `project_export`: re-run "
+            "it after importing images, changing topology, auto-labelling, "
+            "restyling labels, or any other edit."
         ),
         "input_schema": _obj({}),
     },

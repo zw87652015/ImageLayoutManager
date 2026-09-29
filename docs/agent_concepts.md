@@ -161,6 +161,10 @@ guide.
 - `text_set_style(text_id, …)` — restyle one text item or one label.
 - `project_set_label_style(…)` — update defaults for labels generated in
   the future. It does **not** touch existing labels.
+- **Check labels after `auto_label_cells`.** Labels default to 12 pt with
+  no offsets — keep those defaults unless the user asks otherwise. Check
+  with `view_screenshot`; only change size or offsets when the user asks
+  or a label clearly collides with content. Then run `auto_layout` again.
 - `text_add(…)` / `text_remove(text_id)` — create or delete free text
   annotations.
 
@@ -180,8 +184,9 @@ guide.
 ### Algorithmic best-fit
 
 - `auto_layout()` — re-balance row heights and column widths based on
-  imported images' aspect ratios. Grid mode only. Re-run after adding
-  images or changing topology.
+  imported images' aspect ratios. Grid mode only. **Always the last edit**
+  before the final screenshot/export: re-run it after adding images,
+  changing topology, labelling, restyling labels, or any other edit.
 
 ### Vision and IO
 
@@ -195,7 +200,9 @@ guide.
 - `project_save(path?)` — persist the **editable project file** (.figlayout,
   .figpack, or .json — the extension picks the format). Omit `path` to save
   in place. Always use this for "save the project" — never hand-write the JSON.
-- `project_new`, `project_open` — create / open projects.
+- `project_new`, `project_open` — create / open projects. `project_new`
+  page margins default to 0 mm; do not pass `margins` unless the user asks
+  for them.
 
 ---
 
@@ -210,8 +217,9 @@ row_add(column_count: 2)
 desc = project_describe()
 for cell, img in zip(desc.cells, my_image_paths):
     image_import(cell.id, path=img)
-auto_label_cells(scheme: '(a)')
-auto_layout()
+auto_label_cells(scheme: '(a)')       # 12 pt, no offsets by default
+auto_layout()                          # always last
+view_screenshot()
 project_export(path: 'figure.png', format: 'PNG')
 ```
 
@@ -229,6 +237,8 @@ image_import(desc.cells[1].id, path: 'panel_a.tif')
 image_import(desc.cells[2].id, path: 'panel_b.tif')
 image_import(desc.cells[3].id, path: 'panel_c.tif')
 auto_label_cells(scheme: '(a)', placement: 'in_cell')
+auto_layout()                          # always last
+view_screenshot()
 project_export(path: 'figure.png', format: 'PNG')
 ```
 
@@ -283,20 +293,22 @@ for cell, img in zip(project_describe().cells, my_image_paths):
 auto_label_cells(scheme: '(a)', placement: 'row_above')
 # A dedicated label strip is inserted above each picture row.
 # The labels do not obscure the images.
+auto_layout()                          # always last
+view_screenshot()
 ```
 
-### Recipe 6 — Make labels publication-sized with breathing room
+### Recipe 6 — Restyle labels when the user asks
 
 ```
-# First inspect existing label ids and current defaults.
+# Labels default to 12 pt bold with no offsets. Only restyle on request,
+# e.g. "make the labels smaller and move them in from the edge":
 desc = project_describe()
 
 # Restyle every existing cell label and future labels at once.
-# Typical 180–210 mm figures look better with 8–12 pt labels, not huge titles.
-labels_set_style(font_size_pt: 10, font_weight: 'bold',
-                 color: '#000000', offset_x: 1.5, offset_y: 1.0)
+labels_set_style(font_size_pt: 10, offset_x: 1.5, offset_y: 1.0)
 
-# Verify visually, then nudge offsets if labels are too close to image edges.
+view_screenshot()
+auto_layout()                          # always last
 view_screenshot()
 ```
 
@@ -388,7 +400,8 @@ view_screenshot()
    refresh. Do **not** cache IDs across structural edits.
 5. **Forgetting `auto_layout`** → without it, rows and columns inherit
    default ratios. Cells full of skinny images sit in big square slots.
-   Run `auto_layout` after importing images and after structural changes.
+   Run `auto_layout` after importing images and after structural changes,
+   and always once more as the final edit — after labels and any styling.
 6. **`project_new` defaults to a 2×2 placeholder grid.** If you want a
    different shape, either remove rows with `row_remove` or call
    `project_new` and immediately reshape before importing images.
@@ -398,13 +411,17 @@ view_screenshot()
 8. **Using freeform mode for PiP-style insets.** Prefer `pip_add` for an
    inset inside a panel. Use freeform only when the whole cell itself must
    overlap other cells.
+9. **Adding page margins nobody asked for.** `project_new` defaults to
+   0 mm margins. Leave `margins` out unless the user requests them.
+10. **Restyling labels nobody asked about.** Labels default to 12 pt with
+    no offsets. Keep that unless the user asks; check a screenshot.
 
 ---
 
 ## Default workflow for "make me a figure from these images"
 
 ```
-1. project_new(page_size, dpi)                       — start blank
+1. project_new(page_size, dpi)                       — start blank (no margins)
 2. Analyse images (host vision: aspect ratios,
    content type, hierarchy)                          — outside ILM
 3. Decide topology: how many rows, what column_count
@@ -414,11 +431,14 @@ view_screenshot()
 6. project_describe → get cell_ids in order          — discover IDs
 7. image_import for each panel                       — fill content
 8. auto_layout                                        — re-balance
-9. auto_label_cells(scheme, placement)               — label
-10. labels_set_style / cell_set_scale_bar / pip_add  — style + annotate
-11. view_screenshot → verify                         — feedback loop
-12. project_export(path, format)                     — output
+9. auto_label_cells(scheme, placement)               — label (12 pt, no offsets)
+10. cell_set_scale_bar / pip_add / labels_set_style  — annotate; restyle
+    labels only on request
+11. auto_layout                                       — always the last edit
+12. view_screenshot → verify                         — feedback loop
+13. project_export(path, format)                     — output
 ```
 
 If verify shows a problem, fix with `cell_swap` / `row_set` /
-`cell_set_geometry` (after switching to freeform), then re-screenshot.
+`labels_set_style` / `cell_set_geometry` (after switching to freeform),
+run `auto_layout` again (grid mode), then re-screenshot.
