@@ -6,7 +6,9 @@ import tempfile
 from matplotlib.colors import to_hex
 
 from .document import LineSeries, PlotDocument
-from .plotting import make_figure, stack_offsets
+from .i18n import tr
+from .plot_data import tick_label_map
+from .plotting import stack_offsets
 from . import render
 
 EXPORT_FORMATS = {
@@ -47,15 +49,18 @@ def with_suffix(path, key):
     return path
 
 
-def document_from_plot(series, chart_key):
+def document_from_plot(series, chart_key, title=''):
     """Build a validated ``PlotDocument`` from plot ``series``."""
     if chart_key not in _STYLE:
-        raise ValueError('Unknown chart type %r' % chart_key)
+        raise ValueError(tr('err_unknown_chart', value=repr(chart_key)))
     linestyle, marker = _STYLE[chart_key]
     offsets = stack_offsets(series)
     doc = PlotDocument()
+    doc.title = title
     doc.xlabel = series[0].x_label
     doc.ylabel = series[0].y_label
+    ticks = tick_label_map(series)
+    doc.x_tick_labels = [[p, ticks[p]] for p in sorted(ticks)] or None
     doc.legend = len(series) > 1
     doc.series = []
     for i, s in enumerate(series):
@@ -92,21 +97,17 @@ def _atomic_write(path, write):
         raise
 
 
-def export_plot(series, chart_key, path, key):
-    """Atomically write the plot in format *key* to *path*."""
+def export_plot(document, path, key):
+    """Atomically write *document* in format *key* to *path*.
+
+    Everything goes through the native renderer: ``ilmplot`` embeds the
+    document metadata; other formats use ``render.export_document`` so
+    exports match the preview exactly.
+    """
     if key == 'ilmplot':
-        render.save_document(document_from_plot(series, chart_key), path)
+        render.save_document(document, path)
         return
     if key not in EXPORT_FORMATS:
-        raise ValueError('Unknown export format %r' % key)
-    fig = make_figure(series, chart_key)
-    if key in ('pdf', 'svg'):
-        kwargs = {'format': key, 'metadata': {'Date': None}}
-    else:
-        fmt = 'jpeg' if key == 'jpg' else key
-        kwargs = {'format': fmt, 'dpi': RASTER_DPI}
-
-    def _write(fh):
-        fig.savefig(fh, **kwargs)
-
-    _atomic_write(path, _write)
+        raise ValueError(tr('err_unknown_export', value=repr(key)))
+    fmt = 'jpeg' if key == 'jpg' else key
+    render.export_document(document, path, fmt, dpi=RASTER_DPI)

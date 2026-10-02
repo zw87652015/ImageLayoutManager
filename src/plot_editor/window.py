@@ -33,7 +33,9 @@ from .actions import (ACTIONS, CHART_GROUPS, DEFAULT_CHART, EDIT_MENU,
                       NATIVE_PLOT_FILTER, NATIVE_PLOT_SUFFIX)
 from .document import PlotDocument, PlotDocumentError
 from .export import EXPORT_FORMATS, export_plot, with_suffix
-from .ilm_bridge import (_is_default_document, write_ilm_copy)
+from .i18n import history_label, tr
+from .ilm_bridge import (_is_default_document, copy_ilm_source,
+                         is_ilm_store_file, write_ilm_copy)
 from .plot_data import PlotSelectionError
 from .plot_file import PlotFileError, load_plot_file
 from .tab import PlotTab
@@ -46,10 +48,12 @@ class PlotEditorWindow(QMainWindow):
     plot_requested = pyqtSignal(str, str)
     export_requested = pyqtSignal(str)
 
-    def __init__(self, document=None, parent=None, *, for_ilm=False):
+    def __init__(self, document=None, parent=None, *, for_ilm=False,
+                 source_path=None):
         super().__init__()
         self.result_document = None
         self._ilm_document = document
+        self._ilm_source_path = source_path
         self.current_chart = DEFAULT_CHART
         self.native_plot_filter = NATIVE_PLOT_FILTER
         self._export_dir = os.path.expanduser('~')
@@ -67,17 +71,18 @@ class PlotEditorWindow(QMainWindow):
         self.tabs.currentChanged.connect(lambda _i: self._sync_tab())
         self.tabs.tabCloseRequested.connect(self._close_tab)
         self.setCentralWidget(self.tabs)
+        self.setAcceptDrops(True)
 
         self.editor_actions = {}
         for key, spec in ACTIONS.items():
-            action = QAction(spec.text, self)
+            action = QAction(tr('act_' + key), self)
             action.setObjectName('action_' + key)
             action.setData(key)
             if spec.shortcut:
                 action.setShortcut(QKeySequence(spec.shortcut))
             if spec.icon:
                 action.setIcon(chrome.themed_icon(spec.icon, self._theme))
-            action.setToolTip(spec.tooltip)
+            action.setToolTip(tr('tip_' + key))
             action.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
             action.setMenuRole(QAction.MenuRole.NoRole)
             if key in ('new', 'open', 'save', 'save_as'):
@@ -93,7 +98,7 @@ class PlotEditorWindow(QMainWindow):
         self.chart_actions = {}
         for group in CHART_GROUPS:
             for chart in group.charts:
-                action = QAction(chart.text, self)
+                action = QAction(tr('chart_' + chart.key), self)
                 action.setCheckable(True)
                 action.setData('%s:%s' % (group.key, chart.key))
                 action.triggered.connect(
@@ -126,7 +131,7 @@ class PlotEditorWindow(QMainWindow):
     def _add_tab(self, worksheet=None):
         tab = PlotTab(self._theme, self._scale, worksheet)
         self._untitled += 1
-        tab.title = 'Untitled %d' % self._untitled
+        tab.title = tr('untitled', n=self._untitled)
         tab.changed.connect(self._sync_tab)
         self.tabs.addTab(tab, tab.title)
         self.tabs.setCurrentWidget(tab)
@@ -141,7 +146,7 @@ class PlotEditorWindow(QMainWindow):
         self.tabs.setTabText(
             index, tab.title + (' *' if tab.dirty else ''))
         self.tabs.setTabToolTip(index, tab.path or '')
-        self.setWindowTitle('%s — Plot Editor' % tab.title)
+        self.setWindowTitle(tr('window_title', name=tab.title))
         self._sync_history_actions()
         self._sync_export_actions()
 
@@ -151,10 +156,10 @@ class PlotEditorWindow(QMainWindow):
         redo = self.editor_actions['redo']
         undo.setEnabled(ws.can_undo)
         redo.setEnabled(ws.can_redo)
-        undo.setToolTip('Undo ' + ws.undo_label if ws.can_undo
-                        else 'Nothing to undo')
-        redo.setToolTip('Redo ' + ws.redo_label if ws.can_redo
-                        else 'Nothing to redo')
+        undo.setToolTip(tr('undo_with', action=history_label(
+            ws.undo_label)) if ws.can_undo else tr('tip_undo'))
+        redo.setToolTip(tr('redo_with', action=history_label(
+            ws.redo_label)) if ws.can_redo else tr('tip_redo'))
 
     def _sync_export_actions(self):
         ready = self.current_tab().plot is not None
@@ -164,7 +169,7 @@ class PlotEditorWindow(QMainWindow):
         self._export_button.setIcon(chrome.themed_icon(
             'export', self._theme, 'on_accent' if ready else 'text_tert'))
         self._export_button.setToolTip(
-            'Export the plot' if ready else 'Create a plot to export')
+            tr('export_ready') if ready else tr('export_needs'))
 
     # ── actions ─────────────────────────────────────────────────────
     def _request_action(self, key):
@@ -213,8 +218,9 @@ class PlotEditorWindow(QMainWindow):
         self.chart_actions[(group_key, chart_key)].setChecked(True)
         group = next(g for g in CHART_GROUPS if g.key == group_key)
         chart = next(c for c in group.charts if c.key == chart_key)
-        self.editor_actions['plot'].setToolTip(
-            'Plot — %s (%s)' % (chart.text, group.text))
+        self.editor_actions['plot'].setToolTip(tr(
+            'plot_tooltip', chart=tr('chart_' + chart.key),
+            group=tr('grp_' + group.key)))
         if emit:
             self.action_requested.emit('plot')
             self.plot_requested.emit(group_key, chart_key)
@@ -224,16 +230,42 @@ class PlotEditorWindow(QMainWindow):
         try:
             self.current_tab().plot_current(chart_key)
         except PlotSelectionError as e:
-            QMessageBox.information(self, 'Plot', str(e))
+            QMessageBox.information(self, tr('dlg_plot'), str(e))
 
     # ── file operations ─────────────────────────────────────────────
     def open_paths(self, paths):
         for path in paths:
             self._open_path(path)
 
+    # ── drag & drop ─────────────────────────────────────────────────
+    @staticmethod
+    def _drop_plot_paths(mime_data):
+        from .ilm_bridge import is_native_plot_path
+        if not mime_data.hasUrls():
+            return []
+        return [u.toLocalFile() for u in mime_data.urls()
+                if u.isLocalFile() and is_native_plot_path(u.toLocalFile())]
+
+    def dragEnterEvent(self, event):
+        if self._drop_plot_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        paths = self._drop_plot_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.open_paths(paths)
+
     def _open_dialog(self):
         paths, _f = QFileDialog.getOpenFileNames(
-            self, 'Open', self._file_dir, NATIVE_PLOT_FILTER)
+            self, tr('dlg_open'), self._file_dir, NATIVE_PLOT_FILTER)
         self.open_paths(paths)
 
     def _open_path(self, path):
@@ -248,8 +280,9 @@ class PlotEditorWindow(QMainWindow):
             pf = load_plot_file(path)
         except (OSError, PlotDocumentError, PlotFileError) as e:
             QMessageBox.warning(
-                self, 'Open',
-                'Could not open %s:\n%s' % (os.path.basename(path), e))
+                self, tr('dlg_open'),
+                tr('msg_open_failed', name=os.path.basename(path),
+                   error=e))
             return
         self._load_into_tab(pf, path)
         self._file_dir = os.path.dirname(os.path.abspath(path))
@@ -276,8 +309,9 @@ class PlotEditorWindow(QMainWindow):
             pf = load_plot_file(path)
         except (OSError, PlotDocumentError, PlotFileError) as e:
             QMessageBox.warning(
-                self, 'Open',
-                'Could not open %s:\n%s' % (os.path.basename(path), e))
+                self, tr('dlg_open'),
+                tr('msg_open_failed', name=os.path.basename(path),
+                   error=e))
             return
         tab = self._load_into_tab(pf, path)
         tab.detach(title)
@@ -292,7 +326,7 @@ class PlotEditorWindow(QMainWindow):
         start = tab.path or os.path.join(
             self._file_dir, tab.title + NATIVE_PLOT_SUFFIX)
         path, _f = QFileDialog.getSaveFileName(
-            self, 'Save As', start, NATIVE_PLOT_FILTER)
+            self, tr('dlg_save_as'), start, NATIVE_PLOT_FILTER)
         if not path:
             return False
         return self._save_to(tab, with_suffix(path, 'ilmplot'))
@@ -301,12 +335,12 @@ class PlotEditorWindow(QMainWindow):
         try:
             tab.save(path)
         except PlotFileError as e:
-            QMessageBox.information(self, 'Save', str(e))
+            QMessageBox.information(self, tr('dlg_save'), str(e))
             return False
         except (OSError, PlotDocumentError, ValueError) as e:
             QMessageBox.warning(
-                self, 'Save',
-                'Could not save the plot:\n' + str(e))
+                self, tr('dlg_save'),
+                tr('msg_save_failed', error=e))
             return False
         self._file_dir = os.path.dirname(os.path.abspath(path))
         return True
@@ -316,18 +350,18 @@ class PlotEditorWindow(QMainWindow):
             return
         dialog_filter, suffix = EXPORT_FORMATS[key]
         path, _f = QFileDialog.getSaveFileName(
-            self, 'Export',
+            self, tr('dlg_export'),
             os.path.join(self._export_dir, 'Plot' + suffix),
             dialog_filter)
         if not path:
             return
         path = with_suffix(path, key)
         try:
-            export_plot(tab.plot.series, tab.plot.chart_key, path, key)
+            export_plot(tab.effective_document(), path, key)
         except (OSError, PlotDocumentError, ValueError) as e:
             QMessageBox.warning(
-                self, 'Export',
-                'Could not export the plot:\n' + str(e))
+                self, tr('dlg_export'),
+                tr('msg_export_failed', error=e))
             return
         self._export_dir = os.path.dirname(path)
 
@@ -337,8 +371,8 @@ class PlotEditorWindow(QMainWindow):
             return True
         self.tabs.setCurrentWidget(tab)
         result = QMessageBox.question(
-            self, 'Save',
-            'Save changes to "%s" before closing?' % tab.title,
+            self, tr('dlg_save'),
+            tr('msg_unsaved', name=tab.title),
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
@@ -378,22 +412,22 @@ class PlotEditorWindow(QMainWindow):
     def _build_menus(self):
         bar = self.menuBar()
 
-        self._export_menu = QMenu('Export', self)
+        self._export_menu = QMenu(tr('menu_export'), self)
         for key in EXPORT_MENU:
             self._export_menu.addAction(self.editor_actions[key])
 
-        file_menu = bar.addMenu('File')
+        file_menu = bar.addMenu(tr('menu_file'))
         self._add_menu_items(file_menu, FILE_MENU,
                              export_menu=self._export_menu)
 
-        edit_menu = bar.addMenu('Edit')
+        edit_menu = bar.addMenu(tr('menu_edit'))
         self._add_menu_items(edit_menu, EDIT_MENU)
 
-        plot_menu = bar.addMenu('Plot')
+        plot_menu = bar.addMenu(tr('menu_plot'))
         plot_menu.addAction(self.editor_actions['plot'])
         plot_menu.addSeparator()
         for group in CHART_GROUPS:
-            submenu = plot_menu.addMenu(group.text)
+            submenu = plot_menu.addMenu(tr('grp_' + group.key))
             for chart in group.charts:
                 submenu.addAction(self.chart_actions[(group.key,
                                                       chart.key)])
@@ -401,7 +435,7 @@ class PlotEditorWindow(QMainWindow):
         for key in ('edit_data', 'axes', 'legend', 'style'):
             plot_menu.addAction(self.editor_actions[key])
 
-        help_menu = bar.addMenu('Help')
+        help_menu = bar.addMenu(tr('menu_help'))
         self._add_menu_items(help_menu, HELP_MENU)
 
     def _build_toolbar(self):
@@ -425,7 +459,7 @@ class PlotEditorWindow(QMainWindow):
 
         self._plot_menu = QMenu(self)
         for group in CHART_GROUPS:
-            submenu = self._plot_menu.addMenu(group.text)
+            submenu = self._plot_menu.addMenu(tr('grp_' + group.key))
             for chart in group.charts:
                 submenu.addAction(self.chart_actions[(group.key,
                                                       chart.key)])
@@ -448,7 +482,7 @@ class PlotEditorWindow(QMainWindow):
         self._export_button = QToolButton(self)
         self._export_button.setPopupMode(
             QToolButton.ToolButtonPopupMode.InstantPopup)
-        self._export_button.setText('Export')
+        self._export_button.setText(tr('menu_export'))
         self._export_button.setIcon(
             chrome.themed_icon('export', self._theme, 'on_accent'))
         self._export_button.setProperty('primary', True)
@@ -473,13 +507,25 @@ class PlotEditorWindow(QMainWindow):
         doc = self._ilm_document
         if isinstance(doc, PlotDocument) and not _is_default_document(doc):
             try:
-                args = args + ['--ilm-copy', write_ilm_copy(doc)]
+                source = self._ilm_source_path
+                if source and os.path.isfile(source) \
+                        and not is_ilm_store_file(source):
+                    args = args + [source]
+                else:
+                    if source and os.path.isfile(source):
+                        try:
+                            tmp = copy_ilm_source(source)
+                        except OSError:
+                            tmp = write_ilm_copy(doc)
+                    else:
+                        tmp = write_ilm_copy(doc)
+                    args = args + ['--ilm-copy', tmp]
             except (OSError, PlotDocumentError) as e:
                 QMessageBox.warning(
-                    None, 'Plot Editor',
-                    'Unable to pass the plot to Plot Editor:\n' + str(e))
+                    None, tr('app_name'),
+                    tr('msg_handoff_failed', error=e))
         started, _pid = QProcess.startDetached(sys.executable, args, workdir)
         if not started:
-            QMessageBox.warning(None, 'Plot Editor',
-                                'Unable to launch Plot Editor.')
+            QMessageBox.warning(None, tr('app_name'),
+                                tr('msg_launch_failed'))
         return 0

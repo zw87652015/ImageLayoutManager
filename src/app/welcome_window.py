@@ -271,6 +271,22 @@ class WelcomeWindow(QWidget):
                 paths.append(path)
         return paths
 
+    def _plot_drop_paths(self, mime_data):
+        """Local ``*.ilmplot.svg`` drops — they open in the Plot Editor."""
+        from src.plot_editor.ilm_bridge import is_native_plot_path
+        if not mime_data.hasUrls():
+            return []
+        paths, seen = [], set()
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            path = os.path.normpath(url.toLocalFile())
+            key = os.path.normcase(os.path.abspath(path))
+            if key not in seen and is_native_plot_path(path):
+                seen.add(key)
+                paths.append(path)
+        return paths
+
     def _show_drop_feedback(self, active):
         self._drop_hint.setText(tr('welcome_release_project' if active else 'welcome_drop_project'))
         self._drop_feedback.set_target(1.0 if active else 0.0, 100)
@@ -292,7 +308,8 @@ class WelcomeWindow(QWidget):
         painter.end()
 
     def dragEnterEvent(self, event):
-        valid = bool(self._project_drop_paths(event.mimeData()))
+        valid = bool(self._plot_drop_paths(event.mimeData())
+                     or self._project_drop_paths(event.mimeData()))
         self._show_drop_feedback(valid)
         if valid:
             event.acceptProposedAction()
@@ -308,11 +325,16 @@ class WelcomeWindow(QWidget):
 
     def dropEvent(self, event):
         self._show_drop_feedback(False)
+        # Plot files first: they take the native *.ilmplot.svg suffix and
+        # open in the Plot Editor, not as projects.
+        plots = self._plot_drop_paths(event.mimeData())
         paths = self._project_drop_paths(event.mimeData())
-        if not paths:
+        if not plots and not paths:
             event.ignore()
             return
         event.acceptProposedAction()
+        for path in plots:
+            self._mw._on_open_plot_editor(path)
         open_project = self._mw._open_path_dispatch
         for path in paths:
             open_project(path)

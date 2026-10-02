@@ -15,6 +15,7 @@ from src.plot_editor.plot_file import (WORKSHEET_METADATA_ID,
                                        PlotFileError, chart_from_document,
                                        load_plot_file, save_plot_file,
                                        series_from_document,
+                                       split_axis_title,
                                        worksheet_from_document,
                                        worksheet_to_dict)
 from src.plot_editor.worksheet import Column, Worksheet
@@ -84,6 +85,31 @@ class RoundTripTests(unittest.TestCase):
             marker = b'id="%s"' % WORKSHEET_METADATA_ID.encode()
             self.assertEqual(data.count(marker), 1)
 
+    def test_title_roundtrip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'p.ilmplot.svg')
+            doc = document_from_plot(SERIES, 'pure_line',
+                                     title='Figure 1')
+            save_plot_file(path, doc, Worksheet(), 'pure_line', (0, 1))
+            pf = load_plot_file(path)
+            self.assertEqual(pf.document.title, 'Figure 1')
+
+    def test_title_change_on_saved_document(self):
+        # The title-only-edit-then-save path re-renders from a cloned
+        # document with the new title (tab.save does the clone; the
+        # document/render seam itself is exercised here).
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'p.ilmplot.svg')
+            doc = document_from_plot(SERIES, 'pure_line', title='Old')
+            save_plot_file(path, doc, Worksheet(), 'pure_line', (0, 1))
+            clone = load_plot_file(path).document.clone()
+            clone.title = 'New'
+            save_plot_file(path, clone, Worksheet(), 'pure_line', (0, 1))
+            pf = load_plot_file(path)
+            self.assertEqual(pf.document.title, 'New')
+            with open(path, 'rb') as fh:
+                self.assertIn(b'ilm-plot-document', fh.read())
+
     def test_chart_null_roundtrips(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, 'p.ilmplot.svg')
@@ -114,7 +140,9 @@ class LegacyFallbackTests(unittest.TestCase):
             self.assertEqual([c.designation for c in ws.columns],
                              ['X', 'Y', 'Y'])
             self.assertEqual(ws.column(0).values, [0.0, 1.0])
-            self.assertEqual(ws.column(1).long_name, 's1')
+            # Y long_name comes from the ylabel; the series label
+            # lands in Comments so legends still reproduce it.
+            self.assertEqual(ws.column(1).comments, 's1')
 
     def test_different_x_gives_new_x_column(self):
         with tempfile.TemporaryDirectory() as d:
@@ -136,6 +164,34 @@ class LegacyFallbackTests(unittest.TestCase):
                                               marker=mk)]
             doc.validate()
             self.assertEqual(chart_from_document(doc), key)
+
+    def test_split_axis_title(self):
+        cases = {'Time (s)': ('Time', 's'),
+                 'Voltage(mV)': ('Voltage', 'mV'),
+                 'Time': ('Time', ''),
+                 '': ('', ''),
+                 '(s)': ('(s)', ''),
+                 'a (b) (c)': ('a (b)', 'c')}
+        for text, expected in cases.items():
+            self.assertEqual(split_axis_title(text), expected, text)
+
+    def test_fallback_splits_axis_titles(self):
+        doc = PlotDocument()
+        doc.xlabel = 'Time (s)'
+        doc.ylabel = 'Signal (V)'
+        doc.series = [document.LineSeries(id='a', label='run 1',
+                                          x=[0, 1], y=[2, 3]),
+                      document.LineSeries(id='b', label='run 2',
+                                          x=[0, 1], y=[4, 5])]
+        doc.validate()
+        ws = worksheet_from_document(doc)
+        x = ws.column(0)
+        self.assertEqual((x.long_name, x.units), ('Time', 's'))
+        for i in (1, 2):
+            y = ws.column(i)
+            self.assertEqual((y.long_name, y.units), ('Signal', 'V'))
+        self.assertEqual(ws.column(1).comments, 'run 1')
+        self.assertEqual(ws.column(2).comments, 'run 2')
 
     def test_series_from_document(self):
         doc = PlotDocument()
@@ -251,6 +307,104 @@ class FromColumnsTests(unittest.TestCase):
 
     def test_no_pyplot_imported(self):
         self.assertNotIn('matplotlib.pyplot', sys.modules)
+
+
+class TickLabelTests(unittest.TestCase):
+
+    def cat_doc(self):
+        doc = document.PlotDocument()
+        doc.series[0].x = [1.0, 2.0, 3.0]
+        doc.series[0].y = [0.0, 1.0, 0.5]
+        doc.x_tick_labels = [[1.0, 'alpha'], [2.0, 'beta'],
+                             [3.0, 'gamma']]
+        doc.validate()
+        return doc
+
+    def test_roundtrip(self):
+        doc = self.cat_doc()
+        out = document.PlotDocument.from_dict(doc.to_dict())
+        self.assertEqual(out.x_tick_labels,
+                         [[1.0, 'alpha'], [2.0, 'beta'], [3.0, 'gamma']])
+
+    def test_key_omitted_when_none(self):
+        doc = document.PlotDocument()
+        self.assertIsNone(doc.x_tick_labels)
+        self.assertNotIn('x_tick_labels', doc.to_dict())
+
+    def test_missing_key_parses(self):
+        data = document.PlotDocument().to_dict()
+        out = document.PlotDocument.from_dict(data)
+        self.assertIsNone(out.x_tick_labels)
+
+    def test_strictness(self):
+        base = self.cat_doc().to_dict()
+        for bad in ('notalist', [[1.0]], [[1.0, 'a', 'x']],
+                    [[float('nan'), 'a']], [[1.0, 'a'], [1.0, 'b']],
+                    [[1.0, 'x' * 1001]], [[{}, 'a']], [['x', 'a']],
+                    [[float('inf'), 'a']]):
+            data = dict(base, x_tick_labels=bad)
+            with self.assertRaises(Exception, msg=repr(bad)):
+                document.PlotDocument.from_dict(data)
+        too_many = dict(base, x_tick_labels=[
+            [float(i), 'l%d' % i]
+            for i in range(document.MAX_TOTAL_POINTS + 1)])
+        with self.assertRaises(Exception):
+            document.PlotDocument.from_dict(too_many)
+
+    def test_validate_rejects_bad(self):
+        doc = self.cat_doc()
+        doc.x_tick_labels = [[1.0, 'a'], [1.0, 'b']]
+        with self.assertRaises(Exception):
+            doc.validate()
+
+    def test_render_contains_label_text(self):
+        doc = self.cat_doc()
+        svg = render.render_document(doc).svg
+        for label in (b'alpha', b'beta', b'gamma'):
+            self.assertIn(label, svg)
+
+    def test_build_figure_tick_labels(self):
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        doc = self.cat_doc()
+        fig, ax = render._build_figure(doc, 1.0, 90.0, 65.0)
+        FigureCanvasAgg(fig)
+        fig.canvas.draw()
+        self.assertEqual(list(ax.get_xticks()), [1.0, 2.0, 3.0])
+        self.assertEqual([t.get_text() for t in ax.get_xticklabels()],
+                         ['alpha', 'beta', 'gamma'])
+
+    def test_save_load_roundtrip_keeps_labels(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'p.ilmplot.svg')
+            cat = Series((1.0, 2.0), (3.0, 4.0), 'L', 'X', 'Y',
+                         ('a', 'b'))
+            doc = document_from_plot([cat], 'pure_line')
+            save_plot_file(path, doc, Worksheet(), 'pure_line', (0, 1))
+            pf = load_plot_file(path)
+            self.assertEqual(pf.document.x_tick_labels,
+                             [[1.0, 'a'], [2.0, 'b']])
+
+    def test_fallback_rebuilds_label_column(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'p.ilmplot.svg')
+            render.save_document(self.cat_doc(), path)
+            pf = load_plot_file(path)
+            self.assertFalse(pf.has_worksheet)
+            ws = pf.worksheet
+            self.assertEqual(ws.column(0).designation, 'Label')
+            self.assertEqual(ws.column(0).values,
+                             ['alpha', 'beta', 'gamma'])
+            self.assertEqual(ws.column(1).designation, 'Y')
+            (s,) = series_from_document(pf.document)
+            self.assertEqual(s.x_ticklabels,
+                             ('alpha', 'beta', 'gamma'))
+
+    def test_numeric_x_stays_numeric_in_fallback(self):
+        doc = document.PlotDocument()
+        ws = worksheet_from_document(doc)
+        self.assertEqual(ws.column(0).designation, 'X')
+        (s,) = series_from_document(doc)
+        self.assertIsNone(s.x_ticklabels)
 
 
 if __name__ == '__main__':

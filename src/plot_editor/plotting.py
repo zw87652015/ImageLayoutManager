@@ -5,6 +5,9 @@ import io
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_svg import FigureCanvasSVG
 
+from .mathtext import safe_text
+from .plot_data import tick_label_map
+
 _CHART_KEYS = {'pure_line', 'pure_scatters', 'line_scatters',
                'stacked_line'}
 
@@ -18,7 +21,7 @@ def stack_offsets(series):
     return offsets
 
 
-def make_figure(series, chart_key):
+def make_figure(series, chart_key, title=''):
     """Render ``series`` as the named chart; returns a ``Figure``."""
     if chart_key not in _CHART_KEYS:
         raise ValueError('Unknown chart type %r' % chart_key)
@@ -31,14 +34,23 @@ def make_figure(series, chart_key):
         if chart_key == 'stacked_line' and i > 0:
             y = tuple(v + offsets[i] for v in y)
         label = s.label if len(series) > 1 else None
+        if label is not None:
+            label = safe_text(label)
         if chart_key == 'pure_scatters':
             ax.scatter(s.x, y, label=label)
         elif chart_key == 'line_scatters':
             ax.plot(s.x, y, marker='o', label=label)
         else:
             ax.plot(s.x, y, label=label)
-    ax.set_xlabel(series[0].x_label)
-    ax.set_ylabel(series[0].y_label)
+    ticks = tick_label_map(series)
+    if ticks:
+        positions = sorted(ticks)
+        ax.set_xticks(positions,
+                      [safe_text(ticks[p]) for p in positions])
+    ax.set_xlabel(safe_text(series[0].x_label))
+    ax.set_ylabel(safe_text(series[0].y_label))
+    if title:
+        ax.set_title(safe_text(title))
     if len(series) > 1:
         ax.legend()
     return fig

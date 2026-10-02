@@ -116,6 +116,432 @@ def _check_limit(value, ctx: str):
     return [lo, hi]  # inverted axes are allowed
 
 
+MAX_TICK_LABEL = 1000
+
+
+def _check_tick_labels(value, ctx):
+    """Validate an optional categorical x-axis tick list.
+
+    Shape: ``[[position, label], ...]`` with unique finite positions and
+    labels of at most ``MAX_TICK_LABEL`` characters. ``None`` (absent)
+    passes through unchanged.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, (list, tuple)) or not value:
+        raise _err(f"{ctx}: expected a non-empty array of "
+                   "[position, label] pairs")
+    if len(value) > MAX_TOTAL_POINTS:
+        raise _err(f"{ctx}: too many entries ({len(value)} > "
+                   f"{MAX_TOTAL_POINTS})")
+    seen = set()
+    out = []
+    for i, pair in enumerate(value):
+        pc = f"{ctx}[{i}]"
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            raise _err(f"{pc}: expected a [position, label] pair")
+        pos, label = pair
+        if not _is_num(pos) or not math.isfinite(pos):
+            raise _err(f"{pc}: position must be a finite number, "
+                       f"got {pos!r}")
+        if pos in seen:
+            raise _err(f"{pc}: duplicate position {pos!r}")
+        seen.add(pos)
+        if not isinstance(label, str) or len(label) > MAX_TICK_LABEL:
+            raise _err(f"{pc}: label must be a string of at most "
+                       f"{MAX_TICK_LABEL} characters")
+        out.append([float(pos), label])
+    return out
+
+
+# ── optional per-element styling ──────────────────────────────────────────
+#
+# A ``PlotDocument.style`` object holds per-element overrides. Every field
+# is emitted only when it differs from its default, so a document without
+# styling serializes byte-identically to the pre-style schema. Older builds
+# reject styled files (unknown key) — that is the accepted boundary.
+
+_ALIGN = ('left', 'center', 'right')
+_TICK_DIRECTIONS = ('out', 'in', 'inout')
+_AXIS_SCALES = ('linear', 'log')
+_GRID_AXES = ('both', 'x', 'y')
+_GRID_WHICH = ('major', 'both')
+_GRID_LINESTYLES = tuple(ls for ls in LINESTYLES if ls)
+
+_MAX_STYLE_FAMILY = 100
+_MAX_AFFIX = 50
+
+
+def _style_bool(data: dict, key: str, ctx: str) -> bool:
+    v = data.get(key)
+    if v is not None and not isinstance(v, bool):
+        raise _err(f"{ctx}.{key}: expected true/false, got {v!r}")
+    return bool(v)
+
+
+def _style_str(data: dict, key: str, ctx: str, max_len: int):
+    v = data.get(key)
+    if v is not None and (not isinstance(v, str) or len(v) > max_len):
+        raise _err(f"{ctx}.{key}: expected a string of at most {max_len} "
+                   f"characters, got {v!r}")
+    return v
+
+
+def _style_num(data: dict, key: str, ctx: str, lo=None, hi=None,
+               lo_exclusive=False):
+    v = data.get(key)
+    if v is None:
+        return None
+    if not _is_num(v) or not math.isfinite(v):
+        raise _err(f"{ctx}.{key}: expected a finite number, got {v!r}")
+    v = float(v)
+    if lo is not None and (v <= lo if lo_exclusive else v < lo):
+        op = '>' if lo_exclusive else '>='
+        raise _err(f"{ctx}.{key}: expected {op} {lo}, got {v}")
+    if hi is not None and v > hi:
+        raise _err(f"{ctx}.{key}: expected <= {hi}, got {v}")
+    return v
+
+
+def _style_choice(data: dict, key: str, ctx: str, choices):
+    v = data.get(key)
+    if v is not None and v not in choices:
+        raise _err(f"{ctx}.{key}: unsupported {v!r}; one of {choices}")
+    return v
+
+
+def _unknown_style_keys(data: dict, allowed: set, ctx: str):
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        raise _err(f"{ctx}: unknown field(s) {unknown}")
+
+
+def _style_dict(data, ctx: str) -> dict:
+    if not isinstance(data, dict):
+        raise _err(f"{ctx}: expected an object, got {type(data).__name__}")
+    return data
+
+
+@dataclass
+class TextStyle:
+    """Per-text overrides; ``None`` fields inherit document defaults."""
+    family: 'str | None' = None
+    size_pt: 'float | None' = None
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+    color: str = '#000000'
+
+    _KEYS = ('family', 'size_pt', 'bold', 'italic', 'underline', 'color')
+
+    def to_dict(self) -> dict:
+        d = {}
+        if self.family is not None:
+            d['family'] = self.family
+        if self.size_pt is not None:
+            d['size_pt'] = self.size_pt
+        if self.bold:
+            d['bold'] = True
+        if self.italic:
+            d['italic'] = True
+        if self.underline:
+            d['underline'] = True
+        if self.color != '#000000':
+            d['color'] = self.color
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx):
+        data = _style_dict(data, ctx)
+        _unknown_style_keys(data, set(cls._KEYS), ctx)
+        s = cls()
+        family = _style_str(data, 'family', ctx, _MAX_STYLE_FAMILY)
+        if family is not None and not family:
+            raise _err(f"{ctx}.family: expected a non-empty string")
+        s.family = family
+        s.size_pt = _style_num(data, 'size_pt', ctx, lo=0, hi=200,
+                               lo_exclusive=True)
+        s.bold = _style_bool(data, 'bold', ctx)
+        s.italic = _style_bool(data, 'italic', ctx)
+        s.underline = _style_bool(data, 'underline', ctx)
+        if data.get('color') is not None:
+            s.color = _check_color(data['color'], f"{ctx}.color")
+        return s
+
+
+@dataclass
+class TitleStyle(TextStyle):
+    align: str = 'center'
+
+    _KEYS = TextStyle._KEYS + ('align',)
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        if self.align != 'center':
+            d['align'] = self.align
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx):
+        # super() resolves ``cls._KEYS``/``cls()`` as TitleStyle already.
+        s = super().from_dict(data, ctx)
+        align = _style_choice(data, 'align', ctx, _ALIGN)
+        s.align = align or 'center'
+        return s
+
+
+@dataclass
+class AxisStyle:
+    """Tick/axis presentation for one axis."""
+    ticks: 'TextStyle | None' = None
+    rotation: float = 0.0
+    prefix: str = ''
+    suffix: str = ''
+    decimals: 'int | None' = None
+    step: 'float | None' = None
+    minor: bool = False
+    direction: str = 'out'
+    length_pt: float = 3.0
+    scale: str = 'linear'
+    reversed: bool = False
+
+    _KEYS = ('ticks', 'rotation', 'prefix', 'suffix', 'decimals', 'step',
+             'minor', 'direction', 'length_pt', 'scale', 'reversed')
+
+    def to_dict(self) -> dict:
+        d = {}
+        if self.ticks is not None:
+            td = self.ticks.to_dict()
+            if td:
+                d['ticks'] = td
+        if self.rotation != 0:
+            d['rotation'] = self.rotation
+        if self.prefix:
+            d['prefix'] = self.prefix
+        if self.suffix:
+            d['suffix'] = self.suffix
+        if self.decimals is not None:
+            d['decimals'] = self.decimals
+        if self.step is not None:
+            d['step'] = self.step
+        if self.minor:
+            d['minor'] = True
+        if self.direction != 'out':
+            d['direction'] = self.direction
+        if self.length_pt != 3.0:
+            d['length_pt'] = self.length_pt
+        if self.scale != 'linear':
+            d['scale'] = self.scale
+        if self.reversed:
+            d['reversed'] = True
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx):
+        data = _style_dict(data, ctx)
+        _unknown_style_keys(data, set(cls._KEYS), ctx)
+        s = cls()
+        if data.get('ticks') is not None:
+            s.ticks = TextStyle.from_dict(data['ticks'], f"{ctx}.ticks")
+        rot = _style_num(data, 'rotation', ctx, lo=-90, hi=90)
+        s.rotation = rot if rot is not None else 0.0
+        s.prefix = _style_str(data, 'prefix', ctx, _MAX_AFFIX) or ''
+        s.suffix = _style_str(data, 'suffix', ctx, _MAX_AFFIX) or ''
+        dec = data.get('decimals')
+        if dec is not None:
+            if not isinstance(dec, int) or isinstance(dec, bool) \
+                    or not (0 <= dec <= 10):
+                raise _err(f"{ctx}.decimals: expected an integer in "
+                           f"0..10, got {dec!r}")
+            s.decimals = dec
+        s.step = _style_num(data, 'step', ctx, lo=0, lo_exclusive=True)
+        s.minor = _style_bool(data, 'minor', ctx)
+        s.direction = _style_choice(data, 'direction', ctx,
+                                    _TICK_DIRECTIONS) or 'out'
+        length = _style_num(data, 'length_pt', ctx, lo=0, hi=20)
+        s.length_pt = length if length is not None else 3.0
+        s.scale = _style_choice(data, 'scale', ctx, _AXIS_SCALES) \
+            or 'linear'
+        s.reversed = _style_bool(data, 'reversed', ctx)
+        return s
+
+
+@dataclass
+class GridStyle:
+    axis: str = 'both'
+    which: str = 'major'
+    color: str = '#b0b0b0'
+    linestyle: str = '-'
+    linewidth_pt: float = 0.5
+    alpha: float = 0.4
+
+    _KEYS = ('axis', 'which', 'color', 'linestyle', 'linewidth_pt',
+             'alpha')
+
+    def to_dict(self) -> dict:
+        d = {}
+        if self.axis != 'both':
+            d['axis'] = self.axis
+        if self.which != 'major':
+            d['which'] = self.which
+        if self.color != '#b0b0b0':
+            d['color'] = self.color
+        if self.linestyle != '-':
+            d['linestyle'] = self.linestyle
+        if self.linewidth_pt != 0.5:
+            d['linewidth_pt'] = self.linewidth_pt
+        if self.alpha != 0.4:
+            d['alpha'] = self.alpha
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx):
+        data = _style_dict(data, ctx)
+        _unknown_style_keys(data, set(cls._KEYS), ctx)
+        s = cls()
+        s.axis = _style_choice(data, 'axis', ctx, _GRID_AXES) or 'both'
+        s.which = _style_choice(data, 'which', ctx, _GRID_WHICH) or 'major'
+        if data.get('color') is not None:
+            s.color = _check_color(data['color'], f"{ctx}.color")
+        ls = _style_choice(data, 'linestyle', ctx, _GRID_LINESTYLES)
+        if ls is not None:
+            s.linestyle = ls
+        lw = _style_num(data, 'linewidth_pt', ctx, lo=0, hi=20,
+                        lo_exclusive=True)
+        if lw is not None:
+            s.linewidth_pt = lw
+        alpha = _style_num(data, 'alpha', ctx, lo=0, hi=1)
+        if alpha is not None:
+            s.alpha = alpha
+        return s
+
+
+@dataclass
+class LegendStyle:
+    frame: bool = True
+    frame_color: str = '#cccccc'
+    ncols: int = 1
+    text: 'TextStyle | None' = None
+
+    _KEYS = ('frame', 'frame_color', 'ncols', 'text')
+
+    def to_dict(self) -> dict:
+        d = {}
+        if not self.frame:
+            d['frame'] = False
+        if self.frame_color != '#cccccc':
+            d['frame_color'] = self.frame_color
+        if self.ncols != 1:
+            d['ncols'] = self.ncols
+        if self.text is not None:
+            td = self.text.to_dict()
+            if td:
+                d['text'] = td
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx):
+        data = _style_dict(data, ctx)
+        _unknown_style_keys(data, set(cls._KEYS), ctx)
+        s = cls()
+        if data.get('frame') is not None and not isinstance(
+                data['frame'], bool):
+            raise _err(f"{ctx}.frame: expected true/false, "
+                       f"got {data['frame']!r}")
+        if data.get('frame') is not None:
+            s.frame = data['frame']
+        if data.get('frame_color') is not None:
+            s.frame_color = _check_color(data['frame_color'],
+                                         f"{ctx}.frame_color")
+        n = data.get('ncols')
+        if n is not None:
+            if not isinstance(n, int) or isinstance(n, bool) \
+                    or not (1 <= n <= 10):
+                raise _err(f"{ctx}.ncols: expected an integer in 1..10, "
+                           f"got {n!r}")
+            s.ncols = n
+        if data.get('text') is not None:
+            s.text = TextStyle.from_dict(data['text'], f"{ctx}.text")
+        return s
+
+
+@dataclass
+class FrameStyle:
+    color: str = '#000000'
+    linewidth_pt: float = 0.8
+    hide_top: bool = False
+    hide_right: bool = False
+
+    _KEYS = ('color', 'linewidth_pt', 'hide_top', 'hide_right')
+
+    def to_dict(self) -> dict:
+        d = {}
+        if self.color != '#000000':
+            d['color'] = self.color
+        if self.linewidth_pt != 0.8:
+            d['linewidth_pt'] = self.linewidth_pt
+        if self.hide_top:
+            d['hide_top'] = True
+        if self.hide_right:
+            d['hide_right'] = True
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx):
+        data = _style_dict(data, ctx)
+        _unknown_style_keys(data, set(cls._KEYS), ctx)
+        s = cls()
+        if data.get('color') is not None:
+            s.color = _check_color(data['color'], f"{ctx}.color")
+        lw = _style_num(data, 'linewidth_pt', ctx, lo=0, hi=20)
+        if lw is not None:
+            s.linewidth_pt = lw
+        s.hide_top = _style_bool(data, 'hide_top', ctx)
+        s.hide_right = _style_bool(data, 'hide_right', ctx)
+        return s
+
+
+@dataclass
+class PlotStyle:
+    """Optional per-element styling; empty means "everything default"."""
+    title: 'TitleStyle | None' = None
+    xlabel: 'TextStyle | None' = None
+    ylabel: 'TextStyle | None' = None
+    xaxis: 'AxisStyle | None' = None
+    yaxis: 'AxisStyle | None' = None
+    grid: 'GridStyle | None' = None
+    legend: 'LegendStyle | None' = None
+    frame: 'FrameStyle | None' = None
+
+    _KEYS = ('title', 'xlabel', 'ylabel', 'xaxis', 'yaxis', 'grid',
+             'legend', 'frame')
+    _TYPES = {'title': TitleStyle, 'xlabel': TextStyle,
+              'ylabel': TextStyle, 'xaxis': AxisStyle, 'yaxis': AxisStyle,
+              'grid': GridStyle, 'legend': LegendStyle,
+              'frame': FrameStyle}
+
+    def to_dict(self) -> dict:
+        d = {}
+        for name in self._KEYS:
+            sub = getattr(self, name)
+            if sub is not None:
+                sd = sub.to_dict()
+                if sd:
+                    d[name] = sd
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx='document.style'):
+        data = _style_dict(data, ctx)
+        _unknown_style_keys(data, set(cls._KEYS), ctx)
+        s = cls()
+        for name, typ in cls._TYPES.items():
+            v = data.get(name)
+            if v is not None:
+                setattr(s, name, typ.from_dict(v, f"{ctx}.{name}"))
+        return s
+
+
 @dataclass
 class LineSeries:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
@@ -194,10 +620,13 @@ class PlotDocument:
     title_size_pt: float = 10.
     xlim: list | None = None
     ylim: list | None = None
+    # Optional categorical x axis: [[position, label], ...]; None = numeric.
+    x_tick_labels: list | None = None
     legend: bool = True
     legend_location: str = 'best'
     grid: bool = False
     series: list = field(default_factory=lambda: [LineSeries()])
+    style: 'PlotStyle' = field(default_factory=lambda: PlotStyle())
 
     # ── validation ──────────────────────────────────────────────────
     def validate(self) -> 'PlotDocument':
@@ -237,6 +666,8 @@ class PlotDocument:
                 raise _err(f"{ctx}.{name}: expected 0 < value <= 200, got {v!r}")
         self.xlim = _check_limit(self.xlim, f"{ctx}.xlim")
         self.ylim = _check_limit(self.ylim, f"{ctx}.ylim")
+        self.x_tick_labels = _check_tick_labels(
+            self.x_tick_labels, f"{ctx}.x_tick_labels")
         if not isinstance(self.legend, bool) or not isinstance(self.grid, bool):
             raise _err(f"{ctx}.legend/grid: expected true/false")
         if self.legend_location not in LEGEND_LOCATIONS:
@@ -258,11 +689,15 @@ class PlotDocument:
             total += len(s.x)
         if total > MAX_TOTAL_POINTS:
             raise _err(f"{ctx}: too many data points ({total} > {MAX_TOTAL_POINTS})")
+        if not isinstance(self.style, PlotStyle):
+            raise _err(f"{ctx}.style: not a PlotStyle")
+        # Round-trip validates every emitted key/value strictly.
+        PlotStyle.from_dict(self.style.to_dict())
         return self
 
     # ── serialization ───────────────────────────────────────────────
     def to_dict(self) -> dict:
-        return {
+        d = {
             'format': FORMAT_NAME,
             'schema_version': self.schema_version,
             'kind': self.kind,
@@ -282,6 +717,15 @@ class PlotDocument:
             'grid': self.grid,
             'series': [s.to_dict() for s in self.series],
         }
+        # Optional field: emit only when set so files without it stay
+        # byte-identical and parseable by older builds (unknown fields
+        # are rejected by from_dict).
+        if self.x_tick_labels is not None:
+            d['x_tick_labels'] = [[p, l] for p, l in self.x_tick_labels]
+        style = self.style.to_dict() if self.style is not None else {}
+        if style:
+            d['style'] = style
+        return d
 
     @classmethod
     def from_dict(cls, data) -> 'PlotDocument':
@@ -323,6 +767,8 @@ class PlotDocument:
                                       lo=0, hi=200, lo_exclusive=True)
         d.xlim = _check_limit(data.get('xlim'), 'document.xlim')
         d.ylim = _check_limit(data.get('ylim'), 'document.ylim')
+        d.x_tick_labels = _check_tick_labels(
+            data.get('x_tick_labels'), 'document.x_tick_labels')
         d.legend = _req_bool(data, 'legend', 'document')
         loc = data.get('legend_location')
         if loc not in LEGEND_LOCATIONS:
@@ -334,6 +780,9 @@ class PlotDocument:
             raise _err("document.series: expected a non-empty array")
         d.series = [LineSeries.from_dict(s, ctx=f"series[{i}]")
                     for i, s in enumerate(series)]
+        style = data.get('style')
+        if style is not None:
+            d.style = PlotStyle.from_dict(style)
         return d.validate()
 
     def clone(self) -> 'PlotDocument':

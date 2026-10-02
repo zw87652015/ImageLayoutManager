@@ -12,5 +12,6 @@ dependencies:
       - websockets==16.0
       - mcp==1.27.1
       - rapidocr==3.9.1
-      - onnxruntime==1.28.0
+      - 'onnxruntime==1.28.0; sys_platform != "darwin" or platform_machine != "x86_64"'
+      - 'onnxruntime==1.23.2; sys_platform == "darwin" and platform_machine == "x86_64"'
       - PyInstaller==6.21.0

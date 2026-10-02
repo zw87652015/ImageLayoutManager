@@ -48,6 +48,13 @@ def assert_split_workspace(tc, ws, view=None):
     tc.assertIsNotNone(right.findChild(QWidget, 'plotCanvas'))
 
 
+def setUpModule():
+    # Editor UI language follows ILM's saved setting read at startup;
+    # tests assert English labels, so pin it here.
+    from src.plot_editor import i18n
+    i18n.set_language('en')
+
+
 def _app():
     from PyQt6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])
@@ -104,6 +111,21 @@ class BlankWindowTests(unittest.TestCase):
                                  'plot', 'spacer', 'export'])
         win.deleteLater()
 
+    def test_menu_labels_zh(self):
+        from src.plot_editor import i18n
+        i18n.set_language('zh')
+        try:
+            win = self.cls()
+            titles = [a.text() for a in win.menuBar().actions()]
+            self.assertEqual(titles, ['文件', '编辑', '绘图', '帮助'])
+            self.assertEqual(
+                win.editor_actions['new'].text(), '新建')
+            self.assertTrue(
+                win.windowTitle().endswith('— 图表编辑器'))
+            win.deleteLater()
+        finally:
+            i18n.set_language('en')
+
     def test_chart_choices_and_request_signals(self):
         win = self.cls()
         seen = []
@@ -136,6 +158,85 @@ class BlankWindowTests(unittest.TestCase):
         win.editor_actions['quit'].trigger()
         self.assertEqual(seen[-1], 'quit')
         self.assertEqual(closed, [True])
+        win.deleteLater()
+
+    def test_title_field_states(self):
+        from PyQt6.QtCore import QEvent, QPointF, Qt
+        from PyQt6.QtGui import QKeyEvent, QMouseEvent
+        from PyQt6.QtWidgets import QApplication
+        win = self.cls()
+        tab = win.current_tab()
+        field = tab.title_field
+        # Placeholder state: prompt text, empty property on.
+        self.assertTrue(field._display.property('empty'))
+        self.assertEqual(field.title(), '')
+        # Double-click enters editing with a blank editor.
+        dbl = QMouseEvent(QEvent.Type.MouseButtonDblClick,
+                          QPointF(1, 1), Qt.MouseButton.LeftButton,
+                          Qt.MouseButton.LeftButton,
+                          Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(field._display, dbl)
+        self.assertIs(field._stack.currentWidget(), field._editor)
+        self.assertEqual(field._editor.text(), '')
+        # Esc cancels back to the display.
+        esc = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape,
+                        Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(field._editor, esc)
+        self.assertIs(field._stack.currentWidget(), field._display)
+        self.assertFalse(tab.dirty)
+        # Non-empty commit sets the title and dirties the tab.
+        QApplication.sendEvent(field._display, dbl)
+        field._editor.setText('  Figure A  ')
+        field._editor.returnPressed.emit()
+        self.assertIs(field._stack.currentWidget(), field._display)
+        self.assertEqual(field.title(), 'Figure A')
+        self.assertFalse(field._display.property('empty'))
+        self.assertTrue(tab.dirty)
+        # Clearing commits back to the placeholder.
+        QApplication.sendEvent(field._display, dbl)
+        field._editor.setText('   ')
+        field._editor.editingFinished.emit()
+        self.assertEqual(field.title(), '')
+        self.assertTrue(field._display.property('empty'))
+        win.deleteLater()
+
+    def test_math_pixmap_renders(self):
+        from PyQt6.QtGui import QColor, QFont
+        from src.plot_editor.math_render import math_pixmap
+        pm = math_pixmap(r'$x^2$', QFont(), QColor('black'), 1.0)
+        self.assertIsNotNone(pm)
+        self.assertFalse(pm.isNull())
+
+    def test_title_field_math_pixmap(self):
+        win = self.cls()
+        tab = win.current_tab()
+        field = tab.title_field
+        field.set_title(r'$\alpha$ decay')
+        self.assertFalse(field._display.pixmap().isNull())
+        field.set_title('Plain')
+        self.assertTrue(field._display.pixmap().isNull())
+        self.assertEqual(field._display.text(), 'Plain')
+        win.deleteLater()
+
+    def test_title_only_edit_saved(self):
+        win = self.cls()
+        tab = win.current_tab()
+        from src.plot_editor.plot_file import load_plot_file
+        from src.plot_editor.plot_data import Series
+        from src.plot_editor.tab import PlotState
+        tab.plot = PlotState(
+            [Series((0., 1.), (0., 1.), 'L', 'X', 'Y')],
+            'pure_line', (0, 1), None)
+        tab.title_field.set_title('Old')
+        tab.plot_title = 'Old'
+        tab.dirty = False
+        tab.title_field.set_title('New')
+        tab._on_title_changed('New')
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, 'p.ilmplot.svg')
+            tab.save(path)
+            pf = load_plot_file(path)
+            self.assertEqual(pf.document.title, 'New')
         win.deleteLater()
 
     def test_zoom_scales_sheet(self):
@@ -228,6 +329,101 @@ class ExecCompatTests(unittest.TestCase):
             os.unlink(tmp)
         finally:
             win.deleteLater()
+
+    def test_exec_source_path_copies_file_verbatim(self):
+        calls = []
+
+        def fake(exe, args, workdir):
+            calls.append((exe, args, workdir))
+            return True, 4321
+
+        from src.plot_editor.document import PlotDocument
+        from src.plot_editor.render import save_document
+        doc = PlotDocument()
+        doc.title = 'Modified'
+        doc.validate()
+        with tempfile.TemporaryDirectory() as d:
+            source = os.path.join(d, 'plot-abc.ilmplot.svg')
+            save_document(doc, source)
+            with open(source, 'rb') as f:
+                raw = f.read()
+            win = type(self.win)(doc, source_path=source)
+            try:
+                with patch(
+                        'src.plot_editor.window.QProcess.startDetached',
+                        side_effect=fake), \
+                        patch('src.plot_editor.window.is_ilm_store_file',
+                              return_value=True):
+                    rc = win.exec()
+                self.assertEqual(rc, 0)
+                _exe, args, _workdir = calls[0]
+                tmp = args[args.index('--ilm-copy') + 1]
+                with open(tmp, 'rb') as f:
+                    self.assertEqual(f.read(), raw)
+                os.unlink(tmp)
+            finally:
+                win.deleteLater()
+
+    def test_exec_links_user_source_file_in_place(self):
+        calls = []
+
+        def fake(exe, args, workdir):
+            calls.append((exe, args, workdir))
+            return True, 4321
+
+        from src.plot_editor.document import PlotDocument
+        from src.plot_editor.render import save_document
+        doc = PlotDocument()
+        doc.title = 'Modified'
+        doc.validate()
+        with tempfile.TemporaryDirectory() as d:
+            source = os.path.join(d, 'my plot.ilmplot.svg')
+            save_document(doc, source)
+            win = type(self.win)(doc, source_path=source)
+            try:
+                with patch(
+                        'src.plot_editor.window.QProcess.startDetached',
+                        side_effect=fake), \
+                        patch('src.plot_editor.window.is_ilm_store_file',
+                              return_value=False):
+                    rc = win.exec()
+                self.assertEqual(rc, 0)
+                _exe, args, _workdir = calls[0]
+                self.assertNotIn('--ilm-copy', args)
+                self.assertEqual(args[-1], source)
+            finally:
+                win.deleteLater()
+
+    def test_exec_store_file_still_copies(self):
+        calls = []
+
+        def fake(exe, args, workdir):
+            calls.append((exe, args, workdir))
+            return True, 4321
+
+        from src.plot_editor.document import PlotDocument
+        from src.plot_editor.render import save_document
+        doc = PlotDocument()
+        doc.title = 'Modified'
+        doc.validate()
+        with tempfile.TemporaryDirectory() as d:
+            source = os.path.join(d, 'plot-abc.ilmplot.svg')
+            save_document(doc, source)
+            win = type(self.win)(doc, source_path=source)
+            try:
+                with patch(
+                        'src.plot_editor.window.QProcess.startDetached',
+                        side_effect=fake), \
+                        patch('src.plot_editor.window.is_ilm_store_file',
+                              return_value=True):
+                    rc = win.exec()
+                self.assertEqual(rc, 0)
+                _exe, args, _workdir = calls[0]
+                self.assertIn('--ilm-copy', args)
+                tmp = args[args.index('--ilm-copy') + 1]
+                os.unlink(tmp)
+            finally:
+                win.deleteLater()
 
     def test_exec_frozen_launch_args(self):
         calls = []
@@ -432,6 +628,256 @@ class NativeFormatPreservationTests(unittest.TestCase):
                              f'plot-{digest}.ilmplot.svg')
             with open(path1, 'rb') as f:
                 self.assertEqual(f.read(), render.svg)
+
+
+class ElementEditTests(unittest.TestCase):
+    """Hover/double-click element panels (user runs; agents must not)."""
+
+    def setUp(self):
+        self._qt_app = _app()
+
+    def _tab(self):
+        from src.plot_editor.tab import PlotTab, PlotState
+        from src.plot_editor.plot_data import Series
+        tab = PlotTab('light', 1.0)
+        tab.resize(900, 600)
+        tab.plot = PlotState(
+            [Series((0., 1., 2.), (1., 4., 2.), 'L', 'X', 'Y', None, 0)],
+            'pure_line', (0, 1), None)
+        tab.plot_title = 'Plot'
+        tab._render_preview()
+        return tab
+
+    def _view_pos_for_frac(self, tab, frac):
+        canvas = tab.plot_canvas
+        bounds = canvas._item.boundingRect()
+        scene_pt = canvas._frac_bbox_to_scene(frac).center()
+        return canvas.mapFromScene(scene_pt)
+
+    def test_hover_shows_rect_over_title(self):
+        tab = self._tab()
+        canvas = tab.plot_canvas
+        self.assertIsNotNone(tab.regions)
+        pos = self._view_pos_for_frac(tab, tab.regions['title'])
+        canvas._update_hover(pos)
+        self.assertTrue(canvas._hover.isVisible())
+        self.assertEqual(canvas._hover_key, 'title')
+        canvas._update_hover(canvas.mapFromScene(
+            canvas.sceneRect().bottomRight() +
+            canvas.sceneRect().topLeft()))
+        tab.deleteLater()
+
+    def test_double_click_emits_title(self):
+        from PyQt6.QtTest import QTest
+        from PyQt6.QtCore import Qt
+        tab = self._tab()
+        tab.show()
+        canvas = tab.plot_canvas
+        seen = []
+        canvas.element_activated.connect(lambda k, p: seen.append(k))
+        pos = self._view_pos_for_frac(tab, tab.regions['title'])
+        QTest.mouseDClick(canvas.viewport(), Qt.MouseButton.LeftButton,
+                          pos=pos)
+        self.assertEqual(seen, ['title'])
+        tab.deleteLater()
+
+    def test_title_panel_bold_and_align(self):
+        from src.plot_editor.element_panel import ElementPanel
+        tab = self._tab()
+        panel = ElementPanel(tab, 'title', 'light', 1.0)
+        bold = panel.findChildren(QToolButton)
+        bold = [b for b in bold if b.toolTip() == 'Bold'][0]
+        bold.click()
+        self.assertTrue(tab.overrides.style.title.bold)
+        self.assertTrue(tab.dirty)
+        panel._set_align('right')
+        self.assertEqual(tab.overrides.style.title.align, 'right')
+        panel.deleteLater()
+        tab.deleteLater()
+
+    def test_series_panel_colour(self):
+        from src.plot_editor.element_panel import ElementPanel
+        tab = self._tab()
+        panel = ElementPanel(tab, 'series:s0', 'light', 1.0)
+        tab.update_overrides(
+            lambda o: o.series.setdefault(0, __import__(
+                'src.plot_editor.overrides',
+                fromlist=['SeriesOverride']).SeriesOverride()))
+        panel._apply_now(lambda o: setattr(o.series[0], 'color',
+                                           '#ff0000'))
+        self.assertEqual(tab.overrides.series[0].color, '#ff0000')
+        panel.deleteLater()
+        tab.deleteLater()
+
+    def test_axis_panel_invalid_limits_do_not_apply(self):
+        from src.plot_editor.element_panel import ElementPanel
+        tab = self._tab()
+        panel = ElementPanel(tab, 'xticks', 'light', 1.0)
+        panel._limits_changed(
+            _Line('x'), _Line('1'), 'xlim')
+        self.assertIsNone(tab.overrides.xlim)
+        panel.deleteLater()
+        tab.deleteLater()
+
+
+class _Line:
+    """QLineEdit stand-in for limit-parse tests."""
+
+    def __init__(self, text):
+        self._t = text
+        self._props = {}
+
+    def text(self):
+        return self._t
+
+    def setProperty(self, k, v):
+        self._props[k] = v
+
+    def style(self):
+        class _S:
+            def unpolish(self, w):
+                pass
+
+            def polish(self, w):
+                pass
+        return _S()
+
+
+class CommitModelTests(unittest.TestCase):
+    """Phase-3 follow-ups: commit-on-finish edits, Tool panel lifetime,
+    per-row resets, the overall reset button and file drops."""
+
+    def setUp(self):
+        self._qt_app = _app()
+        from src.plot_editor.window import PlotEditorWindow
+        self.cls = PlotEditorWindow
+
+    def _tab(self):
+        from src.plot_editor.tab import PlotTab, PlotState
+        from src.plot_editor.plot_data import Series
+        tab = PlotTab('light', 1.0)
+        tab.resize(900, 600)
+        tab.plot = PlotState(
+            [Series((0., 1., 2.), (1., 4., 2.), 'L', 'X', 'Y', None, 0)],
+            'pure_line', (0, 1), None)
+        tab.plot_title = 'Plot'
+        tab._render_preview()
+        return tab
+
+    def test_text_commits_only_on_editing_finished(self):
+        from src.plot_editor.element_panel import ElementPanel
+        tab = self._tab()
+        panel = ElementPanel(tab, 'xlabel', 'light', 1.0)
+        from PyQt6.QtWidgets import QLineEdit
+        text = [w for w in panel.findChildren(QLineEdit)][0]
+        text.setText('$')  # no commit yet — partial math must not apply
+        self.assertIsNone(tab.overrides.xlabel)
+        text.editingFinished.emit()
+        self.assertEqual(tab.overrides.xlabel, '$')
+        panel.deleteLater()
+        tab.deleteLater()
+
+    def test_panel_is_tool_window(self):
+        from src.plot_editor.element_panel import ElementPanel
+        from PyQt6.QtCore import Qt
+        tab = self._tab()
+        panel = ElementPanel(tab, 'title', 'light', 1.0)
+        self.assertTrue(
+            panel.windowFlags() & Qt.WindowType.Tool)
+        self.assertFalse(
+            bool(panel.windowFlags() & Qt.WindowType.Popup))
+        panel.deleteLater()
+        tab.deleteLater()
+
+    def test_outside_click_ignored_while_modal(self):
+        from unittest.mock import patch
+        from PyQt6.QtWidgets import QApplication
+        from src.plot_editor.element_panel import (ElementPanel,
+                                                   _OutsideClickFilter)
+        tab = self._tab()
+        panel = ElementPanel(tab, 'title', 'light', 1.0)
+        filt = _OutsideClickFilter(panel)
+        closed = []
+        panel.close = lambda: closed.append(1) or panel.hide()
+
+        class _Ev:
+            def type(self):
+                from PyQt6.QtCore import QEvent
+                return QEvent.Type.MouseButtonPress
+
+            def globalPosition(self):
+                from PyQt6.QtCore import QPointF
+                return QPointF(0, 0)
+        with patch.object(QApplication, 'activeModalWidget',
+                          return_value=object()):
+            filt.eventFilter(panel, _Ev())
+        self.assertEqual(closed, [])
+        panel.deleteLater()
+        tab.deleteLater()
+
+    def test_size_reset_restores_none(self):
+        from src.plot_editor.element_panel import ElementPanel
+        tab = self._tab()
+        panel = ElementPanel(tab, 'xlabel', 'light', 1.0)
+        tab.update_overrides(
+            lambda o: setattr(o.style, 'xlabel',
+                              __import__('src.plot_editor.document',
+                                         fromlist=['TextStyle'])
+                              .TextStyle(size_pt=20.0)))
+        panel._refresh()
+        # the Size row's reset button clears the override
+        for cond, btn in panel._reset_buttons:
+            if cond():
+                btn.click()
+                break
+        self.assertIsNone(tab.overrides.style.xlabel.size_pt)
+        panel.deleteLater()
+        tab.deleteLater()
+
+    def test_reset_all_button_visibility(self):
+        tab = self._tab()
+        tab._update_reset_all()
+        self.assertTrue(tab.reset_all.isVisibleTo(tab._right_area))
+        self.assertFalse(tab.reset_all.isEnabled())
+        tab.update_overrides(
+            lambda o: setattr(o, 'grid', True))
+        self.assertTrue(tab.reset_all.isEnabled())
+        tab.deleteLater()
+
+    def test_window_accepts_ilmplot_drop(self):
+        import os, tempfile
+        win = self.cls()
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, 'p.ilmplot.svg')
+            open(p, 'wb').write(b'<svg/>')
+            paths = win._drop_plot_paths(_FakeMime(p))
+            self.assertEqual(paths, [p])
+            other = os.path.join(d, 'x.txt')
+            open(other, 'w').write('x')
+            self.assertEqual(win._drop_plot_paths(_FakeMime(other)), [])
+        win.deleteLater()
+
+
+class _FakeUrl:
+    def __init__(self, path):
+        self._path = path
+
+    def isLocalFile(self):
+        return True
+
+    def toLocalFile(self):
+        return self._path
+
+
+class _FakeMime:
+    def __init__(self, *paths):
+        self._paths = paths
+
+    def hasUrls(self):
+        return bool(self._paths)
+
+    def urls(self):
+        return [_FakeUrl(p) for p in self._paths]
 
 
 if __name__ == '__main__':

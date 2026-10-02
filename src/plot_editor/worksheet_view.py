@@ -11,17 +11,34 @@ from __future__ import annotations
 from PyQt6.QtCore import (QAbstractTableModel, QEasingCurve,
                           QItemSelection, QItemSelectionModel, QModelIndex,
                           QPersistentModelIndex, QVariantAnimation, Qt)
+from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import (QAbstractItemDelegate, QAbstractItemView,
                              QApplication, QFrame,
                              QHeaderView, QLineEdit, QMenu, QMessageBox,
                              QStyle, QStyledItemDelegate, QStyleFactory,
-                             QTableView, QWidget)
+                             QStyleOptionViewItem, QTableView, QWidget)
 
 from src.app.motion import start_animation
 from src.app.theme import get_tokens, token_color
 
+from .i18n import tr
+from .mathtext import has_math
 from .worksheet import (DESIGNATION_TEXT, META_LABELS, META_ROWS,
                         WorksheetLimitError, parse_tsv, to_tsv)
+
+_META_KEYS = ('meta_long_name', 'meta_units', 'meta_comments')
+_DESIGNATION_KEYS = {'xErr': 'design_xerr', 'yErr': 'design_yerr',
+                     'Label': 'design_label',
+                     'Disregard': 'design_disregard'}
+
+
+def _meta_label(row):
+    return tr(_META_KEYS[row])
+
+
+def _designation_label(designation, text):
+    key = _DESIGNATION_KEYS.get(designation)
+    return tr(key) if key is not None else text
 from .zoom import ZOOM_MAX, ZOOM_MIN, next_zoom
 
 
@@ -84,7 +101,7 @@ class WorksheetModel(QAbstractTableModel):
         if orientation == Qt.Orientation.Horizontal:
             return self._ws.header_label(section)
         if section < META_ROWS:
-            return META_LABELS[section]
+            return _meta_label(section)
         return str(section - META_ROWS + 1)
 
     def _on_event(self, ev):
@@ -211,13 +228,53 @@ class _LabelOverlay(QTableView):
 
 
 class WorksheetDelegate(QStyledItemDelegate):
-    """Line editor for worksheet cells."""
+    """Line editor for worksheet cells; paints meta-row math inline."""
 
     def createEditor(self, parent, option, index):
         editor = QLineEdit(parent)
         editor.setObjectName('plotWorksheetEditor')
         editor.setFrame(False)
         return editor
+
+    def paint(self, painter, option, index):
+        text = index.data(Qt.ItemDataRole.DisplayRole) or ''
+        if index.row() >= META_ROWS or not has_math(text):
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        from .math_render import math_pixmap
+        role = (QPalette.ColorRole.HighlightedText
+                if opt.state & QStyle.StateFlag.State_Selected
+                else QPalette.ColorRole.Text)
+        pm = math_pixmap(text, opt.font, opt.palette.color(role),
+                         painter.device().devicePixelRatioF())
+        if pm is None:
+            super().paint(painter, option, index)
+            return
+        widget = opt.widget
+        style = widget.style() if widget is not None \
+            else QApplication.style()
+        opt.text = ''
+        painter.save()
+        style.drawControl(QStyle.ControlElement.CE_ItemViewItem,
+                          opt, painter, widget)
+        text_rect = style.subElementRect(
+            QStyle.SubElement.SE_ItemViewItemText, opt, widget)
+        dpr = pm.devicePixelRatio() or 1.0
+        logical_h = pm.height() / dpr
+        if 0 < text_rect.height() < logical_h:
+            scale = text_rect.height() / logical_h
+            pm = pm.scaled(
+                pm.size() * scale,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation)
+            pm.setDevicePixelRatio(dpr)
+            logical_h = pm.height() / dpr
+        painter.setClipRect(opt.rect)
+        y = opt.rect.center().y() - logical_h / 2
+        painter.drawPixmap(text_rect.left(), int(y), pm)
+        painter.restore()
 
 
 class WorksheetView(QTableView):
@@ -315,8 +372,8 @@ class WorksheetView(QTableView):
 
     def _sync_vheader_width(self, *args):
         fm = self.fontMetrics()
-        texts = list(META_LABELS) + [str(max(1, self.model().rowCount()
-                                            - META_ROWS))]
+        texts = [_meta_label(r) for r in range(META_ROWS)]
+        texts.append(str(max(1, self.model().rowCount() - META_ROWS)))
         w = max(fm.horizontalAdvance(t) for t in texts) + 16
         self.verticalHeader().setFixedWidth(w)
         self._labels.verticalHeader().setFixedWidth(w)
@@ -663,7 +720,7 @@ class WorksheetView(QTableView):
                 rect = self.worksheet.set_block(box[0], box[1], rows,
                                                 label='Paste')
         except WorksheetLimitError as e:
-            QMessageBox.warning(self, 'Paste', str(e))
+            QMessageBox.warning(self, tr('ws_paste_title'), str(e))
             return
         if rect:
             self._select_rect(rect)
@@ -735,7 +792,8 @@ class WorksheetView(QTableView):
         try:
             self._after_edit(self.worksheet.insert_columns(at, count))
         except WorksheetLimitError as e:
-            QMessageBox.warning(self, 'Insert Column', str(e))
+            QMessageBox.warning(self, tr('ws_insert_column_title'),
+                                str(e))
 
     def _column_boundary(self, header, pos):
         grip = header.style().pixelMetric(
@@ -756,7 +814,7 @@ class WorksheetView(QTableView):
         boundary = self._column_boundary(header, pos)
         if boundary is not None:
             menu = QMenu(self)
-            menu.addAction('Insert Column Here',
+            menu.addAction(tr('ws_insert_column_here'),
                            lambda: self._insert_columns(boundary, 1))
             menu.exec(header.mapToGlobal(pos))
             return
@@ -764,12 +822,12 @@ class WorksheetView(QTableView):
             return
         cols = self._menu_columns(logical)
         menu = QMenu(self)
-        set_as = menu.addMenu('Set As')
+        set_as = menu.addMenu(tr('menu_set_as'))
         current = self.worksheet.column(cols[0]).designation
         shared = all(self.worksheet.column(c).designation == current
                      for c in cols)
         for designation, text in DESIGNATION_TEXT.items():
-            a = set_as.addAction(text)
+            a = set_as.addAction(_designation_label(designation, text))
             a.setCheckable(True)
             a.setChecked(shared and current == designation)
             a.triggered.connect(
@@ -777,17 +835,19 @@ class WorksheetView(QTableView):
                     self._after_edit(
                         self.worksheet.set_designation(cols, d)))
         menu.addSeparator()
-        menu.addAction('Insert Column Left',
+        menu.addAction(tr('ws_insert_column_left'),
                        lambda: self._insert_columns(cols[0], len(cols)))
-        menu.addAction('Insert Column Right',
+        menu.addAction(tr('ws_insert_column_right'),
                        lambda: self._insert_columns(cols[-1] + 1,
                                                     len(cols)))
-        menu.addAction('Add New Column', lambda: self._insert_columns(
-            self.worksheet.column_count, 1))
-        delete = menu.addAction('Delete Column', lambda: self._after_edit(
-            self.worksheet.remove_columns(cols)))
+        menu.addAction(tr('ws_add_column'),
+                       lambda: self._insert_columns(
+                           self.worksheet.column_count, 1))
+        delete = menu.addAction(
+            tr('ws_delete_column'), lambda: self._after_edit(
+                self.worksheet.remove_columns(cols)))
         delete.setEnabled(len(cols) < self.worksheet.column_count)
-        menu.addAction('Clear Column', lambda: self._after_edit(
+        menu.addAction(tr('ws_clear_column'), lambda: self._after_edit(
             self.worksheet.clear(
                 [(c, META_ROWS, c, self.model().rowCount() - 1)
                  for c in cols],
@@ -810,13 +870,17 @@ class WorksheetView(QTableView):
             else:
                 runs.append([r])
         menu = QMenu(self)
-        ins = menu.addAction('Insert Rows', lambda: self._after_edit(
-            self.worksheet.insert_rows(rows[0] - META_ROWS, len(rows))))
-        dele = menu.addAction('Delete Rows', lambda: self._after_edit(
-            self.worksheet.remove_rows(rows[0] - META_ROWS, len(rows))))
+        ins = menu.addAction(tr('ws_insert_rows'),
+                             lambda: self._after_edit(
+                                 self.worksheet.insert_rows(
+                                     rows[0] - META_ROWS, len(rows))))
+        dele = menu.addAction(tr('ws_delete_rows'),
+                              lambda: self._after_edit(
+                                  self.worksheet.remove_rows(
+                                      rows[0] - META_ROWS, len(rows))))
         ins.setEnabled(contiguous)
         dele.setEnabled(contiguous)
-        menu.addAction('Clear', lambda: self._after_edit(
+        menu.addAction(tr('ws_clear'), lambda: self._after_edit(
             self.worksheet.clear(
                 [(0, run[0], self.model().columnCount() - 1, run[-1])
                  for run in runs],
@@ -835,10 +899,10 @@ class WorksheetView(QTableView):
         if not isinstance(source, QWidget):
             source = self
         menu = QMenu(self)
-        menu.addAction('Cut', self.cut)
-        menu.addAction('Copy', self.copy)
-        menu.addAction('Paste', self.paste)
-        menu.addAction('Clear', self.clear_selection_contents)
+        menu.addAction(tr('act_cut'), self.cut)
+        menu.addAction(tr('act_copy'), self.copy)
+        menu.addAction(tr('act_paste'), self.paste)
+        menu.addAction(tr('ws_clear'), self.clear_selection_contents)
         menu.exec(source.mapToGlobal(pos))
 
     def _after_edit(self, rect):

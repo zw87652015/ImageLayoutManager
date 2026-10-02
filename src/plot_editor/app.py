@@ -27,10 +27,36 @@ def main(argv=None) -> int:
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([sys.argv[0]])
-    app.setApplicationName('Plot Editor')
 
-    from . import chrome
-    chrome.apply_app_style(app)
+    from . import chrome as _chrome, i18n as _i18n
+    _i18n.set_language(_chrome.saved_language())
+    app.setApplicationName(_i18n.tr('app_name'))
+
+    # PyQt6 aborts the process on an unhandled exception escaping a Qt
+    # slot — convert it into a warning dialog instead (guarded against
+    # recursion and a missing app).
+    _handling = {'active': False}
+
+    def _excepthook(exc_type, exc, tb):
+        import traceback as _tb
+        _tb.print_exception(exc_type, exc, tb)
+        if _handling['active']:
+            return
+        _handling['active'] = True
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            if QApplication.instance() is not None:
+                from .i18n import tr
+                QMessageBox.warning(None, tr('app_name'),
+                                    tr('msg_unexpected', error=exc))
+        except Exception:
+            pass
+        finally:
+            _handling['active'] = False
+
+    sys.excepthook = _excepthook
+
+    _chrome.apply_app_style(app)
 
     from .window import PlotEditorWindow
     win = PlotEditorWindow()
@@ -40,7 +66,8 @@ def main(argv=None) -> int:
         from .ilm_bridge import is_ilm_copy_path
         if is_ilm_copy_path(args.ilm_copy):
             try:
-                win.open_copy(args.ilm_copy, title='Plot from ILM')
+                win.open_copy(args.ilm_copy, title=_i18n.tr(
+                    'plot_from_ilm'))
             finally:
                 try:
                     import os

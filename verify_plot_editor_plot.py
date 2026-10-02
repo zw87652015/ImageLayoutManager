@@ -102,6 +102,58 @@ class BuildSeriesTests(unittest.TestCase):
         self.assertEqual(b.y_label, 'Current (mA)')
         self.assertEqual(c.label, 'D')
 
+    def test_label_column_gives_categorical_x(self):
+        ws = make_ws(['Label', 'Y'])
+        ws.column(0).long_name = 'Group'
+        fill(ws, 0, ['a', 'b', 'c'])
+        fill(ws, 1, [1.0, 2.0, 3.0])
+        (s,) = build_series(ws, [0, 1])
+        self.assertEqual(s.x, (1.0, 2.0, 3.0))
+        self.assertEqual(s.x_ticklabels, ('a', 'b', 'c'))
+        self.assertEqual(s.x_label, 'Group')
+
+    def test_label_column_keeps_row_numbers_when_y_skipped(self):
+        ws = make_ws(['Label', 'Y'])
+        fill(ws, 0, ['a', 'b', 'c'])
+        fill(ws, 1, [1.0, None, 3.0])
+        (s,) = build_series(ws, [0, 1])
+        self.assertEqual(s.x, (1.0, 3.0))
+        self.assertEqual(s.x_ticklabels, ('a', 'c'))
+
+    def test_label_column_formats_cell_text(self):
+        ws = make_ws(['Label', 'Y'])
+        fill(ws, 0, [2.0, 'text', None])
+        fill(ws, 1, [1.0, 2.0, 3.0])
+        (s,) = build_series(ws, [0, 1])
+        self.assertEqual(s.x_ticklabels, ('2', 'text', ''))
+
+    def test_nearest_pool_column_wins(self):
+        # X nearer to Y than the Label column → numeric axis.
+        ws = make_ws(['Label', 'X', 'Y'])
+        fill(ws, 0, ['a'])
+        fill(ws, 1, [5.0])
+        fill(ws, 2, [9.0])
+        (s,) = build_series(ws, [0, 1, 2])
+        self.assertEqual(s.x, (5.0,))
+        self.assertIsNone(s.x_ticklabels)
+        # Label nearer to Y than the X column → categorical axis.
+        ws = make_ws(['X', 'Label', 'Y'])
+        fill(ws, 0, [5.0])
+        fill(ws, 1, ['a'])
+        fill(ws, 2, [9.0])
+        (s,) = build_series(ws, [0, 1, 2])
+        self.assertEqual(s.x, (1.0,))
+        self.assertEqual(s.x_ticklabels, ('a',))
+
+    def test_unselected_label_not_used(self):
+        ws = make_ws(['Label', 'Y'])
+        fill(ws, 0, ['a', 'b'])
+        fill(ws, 1, [1.0, 2.0])
+        (s,) = build_series(ws, [1])
+        self.assertEqual(s.x, (1.0, 2.0))
+        self.assertIsNone(s.x_ticklabels)
+        self.assertEqual(s.x_label, 'Row')
+
     def test_no_y_raises(self):
         ws = make_ws(['X'])
         fill(ws, 0, [1.0])
@@ -176,11 +228,34 @@ class MakeFigureTests(unittest.TestCase):
         self.assertEqual(tuple(lines[2].get_ydata()), (6, 7))
         self.assertTrue(lines[2].get_ydata()[0] > lines[1].get_ydata()[0])
 
+    def test_title(self):
+        fig = make_figure(one_series(), 'pure_line', title='My Plot')
+        self.assertEqual(self.ax(fig).get_title(), 'My Plot')
+        fig = make_figure(one_series(), 'pure_line')
+        self.assertEqual(self.ax(fig).get_title(), '')
+
     def test_axis_labels_from_first_series(self):
         fig = make_figure(one_series(), 'pure_line')
         ax = self.ax(fig)
         self.assertEqual(ax.get_xlabel(), 'XL')
         self.assertEqual(ax.get_ylabel(), 'YL')
+
+    def test_x_ticklabels_applied(self):
+        s = series([1, 2, 3], [1, 4, 2])
+        s = s.__class__(s.x, s.y, s.label, s.x_label, s.y_label,
+                        ('low', 'mid', 'high'))
+        fig = make_figure([s], 'pure_line')
+        ax = self.ax(fig)
+        self.assertEqual([t.get_text() for t in ax.get_xticklabels()],
+                         ['low', 'mid', 'high'])
+        self.assertEqual(list(ax.get_xticks()), [1, 2, 3])
+
+    def test_no_ticklabels_keeps_numeric_ticks(self):
+        from matplotlib.ticker import FixedLocator
+        fig = make_figure(one_series(), 'pure_line')
+        ax = self.ax(fig)
+        self.assertNotIsInstance(ax.xaxis.get_major_locator(),
+                                 FixedLocator)
 
     def test_unknown_key_raises(self):
         with self.assertRaises(ValueError):

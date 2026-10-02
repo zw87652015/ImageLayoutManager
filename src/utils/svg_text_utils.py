@@ -514,10 +514,22 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
             if clip_w > 0 and clip_h > 0:
                 handled = True
                 try:
+                    from src.model.layout_engine import LayoutEngine
                     from src.plot_editor.render import render_document_fitted
-                    base_bytes = render_document_fitted(
-                        native_doc,
-                        *reflow_figure_size_mm(cell, clip_w, clip_h)).svg
+                    from src.utils.editable_plot import resolve_plot_row_frames
+                    if layout_result is None:
+                        layout_result = LayoutEngine.calculate_layout(project)
+                    fig_size = reflow_figure_size_mm(cell, clip_w, clip_h)
+                    v_span = resolve_plot_row_frames(
+                        project, layout_result).get(cell.id)
+                    try:
+                        base_bytes = render_document_fitted(
+                            native_doc, *fig_size, v_span_mm=v_span).svg
+                    except Exception:
+                        if v_span is None:
+                            raise
+                        base_bytes = render_document_fitted(
+                            native_doc, *fig_size).svg
                 except Exception:
                     pass  # fall back to the stored snapshot bytes
         if not handled:

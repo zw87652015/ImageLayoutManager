@@ -89,6 +89,24 @@ def _files_equal(a: str, b: str) -> bool:
         return False
 
 
+def _owning_bundle_tab(path: str, tab_workdirs):
+    """Return the tab whose bundle workdir contains *path*, else None.
+
+    *tab_workdirs* is an iterable of ``(tab, workdir_path)`` pairs.
+    Qt-free so hot-reload ownership is testable without a QApplication.
+    """
+    target = os.path.normcase(os.path.abspath(path))
+    for tab, workdir in tab_workdirs:
+        root = os.path.normcase(os.path.abspath(workdir))
+        try:
+            if os.path.commonpath([target, root]) == root:
+                return tab
+        except ValueError:
+            # Different drives / mixed absolute-relative — can't be inside.
+            continue
+    return None
+
+
 class _CollapseHandle(QSplitterHandle):
     """Splitter handle with a bookmark-style button to collapse/expand the side panel."""
 
@@ -479,6 +497,10 @@ class MainWindow(QMainWindow):
         if _autosave_s > 0:
             self._autosave_timer.start()
         self._pending_reload_paths: set[str] = set()
+        # Cache paths ILM itself just rewrote (original -> cache copy in
+        # _apply_hot_reload). The follow-up watcher event for such a path
+        # is our own write, not an external edit, so it is discarded.
+        self._hot_reload_self_writes: set[str] = set()
         # Maps {abs_original_source_path -> [abs_cache_path, …]} for the
         # current project. Rebuilt by _sync_image_watcher; consulted by
         # _apply_hot_reload to copy fresh bytes into the cache when an
@@ -2029,6 +2051,8 @@ class MainWindow(QMainWindow):
                 for t in cache_targets:
                     try:
                         shutil.copy2(p, t)
+                        self._hot_reload_self_writes.add(
+                            os.path.normcase(os.path.abspath(t)))
                     except OSError:
                         # Source vanished mid-copy or target locked by AV;
                         # fall through — proxy.invalidate(t) will at least
@@ -2036,6 +2060,23 @@ class MainWindow(QMainWindow):
                         pass
                     proxy.invalidate(t)
             else:
+                # Not an original source: a change here means the cache
+                # file itself was rewritten out-of-process (e.g. Plot
+                # Editor saving into an extracted .figpack workdir).
+                p_norm = os.path.normcase(os.path.abspath(p))
+                if p_norm in self._hot_reload_self_writes:
+                    self._hot_reload_self_writes.discard(p_norm)
+                else:
+                    owner = _owning_bundle_tab(
+                        p,
+                        ((t, t.bundle_workdir.path) for t in self._tabs
+                         if t.bundle_workdir is not None))
+                    if owner is not None:
+                        # Force a full repack on next save and mark the
+                        # tab unsaved so the close prompt fires.
+                        owner.assets_dirty = True
+                        if owner.undo_stack.isClean():
+                            owner.undo_stack.resetClean()
                 proxy.invalidate(p)
             # Re-subscribe if atomic-save removed us from the watch list
             if os.path.isfile(p) and p not in self._image_watcher.files():
@@ -4638,11 +4679,13 @@ class MainWindow(QMainWindow):
             pass
         return None
 
-    def _on_open_plot_editor(self):
+    def _on_open_plot_editor(self, path=None):
         """File → Open Plot Editor: a truly separate application process.
 
         Sharing a QApplication would make the standalone editor mutate
         ILM's palette/language settings — launch it detached instead.
+        ``path`` (a str, e.g. a welcome-window ``*.ilmplot.svg`` drop) is
+        passed as the editor's positional file argument.
         """
         from PyQt6.QtCore import QProcess
         if getattr(sys, 'frozen', False):
@@ -4655,6 +4698,8 @@ class MainWindow(QMainWindow):
                 os.path.dirname(os.path.abspath(__file__)))), 'main.py')
             args = [script, '--plot-editor']
             workdir = os.path.dirname(script)
+        if isinstance(path, str):  # triggered(bool) must not leak in
+            args.append(path)
         started, _pid = QProcess.startDetached(exe, args, workdir)
         if not started:
             QMessageBox.warning(self, tr("action_open_plot_editor"),
@@ -4752,7 +4797,8 @@ class MainWindow(QMainWindow):
             old_digest = source_digest(old_path) if old_path else None
         except OSError:
             old_digest = None
-        dialog = PlotEditorWindow(doc, parent=self, for_ilm=True)
+        dialog = PlotEditorWindow(doc, parent=self, for_ilm=True,
+                                  source_path=source_path)
         try:
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return

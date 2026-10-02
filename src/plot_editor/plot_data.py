@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass
 
-from .worksheet import column_name
+from .i18n import tr
+from .worksheet import column_name, format_cell
 
 
 class PlotSelectionError(ValueError):
@@ -16,6 +17,23 @@ class Series:
     label: str
     x_label: str
     y_label: str
+    # Categorical x ticks: label text aligned with ``x`` when the chosen
+    # X column is a Label column; None for numeric x axes.
+    x_ticklabels: tuple | None = None
+    # Source Y column index in the worksheet (override key); None for
+    # series not built from a worksheet (e.g. document fallbacks).
+    y_column: int | None = None
+
+
+def tick_label_map(series):
+    """Position → tick label across all series (first series wins)."""
+    out = {}
+    for s in series:
+        if not s.x_ticklabels:
+            continue
+        for pos, text in zip(s.x, s.x_ticklabels):
+            out.setdefault(pos, text)
+    return out
 
 
 def _axis_title(column, index):
@@ -37,10 +55,9 @@ def build_series(worksheet, selected_columns):
     ys = [c for c in cols
           if worksheet.column(c).designation == 'Y']
     if not ys:
-        raise PlotSelectionError(
-            'Select at least one Y column to plot.')
+        raise PlotSelectionError(tr('err_no_y'))
     xs = [c for c in cols
-          if worksheet.column(c).designation == 'X']
+          if worksheet.column(c).designation in ('X', 'Label')]
     if not xs:
         xs = [i for i in range(worksheet.column_count)
               if worksheet.column(i).designation == 'X']
@@ -48,15 +65,23 @@ def build_series(worksheet, selected_columns):
     for yc in ys:
         ycol = worksheet.column(yc)
         xc = max((c for c in xs if c < yc), default=None)
+        categorical = xc is not None \
+            and worksheet.column(xc).designation == 'Label'
         x_values = []
         y_values = []
+        ticklabels = [] if categorical else None
         for r in range(worksheet.row_count):
             y = worksheet.value(yc, r)
             if not isinstance(y, float):
                 continue
-            x = worksheet.value(xc, r) if xc is not None else float(r + 1)
-            if not isinstance(x, float):
-                continue
+            if categorical:
+                x = float(r + 1)
+                ticklabels.append(format_cell(worksheet.value(xc, r)))
+            else:
+                x = worksheet.value(xc, r) if xc is not None \
+                    else float(r + 1)
+                if not isinstance(x, float):
+                    continue
             x_values.append(x)
             y_values.append(y)
         if not x_values:
@@ -67,8 +92,9 @@ def build_series(worksheet, selected_columns):
         else:
             x_label = 'Row'
         series.append(Series(tuple(x_values), tuple(y_values),
-                             _legend_text(ycol, yc), x_label, y_label))
+                             _legend_text(ycol, yc), x_label, y_label,
+                             tuple(ticklabels) if categorical else None,
+                             yc))
     if not series:
-        raise PlotSelectionError(
-            'The selected columns contain no numeric data.')
+        raise PlotSelectionError(tr('err_no_numeric'))
     return series

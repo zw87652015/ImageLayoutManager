@@ -6,6 +6,8 @@ import math
 import re
 from dataclasses import dataclass, field
 
+from .i18n import tr
+
 META_FIELDS = ('long_name', 'units', 'comments')
 META_LABELS = ('Long Name', 'Units', 'Comments')
 META_ROWS = 3
@@ -367,11 +369,11 @@ class Worksheet:
         height = len(block)
         if width * height > MAX_PASTE_CELLS:
             raise WorksheetLimitError(
-                'Pasted data exceeds {:,} cells'.format(MAX_PASTE_CELLS))
+                tr('err_paste_cells', max='{:,}'.format(MAX_PASTE_CELLS)))
         needed = max(0, col + width - self.column_count)
         if self.column_count + needed > MAX_COLUMNS:
             raise WorksheetLimitError(
-                'Too many columns (max %d)' % MAX_COLUMNS)
+                tr('err_too_many_cols', max=MAX_COLUMNS))
         appended = self._fresh_columns(needed)
         self._columns.extend(appended)
         patches = []
@@ -445,7 +447,7 @@ class Worksheet:
             return None
         if self.column_count + count > MAX_COLUMNS:
             raise WorksheetLimitError(
-                'Too many columns (max %d)' % MAX_COLUMNS)
+                tr('err_too_many_cols', max=MAX_COLUMNS))
         at = max(0, min(at, self.column_count))
         cols = self._fresh_columns(count)
         rect = (at, 0, at + count - 1, self.display_rows() - 1)
@@ -456,7 +458,7 @@ class Worksheet:
         if not indices:
             return None
         if len(indices) >= self.column_count:
-            raise ValueError('Cannot remove every column')
+            raise ValueError(tr('err_remove_every'))
         removed = [(i, self._columns[i]) for i in indices]
         rect = (indices[0], 0, self.column_count - len(indices) - 1,
                 self.display_rows() - 1)
@@ -464,7 +466,8 @@ class Worksheet:
 
     def set_designation(self, cols, designation, label='Set As'):
         if designation not in DESIGNATIONS:
-            raise ValueError('Unknown designation %r' % designation)
+            raise ValueError(
+                tr('err_unknown_designation', value=repr(designation)))
         indices = [c for c in cols
                    if self._columns[c].designation != designation]
         if not indices:

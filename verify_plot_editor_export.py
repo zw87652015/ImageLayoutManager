@@ -84,9 +84,22 @@ class DocumentFromPlotTests(unittest.TestCase):
         with self.assertRaises(PlotDocumentError):
             document_from_plot(many, 'pure_line')
 
+    def test_title(self):
+        doc = document_from_plot(ONE, 'pure_line', title='Results')
+        self.assertEqual(doc.title, 'Results')
+        self.assertEqual(document_from_plot(ONE, 'pure_line').title, '')
+
     def test_unknown_key_raises(self):
         with self.assertRaises(ValueError):
             document_from_plot(ONE, 'nope')
+
+    def test_x_tick_labels_set(self):
+        cat = Series((1.0, 2.0), (3.0, 4.0), 'L', 'X', 'Y',
+                     ('a', 'b'))
+        doc = document_from_plot([cat], 'pure_line')
+        self.assertEqual(doc.x_tick_labels, [[1.0, 'a'], [2.0, 'b']])
+        self.assertIsNone(document_from_plot(ONE, 'pure_line')
+                          .x_tick_labels)
 
 
 class ExportPlotTests(unittest.TestCase):
@@ -95,7 +108,9 @@ class ExportPlotTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             for key in EXPORT_FORMATS:
                 path = os.path.join(d, 'plot' + EXPORT_FORMATS[key][1])
-                export_plot(ONE, 'pure_line', path, key)
+                export_plot(document_from_plot(ONE, 'pure_line',
+                                               title='Ttl'),
+                            path, key)
                 self.assertTrue(os.path.isfile(path), key)
                 with open(path, 'rb') as fh:
                     head = fh.read(20)
@@ -108,8 +123,9 @@ class ExportPlotTests(unittest.TestCase):
                 elif key == 'svg':
                     self.assertTrue(head.startswith(b'<?xml'))
                     with open(path, 'rb') as fh:
-                        self.assertNotIn(b'ilm-plot-document',
-                                         fh.read())
+                        data = fh.read()
+                    self.assertNotIn(b'ilm-plot-document', data)
+                    self.assertIn(b'Ttl', data)  # styled/native render
                 elif key == 'pdf':
                     self.assertTrue(head.startswith(b'%PDF'))
                 elif key == 'png':
@@ -124,16 +140,20 @@ class ExportPlotTests(unittest.TestCase):
     def test_png_dpi(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, 'plot.png')
-            export_plot(ONE, 'pure_line', path, 'png')
+            export_plot(document_from_plot(ONE, 'pure_line'),
+                        path, 'png')
             with open(path, 'rb') as fh:
                 data = fh.read(24)
             width = int.from_bytes(data[16:20], 'big')
-            self.assertEqual(width, round(6.4 * RASTER_DPI))
+            # Native figure size: document width_mm (90 mm) at RASTER_DPI.
+            self.assertAlmostEqual(width, 90.0 / 25.4 * RASTER_DPI,
+                                   delta=2)
 
     def test_scatter_marker_in_document(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, 'plot.ilmplot.svg')
-            export_plot(ONE, 'line_scatters', path, 'ilmplot')
+            export_plot(document_from_plot(ONE, 'line_scatters'),
+                        path, 'ilmplot')
             doc = document.load_document(path)
             self.assertEqual(doc.series[0].linestyle, '-')
             self.assertEqual(doc.series[0].marker, 'o')
@@ -145,7 +165,8 @@ class ExportPlotTests(unittest.TestCase):
                 fh.write(b'x')
             path = os.path.join(blocker, 'plot.png')
             with self.assertRaises(OSError):
-                export_plot(ONE, 'pure_line', path, 'png')
+                export_plot(document_from_plot(ONE, 'pure_line'),
+                            path, 'png')
             self.assertFalse(os.path.exists(path))
             leftovers = [f for f in os.listdir(d) if f.endswith('.tmp')]
             self.assertEqual(leftovers, [])

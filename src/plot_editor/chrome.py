@@ -21,6 +21,13 @@ def saved_theme() -> str:
     return DARK if value == DARK else LIGHT
 
 
+def saved_language() -> str:
+    """ILM's saved UI language, read-only (same key as MainWindow)."""
+    value = QSettings('AcademicFigureLayout', 'ImageLayoutManager').value(
+        'language', 'zh')
+    return value if value in ('en', 'zh') else 'zh'
+
+
 def saved_font_scale() -> float:
     value = QSettings('AcademicFigureLayout', 'ImageLayoutManager').value(
         'ui/font_scale', 1.0)
@@ -110,3 +117,134 @@ QLineEdit#plotWorksheetEditor {
 
 def worksheet_stylesheet(theme: str, scale: float) -> str:
     return _WORKSHEET_QSS % style_tokens(theme, scale)
+
+
+_TITLE_QSS = """
+QWidget#plotTitleField {
+    background: %(canvas_bg)s;
+}
+QLabel#plotTitleDisplay {
+    color: %(text)s;
+    font-size: %(font_base)s;
+    font-weight: 600;
+    padding: 2px 8px;
+    border: 1px solid transparent;
+}
+QLabel#plotTitleDisplay[empty="true"] {
+    color: %(placeholder)s;
+    font-weight: 400;
+    border: 1px dashed %(border)s;
+}
+QLabel#plotTitleDisplay:hover {
+    border: 1px dashed %(text)s;
+}
+QLineEdit#plotTitleEditor {
+    background: %(surface)s;
+    color: %(text)s;
+    border: 1px solid %(border)s;
+    border-radius: %(radius_input)s;
+    padding: 1px 6px;
+    font-size: %(font_base)s;
+}
+"""
+
+
+def title_stylesheet(theme: str, scale: float) -> str:
+    return _TITLE_QSS % style_tokens(theme, scale)
+
+
+_ELEMENT_PANEL_QSS = """
+QFrame#plotElementPanel {
+    background: %(surface)s;
+    border: 1px solid %(border)s;
+    border-radius: %(radius_panel)s;
+}
+QLabel#plotElementPanelTitle {
+    color: %(text)s;
+    font-size: %(font_md)s;
+    font-weight: 600;
+}
+QLabel#plotElementPanelSection {
+    color: %(label_caps)s;
+    font-size: %(font_xs)s;
+    font-weight: 600;
+    padding-top: 4px;
+}
+QFrame#plotElementPanel QLabel {
+    color: %(text_sec)s;
+    font-size: %(font_sm)s;
+}
+QFrame#plotElementPanel QLineEdit,
+QFrame#plotElementPanel QSpinBox,
+QFrame#plotElementPanel QDoubleSpinBox,
+QFrame#plotElementPanel QComboBox {
+    background: %(surface)s;
+    border: 1px solid %(border)s;
+    border-radius: %(radius_input)s;
+    padding: 1px 6px;
+    min-height: 20px;
+    color: %(text)s;
+    font-size: %(font_sm)s;
+}
+QFrame#plotElementPanel QLineEdit:focus,
+QFrame#plotElementPanel QComboBox:focus {
+    border-color: %(accent)s;
+}
+QFrame#plotElementPanel QLineEdit[invalid="true"] {
+    border-color: %(danger)s;
+}
+QFrame#plotElementPanel QCheckBox {
+    color: %(text)s;
+    font-size: %(font_sm)s;
+    spacing: 6px;
+}
+QFrame#plotElementPanel QToolButton {
+    border-radius: %(radius_button)s;
+    padding: 2px;
+}
+QFrame#plotElementPanel QToolButton:hover {
+    background: %(hover)s;
+}
+QFrame#plotElementPanel QToolButton[segmentedButton="true"]:checked {
+    background: %(accent_tint)s;
+}
+QPushButton#plotElementPanelReset {
+    color: %(text_sec)s;
+    border: none;
+    padding: 2px 4px;
+    font-size: %(font_sm)s;
+}
+QPushButton#plotElementPanelReset:hover {
+    color: %(danger)s;
+}
+"""
+
+
+def element_panel_stylesheet(theme: str, scale: float) -> str:
+    return _ELEMENT_PANEL_QSS % style_tokens(theme, scale)
+
+
+_RESET_ALL_QSS = """
+QToolButton#plotResetAll {
+    background: %(surface)s;
+    color: %(text_sec)s;
+    border: 1px solid %(border)s;
+    border-radius: %(radius_button)s;
+    padding: 3px 8px;
+    font-size: %(font_sm)s;
+}
+QToolButton#plotResetAll:hover {
+    color: %(text)s;
+    border-color: %(border_strong)s;
+}
+QToolButton#plotResetAll:pressed {
+    background: %(active)s;
+}
+QToolButton#plotResetAll:disabled {
+    color: %(text_tert)s;
+}
+"""
+
+
+def reset_all_stylesheet(theme: str, scale: float) -> str:
+    return _RESET_ALL_QSS % style_tokens(theme, scale)

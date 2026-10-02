@@ -4,6 +4,11 @@ import dataclasses
 import unittest
 
 from src.plot_editor import actions
+from src.plot_editor import i18n
+
+# Action/chart metadata is English; UI labels come from i18n.tr at
+# build time. Pin the language so assertions don't depend on QSettings.
+i18n.set_language('en')
 
 
 class ActionTableTests(unittest.TestCase):

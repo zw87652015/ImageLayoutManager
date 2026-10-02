@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:xlink="http://www.w3.org/1999/xlink" width="255.11811pt" height="184.251969pt" viewBox="0 0 255.11811 184.251969" version="1.1">
- <metadata id="ilm-plot-document">{"format":"ilm-plot","schema_version":1,"kind":"line","width_mm":90.0,"height_mm":65.0,"axes_rect":[0.18,0.18,0.76,0.72],"title":"AaAAa","xlabel":"Time$^2$ (s$^2$)","ylabel":"Intensity (a.u.)","font_family":"DejaVu Sans","font_size_pt":8.0,"title_size_pt":10.0,"xlim":null,"ylim":null,"legend":false,"legend_location":"best","grid":false,"series":[{"id":"s0","label":"Intensity","x":[1.0,4.0,9.0,13.0,18.0],"y":[13.0,25.0,64.0,320.0,600.0],"color":"#1f77b4","linewidth_pt":1.5,"linestyle":"-","marker":"o","markersize_pt":6.0}],"style":{"ylabel":{"size_pt":12.0},"yaxis":{"ticks":{"size_pt":5.0},"rotation":12.0,"decimals":1}}}</metadata><metadata id="ilm-plot-worksheet">{"format":"ilm-plot-worksheet","schema_version":2,"chart":"line_scatters","plot_columns":[1],"columns":[{"designation":"X","long_name":"Time$^2$","units":"s$^2$","comments":"","values":[1.0,4.0,9.0,13.0,18.0]},{"designation":"Y","long_name":"Intensity","units":"a.u.","comments":"","values":[13.0,25.0,64.0,320.0,600.0]}],"overrides":{"legend":false,"style":{"ylabel":{"size_pt":12.0},"yaxis":{"ticks":{"size_pt":5.0},"rotation":12.0,"decimals":1}}}}</metadata><metadata>
+ <metadata id="ilm-plot-document">{"format":"ilm-plot","schema_version":1,"kind":"line","width_mm":90.0,"height_mm":65.0,"axes_rect":[0.18,0.18,0.76,0.72],"title":"AaAAa","xlabel":"Time$^2$ (s$^2$)","ylabel":"Intensity (a.u.)","font_family":"DejaVu Sans","font_size_pt":8.0,"title_size_pt":10.0,"xlim":null,"ylim":null,"legend":true,"legend_location":"best","grid":false,"series":[{"id":"s0","label":"Type A","x":[1.0,4.0,9.0,13.0,18.0],"y":[13.0,25.0,64.0,320.0,600.0],"color":"#1f77b4","linewidth_pt":1.5,"linestyle":"-","marker":"o","markersize_pt":6.0},{"id":"s1","label":"Type B","x":[1.0,4.0,9.0,13.0,18.0],"y":[2.0,12.0,55.0,180.0,350.0],"color":"#ff7f0e","linewidth_pt":1.5,"linestyle":"-","marker":"","markersize_pt":6.0}]}</metadata><metadata id="ilm-plot-worksheet">{"format":"ilm-plot-worksheet","schema_version":2,"chart":"line_scatters","plot_columns":[0,1,2],"columns":[{"designation":"X","long_name":"Time$^2$","units":"s$^2$","comments":"","values":[1.0,4.0,9.0,13.0,18.0]},{"designation":"Y","long_name":"Intensity","units":"a.u.","comments":"Type A","values":[13.0,25.0,64.0,320.0,600.0]},{"designation":"Y","long_name":"Intensity","units":"a.u.","comments":"Type B","values":[2.0,12.0,55.0,180.0,350.0]}],"overrides":{"legend":true,"legend_location":"best","series":{"2":{"label":"Type B","linestyle":"-","marker":""}}}}</metadata><metadata>
   <rdf:RDF>
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
@@ -122,61 +122,61 @@
        <path id="m12e1061f3b" d="M 0 0  L -3 0  " style="stroke: #000000; stroke-width: 0.8" />
       </defs>
       <g>
-       <use xlink:href="#m12e1061f3b" x="45.92126" y="147.727447" style="stroke: #000000; stroke-width: 0.8" />
+       <use xlink:href="#m12e1061f3b" x="45.92126" y="145.459899" style="stroke: #000000; stroke-width: 0.8" />
       </g>
      </g>
      <g id="text_8">
-      <text style="font-size:128px" transform="translate(31.927262 151.197257) rotate(-12) scale(0.0390625)" font-family="DejaVu Sans">0.0</text>
+      <text style="text-anchor: end;font-size:128px" x="638.74016" y="2375.988384" transform="rotate(-0 39.92126 148.499274) scale(0.0625)" font-family="DejaVu Sans">0</text>
      </g>
     </g>
     <g id="ytick_2">
      <g id="line2d_9">
       <g>
-       <use xlink:href="#m12e1061f3b" x="45.92126" y="127.182083" style="stroke: #000000; stroke-width: 0.8" />
+       <use xlink:href="#m12e1061f3b" x="45.92126" y="125.292459" style="stroke: #000000; stroke-width: 0.8" />
       </g>
      </g>
      <g id="text_9">
-      <text style="font-size:128px" transform="translate(25.703798 131.974731) rotate(-12) scale(0.0390625)" font-family="DejaVu Sans">100.0</text>
+      <text style="text-anchor: end;font-size:128px" x="638.74016" y="2053.309344" transform="rotate(-0 39.92126 128.331834) scale(0.0625)" font-family="DejaVu Sans">100</text>
      </g>
     </g>
     <g id="ytick_3">
      <g id="line2d_10">
       <g>
-       <use xlink:href="#m12e1061f3b" x="45.92126" y="106.636718" style="stroke: #000000; stroke-width: 0.8" />
+       <use xlink:href="#m12e1061f3b" x="45.92126" y="105.125019" style="stroke: #000000; stroke-width: 0.8" />
       </g>
      </g>
      <g id="text_10">
-      <text style="font-size:128px" transform="translate(25.703798 111.429367) rotate(-12) scale(0.0390625)" font-family="DejaVu Sans">200.0</text>
+      <text style="text-anchor: end;font-size:128px" x="638.74016" y="1730.630304" transform="rotate(-0 39.92126 108.164394) scale(0.0625)" font-family="DejaVu Sans">200</text>
      </g>
     </g>
     <g id="ytick_4">
      <g id="line2d_11">
       <g>
-       <use xlink:href="#m12e1061f3b" x="45.92126" y="86.091354" style="stroke: #000000; stroke-width: 0.8" />
+       <use xlink:href="#m12e1061f3b" x="45.92126" y="84.95758" style="stroke: #000000; stroke-width: 0.8" />
       </g>
      </g>
      <g id="text_11">
-      <text style="font-size:128px" transform="translate(25.703798 90.884002) rotate(-12) scale(0.0390625)" font-family="DejaVu Sans">300.0</text>
+      <text style="text-anchor: end;font-size:128px" x="638.74016" y="1407.95128" transform="rotate(-0 39.92126 87.996955) scale(0.0625)" font-family="DejaVu Sans">300</text>
      </g>
     </g>
     <g id="ytick_5">
      <g id="line2d_12">
       <g>
-       <use xlink:href="#m12e1061f3b" x="45.92126" y="65.54599" style="stroke: #000000; stroke-width: 0.8" />
+       <use xlink:href="#m12e1061f3b" x="45.92126" y="64.79014" style="stroke: #000000; stroke-width: 0.8" />
       </g>
      </g>
      <g id="text_12">
-      <text style="font-size:128px" transform="translate(25.703798 70.338638) rotate(-12) scale(0.0390625)" font-family="DejaVu Sans">400.0</text>
+      <text style="text-anchor: end;font-size:128px" x="638.74016" y="1085.27224" transform="rotate(-0 39.92126 67.829515) scale(0.0625)" font-family="DejaVu Sans">400</text>
      </g>
     </g>
     <g id="ytick_6">
      <g id="line2d_13">
       <g>
-       <use xlink:href="#m12e1061f3b" x="45.92126" y="45.000626" style="stroke: #000000; stroke-width: 0.8" />
+       <use xlink:href="#m12e1061f3b" x="45.92126" y="44.622701" style="stroke: #000000; stroke-width: 0.8" />
       </g>
      </g>
      <g id="text_13">
-      <text style="font-size:128px" transform="translate(25.703798 49.793274) rotate(-12) scale(0.0390625)" font-family="DejaVu Sans">500.0</text>
+      <text style="text-anchor: end;font-size:128px" x="638.74016" y="762.593216" transform="rotate(-0 39.92126 47.662076) scale(0.0625)" font-family="DejaVu Sans">500</text>
      </g>
     </g>
     <g id="ytick_7">
@@ -186,25 +186,28 @@
       </g>
      </g>
      <g id="text_14">
-      <text style="font-size:128px" transform="translate(25.703798 29.24791) rotate(-12) scale(0.0390625)" font-family="DejaVu Sans">600.0</text>
+      <text style="text-anchor: end;font-size:128px" x="638.74016" y="439.914176" transform="rotate(-0 39.92126 27.494636) scale(0.0625)" font-family="DejaVu Sans">600</text>
      </g>
     </g>
     <g id="ilmplot-ylabel">
-     <text style="text-anchor: middle;font-size:128px" x="207.128224" y="904.062997333" transform="rotate(-90 19.418271 84.755906) scale(0.09375)" id="ilmplot-ylabel-text-0" font-family="DejaVu Sans">Intensity (a.u.)</text>
+     <text style="text-anchor: middle;font-size:128px" x="319.80016" y="1356.094496" transform="rotate(-90 19.98751 84.755906) scale(0.0625)" id="ilmplot-ylabel-text-0" font-family="DejaVu Sans">Intensity (a.u.)</text>
     </g>
    </g>
    <g id="ilmplot-series-s0">
-    <path d="M 54.734431 145.05655  L 85.839741 142.591106  L 137.681923 134.578414  L 179.15567 81.982281  L 230.997853 24.455261  " clip-path="url(#p8153d89351)" style="fill: none; stroke: #1f77b4; stroke-width: 1.5; stroke-linecap: square" />
+    <path d="M 54.734431 142.838131  L 85.839741 140.418039  L 137.681923 132.552737  L 179.15567 80.924092  L 230.997853 24.455261  " clip-path="url(#p8153d89351)" style="fill: none; stroke: #1f77b4; stroke-width: 1.5; stroke-linecap: square" />
     <defs>
      <path id="ma21a926407" d="M 0 3  C 0.795609 3 1.55874 2.683901 2.12132 2.12132  C 2.683901 1.55874 3 0.795609 3 0  C 3 -0.795609 2.683901 -1.55874 2.12132 -2.12132  C 1.55874 -2.683901 0.795609 -3 0 -3  C -0.795609 -3 -1.55874 -2.683901 -2.12132 -2.12132  C -2.683901 -1.55874 -3 -0.795609 -3 0  C -3 0.795609 -2.683901 1.55874 -2.12132 2.12132  C -1.55874 2.683901 -0.795609 3 0 3  z " style="stroke: #1f77b4" />
     </defs>
     <g clip-path="url(#p8153d89351)">
-     <use xlink:href="#ma21a926407" x="54.734431" y="145.05655" style="fill: #1f77b4; stroke: #1f77b4" />
-     <use xlink:href="#ma21a926407" x="85.839741" y="142.591106" style="fill: #1f77b4; stroke: #1f77b4" />
-     <use xlink:href="#ma21a926407" x="137.681923" y="134.578414" style="fill: #1f77b4; stroke: #1f77b4" />
-     <use xlink:href="#ma21a926407" x="179.15567" y="81.982281" style="fill: #1f77b4; stroke: #1f77b4" />
+     <use xlink:href="#ma21a926407" x="54.734431" y="142.838131" style="fill: #1f77b4; stroke: #1f77b4" />
+     <use xlink:href="#ma21a926407" x="85.839741" y="140.418039" style="fill: #1f77b4; stroke: #1f77b4" />
+     <use xlink:href="#ma21a926407" x="137.681923" y="132.552737" style="fill: #1f77b4; stroke: #1f77b4" />
+     <use xlink:href="#ma21a926407" x="179.15567" y="80.924092" style="fill: #1f77b4; stroke: #1f77b4" />
      <use xlink:href="#ma21a926407" x="230.997853" y="24.455261" style="fill: #1f77b4; stroke: #1f77b4" />
     </g>
+   </g>
+   <g id="ilmplot-series-s1">
+    <path d="M 54.734431 145.05655  L 85.839741 143.039806  L 137.681923 134.367807  L 179.15567 109.158507  L 230.997853 74.87386  " clip-path="url(#p8153d89351)" style="fill: none; stroke: #ff7f0e; stroke-width: 1.5; stroke-linecap: square" />
    </g>
    <g id="patch_3">
     <path d="M 45.92126 151.086614  L 45.92126 18.425197  " style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square" />
@@ -220,6 +223,26 @@
    </g>
    <g id="ilmplot-title">
     <text style="text-anchor: middle;font-size:128px" x="1828.6866176" y="184.6425216" transform="rotate(-0 142.866142 14.425197) scale(0.078125)" id="ilmplot-title-text-0" font-family="DejaVu Sans">AaAAa</text>
+   </g>
+   <g id="legend_1">
+    <g id="patch_7">
+     <path d="M 51.52126 48.310197  L 103.52501 48.310197  Q 105.12501 48.310197 105.12501 46.710197  L 105.12501 24.025197  Q 105.12501 22.425197 103.52501 22.425197  L 51.52126 22.425197  Q 49.92126 22.425197 49.92126 24.025197  L 49.92126 46.710197  Q 49.92126 48.310197 51.52126 48.310197  z " style="fill: #ffffff; opacity: 0.8; stroke: #cccccc; stroke-width: 0.6; stroke-linejoin: miter" />
+    </g>
+    <g id="line2d_15">
+     <path d="M 53.12126 28.903947  L 61.12126 28.903947  L 69.12126 28.903947  " style="fill: none; stroke: #1f77b4; stroke-width: 1.5; stroke-linecap: square" />
+     <g>
+      <use xlink:href="#ma21a926407" x="61.12126" y="28.903947" style="fill: #1f77b4; stroke: #1f77b4" />
+     </g>
+    </g>
+    <g id="text_15">
+     <text style="text-anchor: start;font-size:128px" x="1208.34016" y="507.263152" transform="rotate(-0 75.52126 31.703947) scale(0.0625)" font-family="DejaVu Sans">Type A</text>
+    </g>
+    <g id="line2d_16">
+     <path d="M 53.12126 40.646447  L 61.12126 40.646447  L 69.12126 40.646447  " style="fill: none; stroke: #ff7f0e; stroke-width: 1.5; stroke-linecap: square" />
+    </g>
+    <g id="text_16">
+     <text style="text-anchor: start;font-size:128px" x="1208.34016" y="695.143152" transform="rotate(-0 75.52126 43.446447) scale(0.0625)" font-family="DejaVu Sans">Type B</text>
+    </g>
    </g>
   </g>
  </g>

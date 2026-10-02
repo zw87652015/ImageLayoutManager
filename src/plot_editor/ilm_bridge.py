@@ -8,6 +8,7 @@ written back.
 """
 
 import os
+import shutil
 import tempfile
 import uuid
 
@@ -40,6 +41,34 @@ def _ilm_copy_dir():
     return os.path.join(tempfile.gettempdir(), _TEMP_SUBDIR)
 
 
+def is_ilm_store_file(path):
+    """True for files inside ILM's immutable content-addressed store.
+
+    Anything we cannot verify (import/lookup failure) is treated as a
+    store file — the safe default is copy, never overwrite.
+    """
+    try:
+        from src.utils.editable_plot import plot_documents_root
+        root = os.path.realpath(plot_documents_root())
+    except Exception:
+        return True
+    target = os.path.realpath(path)
+    try:
+        return os.path.normcase(
+            os.path.commonpath([target, root])) == os.path.normcase(root)
+    except ValueError:
+        return False
+
+
+def copy_ilm_source(source_path):
+    """Copy the source file verbatim into the ILM-copy temp subdir."""
+    directory = _ilm_copy_dir()
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, uuid.uuid4().hex + '.ilmplot.svg')
+    shutil.copyfile(source_path, path)
+    return path
+
+
 def write_ilm_copy(doc):
     """Write *doc* to a fresh temp ``*.ilmplot.svg``; returns the path."""
     directory = _ilm_copy_dir()
@@ -54,3 +83,9 @@ def is_ilm_copy_path(path):
     directory = os.path.normcase(os.path.abspath(_ilm_copy_dir()))
     parent = os.path.normcase(os.path.abspath(os.path.dirname(path)))
     return parent == directory
+
+
+def is_native_plot_path(path):
+    """True for an existing local ``*.ilmplot.svg`` file."""
+    return bool(path) and os.path.isfile(path) \
+        and path.lower().endswith('.ilmplot.svg')

@@ -79,6 +79,84 @@ def reflow_figure_size_mm(cell, clip_w_mm: float, clip_h_mm: float):
     return (hr, wr) if cell.rotation % 180 else (wr, hr)
 
 
+def resolve_plot_row_frames(project, layout_result) -> dict:
+    """Shared vertical axes spans for reflowing plots in the same grid row.
+
+    Returns ``{cell_id: (top_mm, bottom_mm)}`` measured from each figure's
+    own top edge — feed to ``render_document_fitted`` as ``v_span_mm`` so
+    same-row plots share identical axes tops and bottoms in page
+    coordinates.  Left/right margins stay per plot.  Cached on
+    ``layout_result._plot_row_frames``.
+    """
+    cached = getattr(layout_result, '_plot_row_frames', None)
+    if cached is not None:
+        return cached
+    frames = {}
+    try:
+        if getattr(project, 'layout_mode', None) != 'freeform':
+            frames = _compute_plot_row_frames(project, layout_result)
+    except Exception:
+        frames = {}
+    try:
+        layout_result._plot_row_frames = frames
+    except Exception:
+        pass
+    return frames
+
+
+def _compute_plot_row_frames(project, layout_result) -> dict:
+    from src.model.layout_engine import LayoutEngine
+    from src.plot_editor.render import (
+        MIN_AXES_FRACTION, fit_plot_area, load_rendered_document)
+    from src.utils.plot_alignment import content_rect
+    rows = LayoutEngine._row_by_cell_id(project)
+    groups = {}
+    for cell in project.get_all_leaf_cells():
+        rect = layout_result.cell_rects.get(cell.id)
+        if rect is None:
+            continue
+        try:
+            if not plot_reflows(project, cell):
+                continue
+        except Exception:
+            continue
+        if cell.rotation % 360 != 0:
+            continue
+        crop = (cell.crop_left, cell.crop_top,
+                cell.crop_right, cell.crop_bottom)
+        if crop != (0.0, 0.0, 1.0, 1.0):
+            continue
+        key = (rows.get(cell.id), round(rect[1], 2),
+               round(rect[1] + rect[3], 2))
+        groups.setdefault(key, []).append((cell, rect))
+    frames = {}
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        try:
+            entries = []
+            for cell, rect in members:
+                cx, cy, cw, ch = content_rect(cell, rect,
+                                              project.layout_mode)
+                fw, fh = reflow_figure_size_mm(cell, cw, ch)
+                if fw <= 0 or fh <= 0:
+                    raise ValueError
+                pa = fit_plot_area(
+                    load_rendered_document(cell.image_path), fw, fh)
+                entries.append((cell, cy, fh,
+                                cy + pa[1] * fh, cy + pa[3] * fh))
+            shared_top = max(e[3] for e in entries)
+            shared_bottom = min(e[4] for e in entries)
+            if any(shared_bottom - shared_top < MIN_AXES_FRACTION * e[2]
+                   for e in entries):
+                continue
+            for cell, cy, fh, _top, _bottom in entries:
+                frames[cell.id] = (shared_top - cy, shared_bottom - cy)
+        except Exception:
+            continue
+    return frames
+
+
 def store_plot_document(document: PlotDocument,
                         root: Optional[str] = None) -> Tuple[str, PlotRender]:
     """Render *document* and store it as an immutable content-addressed file.
