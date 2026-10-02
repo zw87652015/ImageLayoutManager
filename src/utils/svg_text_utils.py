@@ -487,16 +487,50 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
 
     mm_per_unit = None
     if native_doc is not None:
-        mm_per_unit = svg_mm_per_unit(project, cell, base_bytes,
-                                      layout_result, content_size_mm)
-        if mm_per_unit > 0:
-            try:
-                from src.plot_editor.render import render_document
-                base_bytes = render_document(
-                    native_doc,
-                    style_scale=(25.4 / 72.0) / mm_per_unit).svg
-            except Exception:
-                pass  # fall back to the stored snapshot bytes
+        reflow = False
+        try:
+            from src.utils.editable_plot import plot_reflows, reflow_figure_size_mm
+            reflow = plot_reflows(project, cell)
+        except Exception:
+            reflow = False
+        handled = False
+        if reflow:
+            # Re-render at the exact content-area size: the figure fills the
+            # cell (any aspect) with true point sizes. mm_per_unit stays
+            # None so normalize/group steps recompute it from the new bytes.
+            clip_w = clip_h = 0.0
+            if content_size_mm is not None:
+                clip_w, clip_h = content_size_mm
+            else:
+                if layout_result is None:
+                    from src.model.layout_engine import LayoutEngine
+                    layout_result = LayoutEngine.calculate_layout(project)
+                rect = layout_result.cell_rects.get(cell.id)
+                if rect is not None:
+                    clip_w, clip_h = rect[2], rect[3]
+                    if project.layout_mode != 'freeform':
+                        clip_w -= cell.padding_left + cell.padding_right
+                        clip_h -= cell.padding_top + cell.padding_bottom
+            if clip_w > 0 and clip_h > 0:
+                handled = True
+                try:
+                    from src.plot_editor.render import render_document_fitted
+                    base_bytes = render_document_fitted(
+                        native_doc,
+                        *reflow_figure_size_mm(cell, clip_w, clip_h)).svg
+                except Exception:
+                    pass  # fall back to the stored snapshot bytes
+        if not handled:
+            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes,
+                                          layout_result, content_size_mm)
+            if mm_per_unit > 0:
+                try:
+                    from src.plot_editor.render import render_document
+                    base_bytes = render_document(
+                        native_doc,
+                        style_scale=(25.4 / 72.0) / mm_per_unit).svg
+                except Exception:
+                    pass  # fall back to the stored snapshot bytes
 
     if overrides:
         # A group size is points in the final figure, so convert it to the

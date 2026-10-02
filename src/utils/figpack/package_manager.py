@@ -32,8 +32,10 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import ntpath
 import os
 import platform
+import posixpath
 import shutil
 import sys
 import time
@@ -55,6 +57,7 @@ from src.utils.figpack.cache_manager import (
 )
 from src.utils.figpack.encoding import (
     asset_archive_path,
+    normalize_archive_name,
     sanitize_basename,
     to_nfc,
 )
@@ -1105,19 +1108,138 @@ def _stream_extract(
         raise
 
 
+def _resolve_path_key(p: str) -> str:
+    """Pure-lexical comparison key for a stored original path.
+
+    Windows forms (drive-letter ``X:\\…``, UNC ``\\\\server\\share\\…``
+    or any path containing ``\\``) are normalized case-insensitively;
+    POSIX forms keep case.
+    """
+    p = to_nfc(p)
+    if ("\\" in p or p.startswith("//")
+            or (len(p) >= 2 and p[1] == ":")):
+        return ntpath.normcase(ntpath.normpath(p))
+    return posixpath.normpath(p)
+
+
+def _mapped_tail(p: str):
+    """Return ``(form, normcased tail)`` for a drive-letter or UNC path.
+
+    ``form`` is ``"drive"`` or ``"unc"``; ``tail`` is the path below the
+    drive/share. Returns ``None`` for anything else or for tails shorter
+    than one directory plus a filename.
+    """
+    p = to_nfc(p)
+    drive, tail = ntpath.splitdrive(p)
+    if not drive or not tail.startswith(("\\", "/")):
+        return None
+    if drive.startswith("\\\\") or drive.startswith("//"):
+        form = "unc"
+    elif len(drive) == 2 and drive[1] == ":" and drive[0].isalpha():
+        form = "drive"
+    else:
+        return None
+    segs = [s for s in ntpath.normpath(tail).split("\\") if s]
+    if len(segs) < 2:
+        return None
+    return form, ntpath.normcase("\\".join(segs))
+
+
+def _paths_alias(a: Optional[str], b: Optional[str]) -> bool:
+    """True when one path is drive-letter absolute and the other UNC,
+    with an identical tail below the drive/share."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    ta, tb = _mapped_tail(a), _mapped_tail(b)
+    return (ta is not None and tb is not None
+            and ta[0] != tb[0] and ta[1] == tb[1])
+
+
 def _resolve_resource_paths(
     project_data: Dict[str, Any],
     manifest: Dict[str, Any],
     target_dir: str,
+    *,
+    extracted_names: Optional[set] = None,
 ) -> int:
     """In-place rewrite of ``"figpack:res_N"`` markers in
     ``project_data`` back to absolute on-disk paths.
+
+    Cells whose ``image_path`` is a plain (non-marker) path are matched
+    purely lexically against the manifest's ``original_source_path``
+    values — exact normalized key first, then ``original_source_path``
+    on the cell, then a unique mapped-drive↔UNC alias — so legacy
+    bundles whose stored absolute sources no longer exist still resolve
+    to their embedded bytes. No filesystem access is made on the
+    original paths. Unmatched non-marker paths are left untouched.
 
     Returns the number of cells whose resource was missing (and got
     ``image_path=None`` in the result).
     """
     target_real = os.path.realpath(target_dir)
     missing = 0
+
+    def exact_matches(key: Optional[str]):
+        if not isinstance(key, str) or not key:
+            return []
+        k = _resolve_path_key(key)
+        return [rid for rid, rec in manifest.items()
+                if isinstance(rec.get("original_source_path"), str)
+                and _resolve_path_key(rec["original_source_path"]) == k]
+
+    def alias_matches(key: Optional[str]):
+        return [rid for rid, rec in manifest.items()
+                if _paths_alias(key, rec.get("original_source_path"))]
+
+    def pick(cell) -> Optional[str]:
+        ip = cell.get("image_path")
+        if not isinstance(ip, str) or not ip:
+            return None
+        osp = cell.get("original_source_path")
+        for cands in (exact_matches(ip),
+                      exact_matches(osp),
+                      alias_matches(ip),
+                      alias_matches(osp)):
+            if len(cands) > 1:
+                raise BundleError(
+                    f"ambiguous resource: {ip!r} matches manifest "
+                    f"records {sorted(cands)}",
+                    code="ambiguous_resource",
+                )
+            if cands:
+                return cands[0]
+        return None
+
+    def apply(c, rec):
+        nonlocal missing
+        ap = rec.get("archive_path")
+        if rec.get("status") != "ok" or not ap:
+            c["image_path"] = None
+            # Sticky-pointer survives even when the byte
+            # contents are missing — user can re-link later.
+            c["original_source_path"] = rec.get("original_source_path")
+            missing += 1
+            return
+        ap = normalize_archive_name(ap)
+        dest = os.path.join(target_real, *ap.split("/"))
+        if extracted_names is not None:
+            present = ap in extracted_names
+        else:
+            real = os.path.realpath(dest)
+            present = (
+                os.path.isfile(dest)
+                and os.path.commonpath([real, target_real]) == target_real
+            )
+        if not present:
+            c["image_path"] = None
+            c["original_source_path"] = rec.get("original_source_path")
+            missing += 1
+            return
+        c["image_path"] = dest
+        # Pin the original path on the cell so a subsequent
+        # repack hashes by the *same* sticky key as the
+        # original pack (plan §6.5).
+        c["original_source_path"] = rec.get("original_source_path")
 
     def rewrite(cells):
         nonlocal missing
@@ -1129,25 +1251,15 @@ def _resolve_resource_paths(
                 if not rec:
                     c["image_path"] = None
                     missing += 1
-                elif rec.get("status") != "ok":
-                    c["image_path"] = None
-                    # Sticky-pointer survives even when the byte
-                    # contents are missing — user can re-link later.
-                    c["original_source_path"] = rec.get(
-                        "original_source_path"
-                    )
-                    missing += 1
                 else:
-                    ap = rec["archive_path"]
-                    c["image_path"] = os.path.join(
-                        target_real, *ap.split("/")
-                    )
-                    # Pin the original path on the cell so a subsequent
-                    # repack hashes by the *same* sticky key as the
-                    # original pack (plan §6.5).
-                    c["original_source_path"] = rec.get(
-                        "original_source_path"
-                    )
+                    apply(c, rec)
+            else:
+                rid = pick(c)
+                if rid is not None:
+                    apply(c, manifest[rid])
+            pips = c.get("pip_items")
+            if pips:
+                rewrite(pips)
             children = c.get("children")
             if children:
                 rewrite(children)
@@ -1263,7 +1375,10 @@ def unpack_project(
                 asset_count += 1
 
         # Rewrite project_data resource markers → real paths.
-        missing = _resolve_resource_paths(project_data, metadata.get("manifest", {}), target_real)
+        missing = _resolve_resource_paths(
+            project_data, metadata.get("manifest", {}), target_real,
+            extracted_names={ve.relpath for ve in file_entries},
+        )
 
         # Atomically remove the sentinel last — only after success.
         try:

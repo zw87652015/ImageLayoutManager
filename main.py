@@ -44,6 +44,7 @@ if __name__ == '__main__' and '--plot-editor' in sys.argv:
     sys.exit(_plot_main(_pe_argv))
 
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QSurfaceFormat
 from src.app.theme import build_palette, apply_font_scale, LIGHT
 from src.utils import crash_recovery
@@ -87,6 +88,7 @@ def main():
     apply_font_scale(app, _scale, LIGHT)
 
     window = MainWindow()
+    window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
     # Re-arm the crash hook with a rescue callback: on an unhandled
     # exception, every dirty tab is snapshotted to the recovery dir

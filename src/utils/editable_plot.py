@@ -19,7 +19,9 @@ import os
 from typing import Optional, Tuple
 
 from src.plot_editor.document import PlotDocument, has_plot_metadata
-from src.plot_editor.render import PlotRender, render_document
+from src.plot_editor.render import (
+    PlotRender, load_rendered_document, render_document,
+)
 from src.utils.figpack import cache_manager
 from src.utils.figpack.atomic_write import atomic_write_bytes
 
@@ -37,6 +39,44 @@ def is_editable_plot(path: Optional[str]) -> bool:
     if not path or not path.lower().endswith('.svg'):
         return False
     return has_plot_metadata(path)
+
+
+def plot_reflows(project, cell) -> bool:
+    """True when *cell* re-renders its native plot to fill the cell.
+
+    Locked-aspect cells and plot-alignment group members keep the fixed
+    ``style_scale`` behaviour; everything else gates on the file being a
+    loadable ``*.ilmplot.svg``.
+    """
+    path = getattr(cell, 'image_path', None)
+    if not path or getattr(cell, 'is_placeholder', False):
+        return False
+    if getattr(cell, 'aspect_ratio_locked', False):
+        return False
+    groups = getattr(project, 'plot_alignment_groups', None)
+    if isinstance(groups, list):
+        cid = getattr(cell, 'id', None)
+        for group in groups:
+            members = getattr(group, 'cell_ids', None)
+            if isinstance(members, list) and cid in members:
+                return False
+    if not is_editable_plot(path):
+        return False
+    try:
+        load_rendered_document(path)
+    except Exception:
+        return False
+    return True
+
+
+def reflow_figure_size_mm(cell, clip_w_mm: float, clip_h_mm: float):
+    """Unrotated figure size (mm) whose cropped/rotated view fills the clip."""
+    from src.utils.plot_alignment import rotate_box
+    rc = rotate_box((cell.crop_left, cell.crop_top,
+                     cell.crop_right, cell.crop_bottom), cell.rotation)
+    wr = clip_w_mm / (rc[2] - rc[0])
+    hr = clip_h_mm / (rc[3] - rc[1])
+    return (hr, wr) if cell.rotation % 180 else (wr, hr)
 
 
 def store_plot_document(document: PlotDocument,

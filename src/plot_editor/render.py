@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import re
 import tempfile
@@ -26,7 +27,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 from .document import (
-    MAX_FILE_BYTES, PlotDocument, PlotDocumentError, embed_metadata,
+    MAX_DIMENSION_MM, MAX_FILE_BYTES, PlotDocument, PlotDocumentError,
+    embed_metadata,
 )
 
 _HASHSALT = 'ilm-plot-editor-v1'
@@ -260,7 +262,7 @@ def _canonical(document: PlotDocument) -> str:
 
 
 _render_cache: OrderedDict = OrderedDict()
-_RENDER_CACHE_MAX = 32
+_RENDER_CACHE_MAX = 64
 
 
 def _deterministic_rc(document: PlotDocument) -> dict:
@@ -300,75 +302,20 @@ def render_document(document: PlotDocument, *,
         return hit
 
     import matplotlib
-    from matplotlib.figure import Figure
 
     s = float(style_scale)
     with matplotlib.rc_context(_deterministic_rc(document)):
-        fig = Figure(figsize=(document.width_mm / 25.4,
-                              document.height_mm / 25.4))
+        fig = None
         try:
-            ax = fig.add_axes(list(document.axes_rect))
-            for s_ in document.series:
-                line, = ax.plot(
-                    s_.x, s_.y,
-                    color=s_.color,
-                    linewidth=max(s_.linewidth_pt * s, 1e-3),
-                    linestyle=s_.linestyle if s_.linestyle else 'None',
-                    marker=s_.marker or None,
-                    markersize=max(s_.markersize_pt * s, 0.0),
-                    markeredgewidth=1.0 * s,
-                    label=s_.label or '_nolegend_',
-                )
-                line.set_gid(f'ilmplot-series-{s_.id}')
-            if document.xlim is not None:
-                ax.set_xlim(document.xlim)
-            if document.ylim is not None:
-                ax.set_ylim(document.ylim)
-            if document.title:
-                t = ax.set_title(document.title,
-                                 fontsize=document.title_size_pt * s,
-                                 pad=4.0 * s)
-                t.set_gid('ilmplot-title')
-            if document.xlabel:
-                xl = ax.set_xlabel(document.xlabel,
-                                   fontsize=document.font_size_pt * s)
-                xl.set_gid('ilmplot-xlabel')
-            if document.ylabel:
-                yl = ax.set_ylabel(document.ylabel,
-                                   fontsize=document.font_size_pt * s)
-                yl.set_gid('ilmplot-ylabel')
-            ax.tick_params(labelsize=document.font_size_pt * s,
-                           length=3.0 * s, width=0.8 * s,
-                           pad=3.0 * s)
-            for spine in ax.spines.values():
-                spine.set_linewidth(0.8 * s)
-            ax.xaxis.labelpad = 3.0 * s
-            ax.yaxis.labelpad = 3.0 * s
-            # Tick offset / scientific-notation text is not covered by
-            # tick_params labelsize — set it explicitly.
-            for axis in (ax.xaxis, ax.yaxis):
-                try:
-                    axis.get_offset_text().set_size(
-                        document.font_size_pt * s)
-                except Exception:
-                    pass
-            if document.grid:
-                ax.grid(True, linewidth=0.5 * s, alpha=0.4)
-            if document.legend:
-                handles = [l for l in ax.get_lines()
-                           if l.get_label()
-                           and not l.get_label().startswith('_')]
-                if handles:
-                    leg = ax.legend(loc=document.legend_location,
-                                    fontsize=document.font_size_pt * s)
-                    if leg is not None:
-                        leg.get_frame().set_linewidth(0.6 * s)
+            fig, ax = _build_figure(document, s, document.width_mm,
+                                    document.height_mm)
             buf = io.BytesIO()
             fig.savefig(buf, format='svg',
                         metadata={'Date': None,
                                   'Creator': 'ILM Plot Editor'})
         finally:
-            fig.clear()
+            if fig is not None:
+                fig.clear()
 
     svg = embed_metadata(
         _prepare_svg(buf.getvalue(), document.font_family), document)
@@ -378,6 +325,166 @@ def render_document(document: PlotDocument, *,
             f"reduce the number of data points")
     l, b, w, h = (float(v) for v in document.axes_rect)
     render = PlotRender(svg=svg, plot_area=(l, 1.0 - (b + h), l + w, 1.0 - b))
+    _render_cache[key] = render
+    if len(_render_cache) > _RENDER_CACHE_MAX:
+        _render_cache.popitem(last=False)
+    return render
+
+
+def _build_figure(document: PlotDocument, s: float,
+                  width_mm: float, height_mm: float):
+    """Build (Figure, Axes) for *document* at typography scale *s*."""
+    from matplotlib.figure import Figure
+    fig = Figure(figsize=(width_mm / 25.4, height_mm / 25.4))
+    ax = fig.add_axes(list(document.axes_rect))
+    for s_ in document.series:
+        line, = ax.plot(
+            s_.x, s_.y,
+            color=s_.color,
+            linewidth=max(s_.linewidth_pt * s, 1e-3),
+            linestyle=s_.linestyle if s_.linestyle else 'None',
+            marker=s_.marker or None,
+            markersize=max(s_.markersize_pt * s, 0.0),
+            markeredgewidth=1.0 * s,
+            label=s_.label or '_nolegend_',
+        )
+        line.set_gid(f'ilmplot-series-{s_.id}')
+    if document.xlim is not None:
+        ax.set_xlim(document.xlim)
+    if document.ylim is not None:
+        ax.set_ylim(document.ylim)
+    if document.title:
+        t = ax.set_title(document.title,
+                         fontsize=document.title_size_pt * s,
+                         pad=4.0 * s)
+        t.set_gid('ilmplot-title')
+    if document.xlabel:
+        xl = ax.set_xlabel(document.xlabel,
+                           fontsize=document.font_size_pt * s)
+        xl.set_gid('ilmplot-xlabel')
+    if document.ylabel:
+        yl = ax.set_ylabel(document.ylabel,
+                           fontsize=document.font_size_pt * s)
+        yl.set_gid('ilmplot-ylabel')
+    ax.tick_params(labelsize=document.font_size_pt * s,
+                   length=3.0 * s, width=0.8 * s,
+                   pad=3.0 * s)
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.8 * s)
+    ax.xaxis.labelpad = 3.0 * s
+    ax.yaxis.labelpad = 3.0 * s
+    # Tick offset / scientific-notation text is not covered by
+    # tick_params labelsize — set it explicitly.
+    for axis in (ax.xaxis, ax.yaxis):
+        try:
+            axis.get_offset_text().set_size(
+                document.font_size_pt * s)
+        except Exception:
+            pass
+    if document.grid:
+        ax.grid(True, linewidth=0.5 * s, alpha=0.4)
+    if document.legend:
+        handles = [l for l in ax.get_lines()
+                   if l.get_label()
+                   and not l.get_label().startswith('_')]
+        if handles:
+            leg = ax.legend(loc=document.legend_location,
+                            fontsize=document.font_size_pt * s)
+            if leg is not None:
+                leg.get_frame().set_linewidth(0.6 * s)
+    return fig, ax
+
+
+FIT_PAD_MM = 0.5
+MIN_AXES_FRACTION = 0.2
+
+
+def _fit_axes(fig, ax, pad_px: float) -> None:
+    """Reposition *ax* so nothing outside the axes box is clipped.
+
+    Iterates a margin-feedback loop: each pass shrinks the axes rect by the
+    measured overflow of tick labels, axis labels, title, offset text and
+    legend plus *pad_px*, until every edge moves under 0.05 px (or 4
+    passes).  Typography is never scaled down — when the text does not fit,
+    the axes clamps to ``MIN_AXES_FRACTION`` of the figure instead.
+    """
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    FigureCanvasAgg(fig)
+    renderer = fig.canvas.get_renderer()
+    W = fig.get_figwidth() * fig.dpi
+    H = fig.get_figheight() * fig.dpi
+    for _ in range(4):
+        pos = ax.get_window_extent(renderer)
+        tight = ax.get_tightbbox(renderer)
+        left = max(pos.x0 - tight.x0, 0.0)
+        right = max(tight.x1 - pos.x1, 0.0)
+        bottom = max(pos.y0 - tight.y0, 0.0)
+        top = max(tight.y1 - pos.y1, 0.0)
+        x0, x1 = left + pad_px, W - right - pad_px
+        y0, y1 = bottom + pad_px, H - top - pad_px
+        if x1 - x0 < MIN_AXES_FRACTION * W:
+            spare = (1.0 - MIN_AXES_FRACTION) * W
+            denom = left + pad_px + right + pad_px
+            x0 = spare * ((left + pad_px) / denom) if denom > 0 else spare * 0.5
+            x1 = x0 + MIN_AXES_FRACTION * W
+        if y1 - y0 < MIN_AXES_FRACTION * H:
+            spare = (1.0 - MIN_AXES_FRACTION) * H
+            denom = bottom + pad_px + top + pad_px
+            y0 = spare * ((bottom + pad_px) / denom) if denom > 0 else spare * 0.5
+            y1 = y0 + MIN_AXES_FRACTION * H
+        if max(abs(x0 - pos.x0), abs(x1 - pos.x1),
+               abs(y0 - pos.y0), abs(y1 - pos.y1)) < 0.05:
+            break
+        ax.set_position([x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H])
+
+
+def render_document_fitted(document: PlotDocument, width_mm: float,
+                           height_mm: float, *,
+                           pad_mm: float = FIT_PAD_MM) -> PlotRender:
+    """Render *document* at exactly ``width_mm`` × ``height_mm``.
+
+    Unlike :func:`render_document` the figure is sized to the target box
+    (style scale 1.0, so point sizes are true) and the axes rectangle is
+    solved by :func:`_fit_axes` so no text is clipped.  The embedded
+    metadata carries the *original* document, not the fitted geometry.
+    """
+    document.validate()
+    w, h = float(width_mm), float(height_mm)
+    for name, v in (('width_mm', w), ('height_mm', h)):
+        if not math.isfinite(v) or v <= 0 or v > MAX_DIMENSION_MM:
+            raise PlotDocumentError(
+                f"{name}: expected 0 < value <= {MAX_DIMENSION_MM} mm, "
+                f"got {v!r}")
+    w, h = round(w, 2), round(h, 2)
+    key = ('fitted', _canonical(document), w, h, float(pad_mm))
+    hit = _render_cache.get(key)
+    if hit is not None:
+        _render_cache.move_to_end(key)
+        return hit
+
+    import matplotlib
+    with matplotlib.rc_context(_deterministic_rc(document)):
+        fig = None
+        try:
+            fig, ax = _build_figure(document, 1.0, w, h)
+            _fit_axes(fig, ax, float(pad_mm) / 25.4 * fig.dpi)
+            pos = ax.get_position()
+            buf = io.BytesIO()
+            fig.savefig(buf, format='svg',
+                        metadata={'Date': None,
+                                  'Creator': 'ILM Plot Editor'})
+        finally:
+            if fig is not None:
+                fig.clear()
+
+    svg = embed_metadata(
+        _prepare_svg(buf.getvalue(), document.font_family), document)
+    if len(svg) > MAX_FILE_BYTES:
+        raise PlotDocumentError(
+            f"rendered SVG exceeds {MAX_FILE_BYTES // (1024 * 1024)} MiB — "
+            f"reduce the number of data points")
+    render = PlotRender(
+        svg=svg, plot_area=(pos.x0, 1.0 - pos.y1, pos.x1, 1.0 - pos.y0))
     _render_cache[key] = render
     if len(_render_cache) > _RENDER_CACHE_MAX:
         _render_cache.popitem(last=False)
