@@ -3,6 +3,14 @@
 Headless driver for ImageLayoutManager. Same renderer as the GUI's
 `File → Export`, no display server required.
 
+> **macOS:** the CLI ships inside the app bundle at
+> `/Applications/ImageLayoutManager.app/Contents/MacOS/imagelayout-cli`
+> (no `.exe` suffix). Add an alias to use it like the examples below:
+>
+> ```sh
+> alias imagelayout-cli=/Applications/ImageLayoutManager.app/Contents/MacOS/imagelayout-cli
+> ```
+
 ## Verbs
 
 | Verb      | Purpose                                                         |

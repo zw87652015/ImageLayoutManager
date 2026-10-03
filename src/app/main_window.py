@@ -3296,8 +3296,8 @@ class MainWindow(QMainWindow):
                 subtype="corner",
                 parent_id=cell.id,
                 anchor=anchor,
-                offset_x=2.0,
-                offset_y=2.0,
+                offset_x=0.0,
+                offset_y=0.0,
             )
             cmd = AddTextCommand(self.project, item, self._refresh_and_update)
             self.undo_stack.push(cmd)
@@ -4446,8 +4446,8 @@ class MainWindow(QMainWindow):
             scope="cell",
             parent_id=cell_id,
             anchor="top_left_inside",
-            offset_x=2.0,
-            offset_y=2.0,
+            offset_x=0.0,
+            offset_y=0.0,
         )
         cmd = AddTextCommand(self.project, item, self._refresh_and_update)
         self.undo_stack.push(cmd)
@@ -4478,8 +4478,8 @@ class MainWindow(QMainWindow):
                 subtype="corner",
                 parent_id=cell_id,
                 anchor=anchor,
-                offset_x=2.0,
-                offset_y=2.0,
+                offset_x=0.0,
+                offset_y=0.0,
             )
             cmd = AddTextCommand(self.project, item, self._refresh_and_update)
             self.undo_stack.push(cmd)

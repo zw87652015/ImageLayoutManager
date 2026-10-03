@@ -1379,7 +1379,7 @@ class Inspector(QWidget):
         self.label_size.setRange(0.1, 1000.0)
         self.label_size.setDecimals(2)
         self.label_size.setSingleStep(0.5)
-        self.label_size.setValue(8.0)
+        self.label_size.setValue(12.0)
         self.label_size.valueChanged.connect(
             lambda v: self._emit_label_cell_change({"font_size_pt": v})
         )

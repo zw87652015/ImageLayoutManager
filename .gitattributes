@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+# Vendored license texts must stay byte-exact: build_licenses.py pins
+# their sha256 in licenses/origins.json, so line-ending normalization
+# (e.g. CRLF on Windows checkouts) would break the verification.
+licenses/** -text

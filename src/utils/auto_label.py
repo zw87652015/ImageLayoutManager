@@ -32,24 +32,23 @@ def _make_label(cell, text: str, project: Project, rects: dict):
     if cell.id not in rects:
         return None
     x, y, _w, _h = rects[cell.id]
-    offset = 2.0
     style = project.label_style_fields("panel")
-    font_size = style["font_size_pt"] if style["font_size_pt"] > 0 else 10.0
+    font_size = style["font_size_pt"] if style["font_size_pt"] > 0 else 12.0
     return TextItem(
         text=text,
         font_family=style["font_family"],
         font_size_pt=font_size,
         font_weight=style["font_weight"],
         color=style["color"],
-        x=x + offset,
-        y=y + offset,
+        x=x,
+        y=y,
         scope="cell",
         subtype="numbering",
         parent_id=cell.id,
         label_tier="panel",
         anchor="top_left_inside",
-        offset_x=offset,
-        offset_y=offset,
+        offset_x=0.0,
+        offset_y=0.0,
     )
 
 

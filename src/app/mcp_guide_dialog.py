@@ -13,15 +13,20 @@ from src.app.i18n import tr, current_language
 
 _CLAUDE_DESKTOP_CONFIG = "claude_desktop_config.json"
 
+# Bundled CLI executable name: ``imagelayout-cli.exe`` on Windows,
+# plain ``imagelayout-cli`` inside the macOS app bundle's Contents/MacOS.
+_CLI_NAME = "imagelayout-cli.exe" if sys.platform == "win32" else "imagelayout-cli"
+
 
 def _mcp_command_and_args() -> tuple[str, list[str]]:
     """Return (command, args) for the MCP server config.
 
-    Frozen exe: ``imagelayout-cli.exe mcp`` (ships alongside the GUI exe).
+    Frozen exe: ``<cli> mcp`` — ``imagelayout-cli.exe`` on Windows,
+    ``imagelayout-cli`` on macOS (ships alongside the GUI exe).
     Source:     ``python src/cli/main.py mcp``.
     """
     if getattr(sys, "frozen", False):
-        cli_exe = str(Path(sys.executable).parent / "imagelayout-cli.exe")
+        cli_exe = str(Path(sys.executable).parent / _CLI_NAME)
         return cli_exe, ["mcp"]
     cli_main = str(Path(__file__).resolve().parents[2] / "src" / "cli" / "main.py")
     return sys.executable, [cli_main, "mcp"]
@@ -267,10 +272,10 @@ AI 助手  ── stdio (MCP) ──►  ImageLayoutManager --mcp  ── WebSoc
 
 def _format_html(html: str) -> str:
     if getattr(sys, "frozen", False):
-        cli = str(Path(sys.executable).parent / "imagelayout-cli.exe")
+        cli = str(Path(sys.executable).parent / _CLI_NAME)
         cli = cli.replace("\\", "/")
     else:
-        cli = "&lt;install-path&gt;/imagelayout-cli.exe"
+        cli = f"&lt;install-path&gt;/{_CLI_NAME}"
     example = {"command": cli, "args": ["mcp"]}
     entry_json = json.dumps(example, indent=6, ensure_ascii=False)
     return html.format(entry_json=entry_json)
