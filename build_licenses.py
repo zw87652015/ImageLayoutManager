@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+import sysconfig
 import tempfile
 import zipfile
 from importlib import metadata
@@ -426,12 +427,19 @@ def _python_interpreter_license():
 
     Windows/conda and python.org installs ship ``LICENSE.txt`` at the
     prefix; Homebrew instead stores it as ``LICENSE`` at the formula
-    prefix, several levels above ``sys.base_prefix``.  Candidates are
-    validated against a PSF marker so an unrelated ``LICENSE`` (e.g.
-    the application's own Apache-2.0 text) is never picked up.
+    prefix, several levels above ``sys.base_prefix``.  Some
+    distributions place the license inside the standard-library
+    directory reported by ``sysconfig.get_path('stdlib')`` (e.g.
+    ``lib/python3.13/LICENSE.txt``), which is not necessarily under
+    either prefix.  Prefix candidates are preferred; the stdlib
+    directory is tried last.  Candidates are validated against a PSF
+    marker so an unrelated ``LICENSE`` (e.g. the application's own
+    Apache-2.0 text) is never picked up.
     """
     seen = set()
-    for base in (Path(sys.base_prefix), Path(sys.prefix)):
+    bases = (Path(sys.base_prefix), Path(sys.prefix))
+    stdlib = Path(sysconfig.get_path('stdlib'))
+    for base in bases:
         candidates = [base / name for name in
                       ('LICENSE_PYTHON.txt', 'LICENSE.txt', 'LICENSE')]
         candidates += [parent / 'LICENSE' for parent in base.parents]
@@ -447,6 +455,19 @@ def _python_interpreter_license():
                 continue
             if b'Python Software Foundation' in head:
                 return p
+    for name in ('LICENSE_PYTHON.txt', 'LICENSE.txt', 'LICENSE'):
+        p = stdlib / name
+        if p in seen:
+            continue
+        seen.add(p)
+        if not p.is_file():
+            continue
+        try:
+            head = p.read_bytes()[:4096]
+        except OSError:
+            continue
+        if b'Python Software Foundation' in head:
+            return p
     return None
 
 
@@ -537,7 +558,11 @@ def prepare_licenses(project_root: Path = ROOT,
 
     python_license = _python_interpreter_license()
     if python_license is None:
-        raise RuntimeError('Python interpreter license file not found.')
+        raise RuntimeError(
+            'Python interpreter license file not found. Searched '
+            f'sys.base_prefix={sys.base_prefix}, '
+            f'sys.prefix={sys.prefix} and the standard library at '
+            f'{sysconfig.get_path("stdlib")}.')
     py_dir = staging / 'python'
     py_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(python_license, py_dir / python_license.name)
