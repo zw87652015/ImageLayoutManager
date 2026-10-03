@@ -28,6 +28,8 @@ from .worksheet import (DESIGNATION_TEXT, META_LABELS, META_ROWS,
 
 _META_KEYS = ('meta_long_name', 'meta_units', 'meta_comments')
 _DESIGNATION_KEYS = {'xErr': 'design_xerr', 'yErr': 'design_yerr',
+                     'yErrPlus': 'design_yerr_plus',
+                     'yErrMinus': 'design_yerr_minus',
                      'Label': 'design_label',
                      'Disregard': 'design_disregard'}
 

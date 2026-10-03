@@ -21,13 +21,15 @@ import sys
 
 from PyQt6.QtCore import QProcess, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
-from PyQt6.QtWidgets import (QFileDialog, QMainWindow, QMenu, QMessageBox,
+from PyQt6.QtWidgets import (QDialog, QFileDialog, QMainWindow, QMenu,
+                             QMessageBox,
                              QSizePolicy, QTabWidget, QToolBar,
                              QToolButton, QWidget)
 
 from src.app.motion import install_button_feedback
 
-from . import chrome
+from . import chrome, palettes, presets, theme_store
+from .about_dialog import PlotEditorAboutDialog
 from .actions import (ACTIONS, CHART_GROUPS, DEFAULT_CHART, EDIT_MENU,
                       EXPORT_MENU, FILE_MENU, HELP_MENU,
                       NATIVE_PLOT_FILTER, NATIVE_PLOT_SUFFIX)
@@ -58,9 +60,17 @@ class PlotEditorWindow(QMainWindow):
         self.native_plot_filter = NATIVE_PLOT_FILTER
         self._export_dir = os.path.expanduser('~')
         self._file_dir = os.path.expanduser('~')
+        self._import_dir = os.path.expanduser('~')
         self._untitled = 0
         self._theme = chrome.saved_theme()
         self._scale = chrome.saved_font_scale()
+        # One preset store shared by the tabs' Style menus and the
+        # Plot Style manager.
+        self.preset_store = presets.PresetStore(chrome.preset_root())
+        # Custom colour themes ('custom:<name>' palette refs) resolve
+        # through palettes' registry, refreshed after theme edits.
+        self.theme_store = theme_store.ThemeStore(chrome.theme_root())
+        palettes.set_custom_themes(self.theme_store.mapping())
         self.resize(960, 640)
 
         self.tabs = QTabWidget()
@@ -129,9 +139,17 @@ class PlotEditorWindow(QMainWindow):
         return self.current_tab().plot_canvas
 
     def _add_tab(self, worksheet=None):
-        tab = PlotTab(self._theme, self._scale, worksheet)
-        self._untitled += 1
-        tab.title = tr('untitled', n=self._untitled)
+        tab = PlotTab(self._theme, self._scale, worksheet,
+                      preset_store=self.preset_store,
+                      open_style_manager=self._open_style_manager)
+        if self.tabs.count() == 0:
+            # Fresh window or last-tab replacement: plain 'Untitled',
+            # and the counter restarts so it never creeps upward.
+            self._untitled = 0
+            tab.title = tr('untitled_plain')
+        else:
+            self._untitled += 1
+            tab.title = tr('untitled', n=self._untitled)
         tab.changed.connect(self._sync_tab)
         self.tabs.addTab(tab, tab.title)
         self.tabs.setCurrentWidget(tab)
@@ -162,9 +180,21 @@ class PlotEditorWindow(QMainWindow):
             ws.redo_label)) if ws.can_redo else tr('tip_redo'))
 
     def _sync_export_actions(self):
-        ready = self.current_tab().plot is not None
+        tab = self.current_tab()
+        ready = tab.plot is not None
         for key in EXPORT_MENU:
             self.editor_actions[key].setEnabled(ready)
+        self.editor_actions['add_note'].setEnabled(ready)
+        bracket_ok = False
+        if ready:
+            from .export import CHART_KIND
+            kind = CHART_KIND.get(tab.plot.chart_key,
+                                  ('line', None))[0]
+            if kind in ('violin', 'stacked_column'):
+                doc = tab.effective_document()
+                bracket_ok = doc is not None and len(
+                    doc.groups or doc.categories) >= 2
+        self.editor_actions['add_bracket'].setEnabled(bracket_ok)
         self._export_button.setEnabled(ready)
         self._export_button.setIcon(chrome.themed_icon(
             'export', self._theme, 'on_accent' if ready else 'text_tert'))
@@ -184,6 +214,8 @@ class PlotEditorWindow(QMainWindow):
             self._save(tab)
         elif key == 'save_as':
             self._save_as(tab)
+        elif key == 'import_data':
+            self._import_data()
         elif key == 'undo':
             view.undo()
         elif key == 'redo':
@@ -198,6 +230,16 @@ class PlotEditorWindow(QMainWindow):
             view.clear_selection_contents()
         elif key == 'select_all':
             view.select_all()
+        elif key == 'style':
+            self._open_style_manager()
+        elif key == 'tutorials':
+            self.show_tutorials()
+        elif key == 'about':
+            self._show_about()
+        elif key == 'add_note':
+            tab.add_text()
+        elif key == 'add_bracket':
+            tab.add_bracket()
         elif key == 'plot':
             self.plot_requested.emit(*self.current_chart)
             self._plot(*self.current_chart)
@@ -212,6 +254,45 @@ class PlotEditorWindow(QMainWindow):
             self._close_tab(self.tabs.indexOf(tab))
         elif key == 'quit':
             self.close()
+
+    def _show_about(self):
+        """Help → About Plot Editor."""
+        PlotEditorAboutDialog(self._theme, self._scale, self).exec()
+
+    def show_tutorials(self):
+        """Help → Tutorials…: the lesson chooser (created lazily)."""
+        if getattr(self, '_tutorials', None) is None:
+            from .tutorial import TutorialController
+            self._tutorials = TutorialController(self)
+        self._tutorials.show_chooser()
+
+    def _open_style_manager(self):
+        from .style_manager import StyleManagerDialog
+        dialog = StyleManagerDialog(self.preset_store, self.current_tab(),
+                                    self._theme, self._scale, self)
+        dialog.exec()
+
+    def open_theme_editor(self):
+        """Colour Theme ▸ Edit… — manage custom palettes."""
+        from .theme_editor import ThemeEditorDialog
+        dialog = ThemeEditorDialog(self.theme_store, self._theme, self,
+                                   on_change=self._themes_changed)
+        dialog.exec()
+
+    def _themes_changed(self):
+        """Reinstall the custom-theme registry and re-render open plots
+        that may reference edited themes."""
+        from . import style_icons
+        palettes.set_custom_themes(self.theme_store.mapping())
+        style_icons.clear_cache()
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if tab.plot is not None:
+                try:
+                    tab._render_preview()
+                except Exception:
+                    pass
+        self._sync_tab()
 
     def _select_chart(self, group_key, chart_key, emit=True):
         self.current_chart = (group_key, chart_key)
@@ -246,8 +327,17 @@ class PlotEditorWindow(QMainWindow):
         return [u.toLocalFile() for u in mime_data.urls()
                 if u.isLocalFile() and is_native_plot_path(u.toLocalFile())]
 
+    @staticmethod
+    def _drop_data_paths(mime_data):
+        from .import_dialog import is_data_path
+        if not mime_data.hasUrls():
+            return []
+        return [u.toLocalFile() for u in mime_data.urls()
+                if u.isLocalFile() and is_data_path(u.toLocalFile())]
+
     def dragEnterEvent(self, event):
-        if self._drop_plot_paths(event.mimeData()):
+        if self._drop_plot_paths(event.mimeData()) \
+                or self._drop_data_paths(event.mimeData()):
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -257,11 +347,56 @@ class PlotEditorWindow(QMainWindow):
 
     def dropEvent(self, event):
         paths = self._drop_plot_paths(event.mimeData())
-        if not paths:
+        if paths:
+            event.acceptProposedAction()
+            self.open_paths(paths)
+            return
+        data = self._drop_data_paths(event.mimeData())
+        if not data:
             event.ignore()
             return
         event.acceptProposedAction()
-        self.open_paths(paths)
+        self._import_path(data[0])
+
+    # ── data import ──────────────────────────────────────────────────
+    def _import_data(self):
+        filters = '%s;;%s;;%s' % (tr('imp_filter_data'),
+                                  tr('imp_filter_excel'),
+                                  tr('imp_filter_all'))
+        path, _f = QFileDialog.getOpenFileName(
+            self, tr('dlg_import'), self._import_dir, filters)
+        if path:
+            self._import_dir = os.path.dirname(os.path.abspath(path))
+            self._import_path(path)
+
+    def _import_path(self, path):
+        from .import_dialog import ImportDialog
+        from .worksheet import Worksheet, WorksheetLimitError
+        tab = self.current_tab()
+        ws = tab.worksheet
+        has_data = ws.row_count > 0 or any(
+            c.long_name or c.units or c.comments for c in ws.columns)
+        dialog = ImportDialog(path, has_data, self._theme, self._scale,
+                              self)
+        if dialog.exec() != QDialog.DialogCode.Accepted \
+                or not dialog.columns:
+            return
+        columns = dialog.columns
+        if dialog.destination == 'new_tab':
+            new_tab = self._add_tab(Worksheet.from_columns(columns))
+            new_tab.title = os.path.splitext(
+                os.path.basename(path))[0]
+            new_tab.dirty = True
+            new_tab.changed.emit()
+            self._sync_tab()
+            return
+        try:
+            if dialog.destination == 'append':
+                ws.append_columns(columns)
+            else:
+                ws.replace_all(columns)
+        except (WorksheetLimitError, ValueError) as e:
+            QMessageBox.warning(self, tr('dlg_import'), str(e))
 
     def _open_dialog(self):
         paths, _f = QFileDialog.getOpenFileNames(
@@ -284,11 +419,20 @@ class PlotEditorWindow(QMainWindow):
                 tr('msg_open_failed', name=os.path.basename(path),
                    error=e))
             return
-        self._load_into_tab(pf, path)
+        tab = self._load_into_tab(pf, path)
+        if pf.read_only_source:
+            # The worksheet node could not be read and was rebuilt —
+            # detach so the original file cannot be overwritten.
+            tab.detach(tab.title)
+            if pf.warnings:
+                QMessageBox.information(
+                    self, tr('dlg_open'), '\n'.join(pf.warnings))
         self._file_dir = os.path.dirname(os.path.abspath(path))
 
     def _load_into_tab(self, pf, path):
-        tab = PlotTab(self._theme, self._scale, pf.worksheet)
+        tab = PlotTab(self._theme, self._scale, pf.worksheet,
+                      preset_store=self.preset_store,
+                      open_style_manager=self._open_style_manager)
         tab.changed.connect(self._sync_tab)
         tab.load(pf, path)
         current = self.current_tab()
@@ -343,6 +487,9 @@ class PlotEditorWindow(QMainWindow):
                 tr('msg_save_failed', error=e))
             return False
         self._file_dir = os.path.dirname(os.path.abspath(path))
+        tutorials = getattr(self, '_tutorials', None)
+        if tutorials is not None:
+            tutorials.on_saved(tab)
         return True
 
     def _export(self, tab, key):
@@ -432,8 +579,15 @@ class PlotEditorWindow(QMainWindow):
                 submenu.addAction(self.chart_actions[(group.key,
                                                       chart.key)])
         plot_menu.addSeparator()
-        for key in ('edit_data', 'axes', 'legend', 'style'):
-            plot_menu.addAction(self.editor_actions[key])
+        plot_menu.addAction(self.editor_actions['add_note'])
+        plot_menu.addAction(self.editor_actions['add_bracket'])
+        plot_menu.addSeparator()
+        self._theme_menu = plot_menu.addMenu(tr('menu_colour_theme'))
+        self._theme_menu.aboutToShow.connect(
+            lambda: self.current_tab().fill_theme_menu(
+                self._theme_menu))
+        plot_menu.addSeparator()
+        plot_menu.addAction(self.editor_actions['style'])
 
         help_menu = bar.addMenu(tr('menu_help'))
         self._add_menu_items(help_menu, HELP_MENU)

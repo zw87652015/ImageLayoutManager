@@ -29,6 +29,10 @@ WORKSHEET_METADATA_ID = 'ilm-plot-worksheet'
 WORKSHEET_FORMAT = 'ilm-plot-worksheet'
 WORKSHEET_SCHEMA_VERSION = 2
 
+# Optional-feature ids the worksheet reader understands beyond the
+# baseline; writers stamp theirs into the payload's ``requires``.
+WORKSHEET_CAPABILITIES = frozenset()
+
 _CHART_KEYS = {c.key for g in CHART_GROUPS for c in g.charts}
 _COLUMN_KEYS = ('designation', 'long_name', 'units', 'comments', 'values')
 
@@ -50,9 +54,15 @@ class PlotFile:
     plot_columns: tuple
     has_worksheet: bool
     overrides: 'PlotOverrides | None' = None
+    # Translated load warnings (e.g. a worksheet node that could not be
+    # read and was rebuilt from the document).
+    warnings: tuple = ()
+    # True when the source file must not be written back (rebuilt sheet).
+    read_only_source: bool = False
 
 
-def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None):
+def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None,
+                      for_save=False):
     columns = []
     for col in ws.columns:
         values = list(col.values)
@@ -68,6 +78,9 @@ def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None):
          'chart': chart_key,
          'plot_columns': list(plot_columns),
          'columns': columns}
+    if for_save:
+        from src.version import APP_VERSION
+        d['generator'] = 'ILM %s' % APP_VERSION
     if overrides is not None:
         od = overrides.to_dict()
         if od:
@@ -98,11 +111,23 @@ def worksheet_from_dict(data):
         raise _err('%s.schema_version: unsupported %r (this version '
                    'supports %d)' % (ctx, sv, WORKSHEET_SCHEMA_VERSION))
     allowed = {'format', 'schema_version', 'chart', 'plot_columns',
-               'columns'} | ({'overrides'} if sv >= 2 else set())
+               'columns', 'requires', 'generator'} \
+        | ({'overrides'} if sv >= 2 else set())
     unknown = sorted(set(data) - allowed)
     if unknown:
         raise _err('%s: unknown field(s) %s — file may need a newer '
                    'version' % (ctx, unknown))
+    from .document import _check_requires
+    req = _check_requires(data.get('requires'), '%s.requires' % ctx)
+    missing = sorted(set(req) - WORKSHEET_CAPABILITIES)
+    if missing:
+        raise _err('%s.requires: unsupported capabilities %s '
+                   '(file needs a newer version)' % (ctx, missing))
+    gen = data.get('generator')
+    if gen is not None and (not isinstance(gen, str)
+                            or len(gen) > 100):
+        raise _err('%s.generator: expected a string of at most 100 '
+                   'characters' % ctx)
     chart = data.get('chart')
     if chart is not None and chart not in _CHART_KEYS:
         raise _err('%s.chart: unknown chart type %r' % (ctx, chart))
@@ -185,11 +210,39 @@ def _tick_lookup(doc):
 
 
 def worksheet_from_document(doc):
-    """Rebuild a worksheet from a document: shared-x dedupe → X,Y[,X,Y…].
+    """Rebuild a worksheet from a document (wide format, per kind).
 
-    When ``doc.x_tick_labels`` covers every x of a series, its X column
-    becomes a ``Label`` column holding the tick strings for its x values.
+    Line/ridgeline: shared-x dedupe → X,Y[,X,Y…]; a ``doc.x_tick_labels``
+    covering every x of a series turns its X column into a ``Label``
+    column. Violin: one Y column per group. Stacked: a Label column of
+    bar names plus one Y per category.
     """
+    if doc.kind == 'violin':
+        y_name, y_units = split_axis_title(doc.ylabel)
+        return Worksheet.from_columns([
+            Column('Y', long_name=y_name if i == 0 else '',
+                   units=y_units if i == 0 else '',
+                   comments=g.label, values=list(g.values))
+            for i, g in enumerate(doc.groups)])
+    if doc.kind == 'stacked_column':
+        tick_map = _tick_lookup(doc)
+        n = len(doc.categories[0].values)
+        names = [tick_map.get(i, str(i)) for i in range(n)]
+        x_name, x_units = split_axis_title(doc.xlabel)
+        columns = [Column('Label', long_name=x_name, units=x_units,
+                          values=names)]
+        for c in doc.categories:
+            columns.append(Column('Y', comments=c.label,
+                                  values=list(c.values)))
+            if c.yerr is not None:
+                columns.append(Column('yErr', values=list(c.yerr)))
+            if c.yerr_minus is not None:
+                columns.append(Column('yErrMinus',
+                                      values=list(c.yerr_minus)))
+            if c.yerr_plus is not None:
+                columns.append(Column('yErrPlus',
+                                      values=list(c.yerr_plus)))
+        return Worksheet.from_columns(columns)
     columns = []
     last_x = None
     tick_map = _tick_lookup(doc)
@@ -206,6 +259,14 @@ def worksheet_from_document(doc):
             columns.append(last_x)
         columns.append(Column('Y', long_name=y_name, units=y_units,
                               comments=s.label, values=list(s.y)))
+        if s.yerr is not None:
+            columns.append(Column('yErr', values=list(s.yerr)))
+        if s.yerr_minus is not None:
+            columns.append(Column('yErrMinus',
+                                  values=list(s.yerr_minus)))
+        if s.yerr_plus is not None:
+            columns.append(Column('yErrPlus',
+                                  values=list(s.yerr_plus)))
     return Worksheet.from_columns(columns)
 
 
@@ -217,11 +278,49 @@ def series_from_document(doc):
         if tick_map and all(v in tick_map for v in s.x):
             labels = tuple(tick_map[v] for v in s.x)
         out.append(Series(tuple(s.x), tuple(s.y), s.label,
-                          doc.xlabel, doc.ylabel, labels))
+                          doc.xlabel, doc.ylabel, labels,
+                          yerr=tuple(s.yerr) if s.yerr is not None
+                          else None,
+                          yerr_minus=tuple(s.yerr_minus)
+                          if s.yerr_minus is not None else None,
+                          yerr_plus=tuple(s.yerr_plus)
+                          if s.yerr_plus is not None else None))
     return out
 
 
+def items_from_document(doc):
+    """Fallback items for a document whose worksheet can't rebuild."""
+    from .plot_data import Category, Group
+    if doc.kind == 'violin':
+        return [Group(tuple(g.values), g.label,
+                      doc.xlabel, doc.ylabel)
+                for g in doc.groups]
+    if doc.kind == 'stacked_column':
+        tick_map = _tick_lookup(doc)
+        n = len(doc.categories[0].values)
+        bar_labels = tuple(tick_map.get(i, str(i)) for i in range(n))
+        return [Category(tuple(c.values), c.label,
+                         doc.xlabel, doc.ylabel, bar_labels,
+                         yerr=tuple(c.yerr) if c.yerr is not None
+                         else None,
+                         yerr_minus=tuple(c.yerr_minus)
+                         if c.yerr_minus is not None else None,
+                         yerr_plus=tuple(c.yerr_plus)
+                         if c.yerr_plus is not None else None)
+                for c in doc.categories]
+    return series_from_document(doc)
+
+
 def chart_from_document(doc):
+    if doc.kind == 'violin':
+        return 'violin'
+    if doc.kind == 'ridgeline':
+        return 'ridgeline'
+    if doc.kind == 'stacked_column':
+        if doc.stacked is not None and doc.stacked.grouped:
+            return 'column'
+        pct = doc.stacked.percent if doc.stacked is not None else True
+        return 'stacked_column_pct' if pct else 'stacked_column'
     s = doc.series[0]
     if not s.linestyle:
         return 'pure_scatters'
@@ -242,7 +341,8 @@ def save_plot_file(path, document, worksheet, chart_key, plot_columns,
     """Atomically write the SVG with both metadata nodes."""
     svg = render.render_document(document).svg
     payload = json.dumps(
-        worksheet_to_dict(worksheet, chart_key, plot_columns, overrides),
+        worksheet_to_dict(worksheet, chart_key, plot_columns, overrides,
+                          for_save=True),
         ensure_ascii=False, allow_nan=False, separators=(',', ':'))
     render._register_namespaces(svg)
     root = ET.fromstring(svg)
@@ -261,11 +361,25 @@ def save_plot_file(path, document, worksheet, chart_key, plot_columns,
     if len(data) > MAX_FILE_BYTES:
         raise _err('plot file too large (> %d MiB)'
                    % (MAX_FILE_BYTES // (1024 * 1024)))
+    # Verify the exact bytes before touching the file: both metadata
+    # nodes must re-parse with this reader.
+    try:
+        document_from_svg(data)
+        worksheet_from_dict(json.loads(payload))
+    except Exception as e:
+        from .i18n import tr
+        raise _err(tr('err_save_verify', error=e))
     _atomic_write(path, lambda fh: fh.write(data))
 
 
 def load_plot_file(path):
-    """Read an ``*.ilmplot.svg``; worksheet node optional (strict if present)."""
+    """Read an ``*.ilmplot.svg``; worksheet node optional.
+
+    A worksheet node that fails to parse (bad JSON, future schema,
+    unknown designations or capabilities) never blocks the file: the
+    sheet is rebuilt from the plot document, a warning is attached, and
+    the source is flagged read-only so it cannot be overwritten.
+    """
     with open(path, 'rb') as fh:
         data = fh.read(MAX_FILE_BYTES + 1)
     if len(data) > MAX_FILE_BYTES:
@@ -281,17 +395,21 @@ def load_plot_file(path):
     for meta in metas:
         if meta.get('id') == WORKSHEET_METADATA_ID:
             text = meta.text
-    if text is None:
-        worksheet = worksheet_from_document(document)
-        return PlotFile(document, data, worksheet,
-                        chart_from_document(document),
-                        tuple(range(worksheet.column_count)),
-                        False)
-    try:
-        payload = json.loads(text, parse_constant=_reject_constant)
-    except json.JSONDecodeError as e:
-        raise _err('worksheet payload is not valid JSON: %s' % e)
-    worksheet, chart, plot_columns, overrides = \
-        worksheet_from_dict(payload)
-    return PlotFile(document, data, worksheet, chart, plot_columns, True,
-                    overrides)
+    warnings = ()
+    if text is not None:
+        try:
+            payload = json.loads(text, parse_constant=_reject_constant)
+            worksheet, chart, plot_columns, overrides = \
+                worksheet_from_dict(payload)
+        except Exception as e:
+            from .i18n import tr
+            warnings = (tr('warn_worksheet_rebuilt', error=e),)
+        else:
+            return PlotFile(document, data, worksheet, chart,
+                            plot_columns, True, overrides)
+    worksheet = worksheet_from_document(document)
+    return PlotFile(document, data, worksheet,
+                    chart_from_document(document),
+                    tuple(range(worksheet.column_count)),
+                    False, warnings=warnings,
+                    read_only_source=bool(warnings))

@@ -328,6 +328,10 @@ class CanvasScene(QGraphicsScene):
                 getattr(cell, 'z_index', 0),
                 getattr(cell, 'svg_normalize_text', False),
                 getattr(cell, 'svg_normalize_text_pt', 8.0),
+                # Reflow gating inputs for the ON badge.
+                getattr(cell, 'plot_reflow', False),
+                getattr(cell, 'aspect_ratio_locked', False),
+                group_ids,
                 is_freeform,
                 len(pip_items),
             )

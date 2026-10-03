@@ -692,6 +692,9 @@ _T: dict[str, dict[str, str]] = {
                              "zh": "从两行空图片单元格开始，按需要组合的图片增减单元格。"},
     "welcome_open_tip":     {"en": "Open a saved editable project (.figlayout or .figpack), not an individual image. To start from image files, choose New Project.",
                              "zh": "打开已保存的可编辑工程（.figlayout 或 .figpack），不是单张图片。若要从图片文件开始，请选择“新建工程”。"},
+    "welcome_plot_editor":  {"en": "Plot Editor", "zh": "图表编辑器"},
+    "welcome_plot_editor_tip": {"en": "Open the standalone Plot Editor to create or edit .ilmplot.svg files without opening a layout project.",
+                             "zh": "打开独立的图表编辑器，无需打开布局工程即可创建或编辑 .ilmplot.svg 文件。"},
     "welcome_learn_tip":    {"en": "Start with rows and cells in Your first figure, or choose another topic. Practice uses separate sample projects.",
                              "zh": "从“制作第一张组合图”认识行与单元格，也可选择其他主题。练习使用独立示例工程。"},
     "welcome_open_project": {"en": "Open Project…",       "zh": "打开工程…"},
@@ -1053,6 +1056,27 @@ _T: dict[str, dict[str, str]] = {
         "zh": "将此 SVG 中可编辑的文字统一为一个大小。若坐标轴标题和刻度文字需要不同字号，请使用“匹配文字大小”，分别分配到不同组。已转为轮廓的文字不属于可编辑文字。"
     },
 
+    # ── Native plot reflow (ReflowCard + canvas/Layers marks) ──
+    "tip_plot_reflow":               {
+        "en": "Off by default: the plot stays exactly as saved in the Plot Editor, scaled like a picture. Turn reflow on to adapt the layout to this cell while text and line widths keep their true final-figure point sizes; turning it off again scales the saved image — text and lines together.",
+        "zh": "默认关闭：图表保持绘图编辑器中保存的样式，像图片一样缩放。开启重排可使版式适应此单元格，同时文字和线条保持最终图尺寸的真实磅值；再次关闭则将保存的图像连同文字、线条一起缩放。"
+    },
+    "tip_plot_reflow_blocked_note":  {
+        "en": "Reflow is inactive while Lock Ratio or plot alignment is enabled.",
+        "zh": "启用锁定比例或图表对齐时，重排不生效。"
+    },
+    "chip_plot_reflow_on":           {"en": "REFLOW ON",                     "zh": "重排 ON"},
+    "tip_plot_reflow_on":            {
+        "en": "Reflow ON — layout adapts to this cell; text and line widths keep their final-figure point sizes.",
+        "zh": "重排已开启 — 版式随此单元格调整，文字和线条保持最终图尺寸的磅值。"
+    },
+    "reflow_card_on_sub":            {"en": "Layout fits this cell · true point sizes.",
+                                     "zh": "版式适应此单元格 · 真实磅值。"},
+    "reflow_card_off_sub":           {"en": "Shown as saved — scales like a picture.",
+                                     "zh": "按保存样式显示，像图片一样缩放。"},
+    "reflow_state_paused":           {"en": "PAUSED",                        "zh": "暂停"},
+    "ctx_reflow_on":                 {"en": "Reflow ON",                     "zh": "重排 ON"},
+
     # ── Sidecar assets dialog ──────────────────────────────────────
     "msg_sidecar_title":            {"en": "Save sidecar assets?",          "zh": "保存附件资源？"},
     "msg_sidecar_text":             {"en": "This project is currently backed by a .figpack cache.\n\n"
@@ -1102,7 +1126,7 @@ _T: dict[str, dict[str, str]] = {
     "tooltip_new_plot":       {"en": "Create an editable line plot in a cell.", "zh": "在单元格中创建可编辑的折线图。"},
     "action_open_plot_editor": {"en": "Open Plot Editor",    "zh": "打开图表编辑器"},
     "tooltip_open_plot_editor": {"en": "Open the standalone ILM Plot Editor window.", "zh": "打开独立的 ILM 图表编辑器窗口。"},
-    "ctx_new_plot":           {"en": "New Plot…",            "zh": "新建图表…"},
+    "ctx_new_plot":           {"en": "New .ilmplot.svg",     "zh": "新建 .ilmplot.svg"},
     "ctx_edit_plot":          {"en": "Edit Plot…",           "zh": "编辑图表…"},
     "pe_select_cell_new":     {"en": "Select a cell first (or clear one) to place the new plot.", "zh": "请先选中一个单元格（或留空一个）以放置新图表。"},
     "pe_select_one_cell":     {"en": "Select a single cell for the new plot.", "zh": "请只为新图表选择一个单元格。"},

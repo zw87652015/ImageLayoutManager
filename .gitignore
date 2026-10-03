@@ -40,3 +40,4 @@ _smoke_gui_out.txt
 !/test_clipboard_paste.py
 !/test_plot_editor_blank.py
 !/test_figpack_legacy_paths.py
+/tm/

@@ -8,7 +8,9 @@ saved theme, font scale and motion choices are honoured, never written.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QSettings
+import os
+
+from PyQt6.QtCore import QSettings, QStandardPaths
 
 from src.app.icons import make_icon
 from src.app.theme import (DARK, LIGHT, _font_tokens, apply_font_scale,
@@ -26,6 +28,23 @@ def saved_language() -> str:
     value = QSettings('AcademicFigureLayout', 'ImageLayoutManager').value(
         'language', 'zh')
     return value if value in ('en', 'zh') else 'zh'
+
+
+def preset_root() -> str:
+    """User-writable preset folder, outside the install directory.
+
+    ``GenericDataLocation`` is used (not ``AppDataLocation``) because the
+    editor's applicationName is translated.
+    """
+    base = QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.GenericDataLocation)
+    return os.path.normpath(os.path.join(
+        base, 'AcademicFigureLayout', 'ImageLayoutManager', 'plot_styles'))
+
+
+def theme_root() -> str:
+    """User-writable custom colour-theme folder (sibling of presets)."""
+    return os.path.join(os.path.dirname(preset_root()), 'plot_themes')
 
 
 def saved_font_scale() -> float:
@@ -225,7 +244,7 @@ def element_panel_stylesheet(theme: str, scale: float) -> str:
 
 
 _RESET_ALL_QSS = """
-QToolButton#plotResetAll {
+QToolButton#plotResetAll, QToolButton#plotStylePresets {
     background: %(surface)s;
     color: %(text_sec)s;
     border: 1px solid %(border)s;
@@ -233,15 +252,19 @@ QToolButton#plotResetAll {
     padding: 3px 8px;
     font-size: %(font_sm)s;
 }
-QToolButton#plotResetAll:hover {
+QToolButton#plotResetAll:hover, QToolButton#plotStylePresets:hover {
     color: %(text)s;
     border-color: %(border_strong)s;
 }
-QToolButton#plotResetAll:pressed {
+QToolButton#plotResetAll:pressed, QToolButton#plotStylePresets:pressed {
     background: %(active)s;
 }
 QToolButton#plotResetAll:disabled {
     color: %(text_tert)s;
+}
+QToolButton#plotStylePresets::menu-indicator {
+    image: none;
+    width: 0;
 }
 """
 

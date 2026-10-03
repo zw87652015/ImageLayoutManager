@@ -43,18 +43,37 @@ def polyline_distance(points, x, y):
         for a, b in zip(points, points[1:]))
 
 
-def pick(regions, fx, fy):
-    """Topmost text/legend element under figure-fraction ``(fx, fy)``.
+def _pick_map(mapping, fx, fy, prefix):
+    """First id in ``{id: bbox}`` whose bbox contains (fx, fy)."""
+    for rid, entry in (mapping or {}).items():
+        bbox = entry.get('bbox') if isinstance(entry, dict) else entry
+        if rect_hit(bbox, fx, fy):
+            return prefix + rid
+    return None
 
-    Priority: legend > title > xlabel > ylabel > xticks > yticks.
-    Series and frame are handled separately (proximity / fallback).
+
+def pick(regions, fx, fy):
+    """Topmost element under figure-fraction ``(fx, fy)``.
+
+    Priority: annotation > bracket > legend > title > xlabel > ylabel
+    > xticks > yticks > violin/stack bboxes. Series (proximity) and
+    frame (fallback) are handled separately.
     """
     if not regions:
         return None
+    hit = _pick_map(regions.get('annotations'), fx, fy, 'annotation:')
+    if hit:
+        return hit
+    hit = _pick_map(regions.get('brackets'), fx, fy, 'bracket:')
+    if hit:
+        return hit
     for key in _PRIORITY:
         if rect_hit(regions.get(key), fx, fy):
             return key
-    return None
+    hit = _pick_map(regions.get('violins'), fx, fy, 'violin:')
+    if hit:
+        return hit
+    return _pick_map(regions.get('stacks'), fx, fy, 'stack:')
 
 
 def pick_series(series, x, y, tol):
@@ -79,3 +98,25 @@ def pick_frame(regions, fx, fy):
     """'frame' when ``(fx, fy)`` is inside the axes bbox, else None."""
     return 'frame' if rect_hit((regions or {}).get('frame'), fx, fy) \
         else None
+
+
+def figure_to_axes(regions, fx, fy):
+    """Figure fraction (top-left origin) → axes fraction (bottom-left
+    origin, matplotlib's transAxes). ``None`` without a frame region."""
+    bbox = (regions or {}).get('frame')
+    if not bbox:
+        return None
+    x0, y0, x1, y1 = bbox
+    w, h = x1 - x0, y1 - y0
+    if w <= 0 or h <= 0:
+        return None
+    return (fx - x0) / w, 1.0 - (fy - y0) / h
+
+
+def axes_to_figure(regions, ax_, ay):
+    """Axes fraction → figure fraction; ``None`` without a frame."""
+    bbox = (regions or {}).get('frame')
+    if not bbox:
+        return None
+    x0, y0, x1, y1 = bbox
+    return x0 + ax_ * (x1 - x0), y0 + (1.0 - ay) * (y1 - y0)

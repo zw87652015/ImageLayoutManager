@@ -11,7 +11,9 @@ inherited/default value.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QEvent, QObject, QPoint, Qt
+import copy
+
+from PyQt6.QtCore import QEvent, QObject, QPoint, QSize, Qt
 from PyQt6.QtGui import QColor, QDoubleValidator, QGuiApplication, \
     QIntValidator, QPalette
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog,
@@ -25,9 +27,14 @@ from src.app import theme as app_theme
 from . import render
 from .chrome import element_panel_stylesheet, themed_icon
 from .i18n import tr
+from .style_icons import palette_strip, style_icon
 from .document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
-                       AxisStyle, FrameStyle, GridStyle, LegendStyle,
-                       TextStyle, TitleStyle)
+                       ANNOTATION_ANCHORS, AxisStyle, FrameStyle,
+                       GridStyle, LegendStyle, RidgeOptions,
+                       StackOptions, TextStyle, TitleStyle,
+                       ViolinOptions)
+from . import palettes
+from .palettes import THEMES, theme_display_key
 from .overrides import (SeriesOverride, parse_axis_limits,
                         reset_element)
 
@@ -55,6 +62,8 @@ _TITLES = {'title': 'panel_title', 'xlabel': 'panel_xlabel',
            'ylabel': 'panel_ylabel', 'xticks': 'panel_xticks',
            'yticks': 'panel_yticks', 'legend': 'panel_legend',
            'frame': 'panel_frame'}
+_ANCHOR_KEYS = {a: 'anchor_' + a.replace(' ', '_')
+                for a in ANNOTATION_ANCHORS}
 
 
 class _Swatch(QPushButton):
@@ -417,6 +426,23 @@ class ElementPanel(QFrame):
                         label = s.label
                         break
             return tr('panel_series', name=label or sid)
+        for prefix, coll_name, title_key in (
+                ('violin:', 'groups', 'panel_violin'),
+                ('stack:', 'categories', 'panel_stack')):
+            if self._key.startswith(prefix):
+                iid = self._key[len(prefix):]
+                label = ''
+                doc = self._doc()
+                if doc is not None:
+                    for item in getattr(doc, coll_name, ()):
+                        if item.id == iid:
+                            label = item.label
+                            break
+                return tr(title_key, name=label or iid)
+        if self._key.startswith('annotation:'):
+            return tr('panel_annotation')
+        if self._key.startswith('bracket:'):
+            return tr('panel_bracket')
         key = _TITLES.get(self._key)
         return tr(key) if key is not None else self._key
 
@@ -424,13 +450,19 @@ class ElementPanel(QFrame):
         return self._tab.effective_document()
 
     def _series_y_column(self, sid):
+        return self._item_y_column('series', sid)
+
+    def _item_y_column(self, coll_name, iid):
+        """Y column of the doc item ``iid`` in series/groups/categories."""
         tab = self._tab
         doc = self._doc()
         if doc is None or tab.plot is None:
             return None
-        for i, s in enumerate(doc.series):
-            if s.id == sid:
-                return tab.plot.series[i].y_column
+        coll = doc.series if coll_name == 'series' \
+            else getattr(doc, coll_name, ())
+        for i, entry in enumerate(coll):
+            if entry.id == iid and i < len(tab.plot.series):
+                return getattr(tab.plot.series[i], 'y_column', None)
         return None
 
     # ── apply plumbing ────────────────────────────────────────────────
@@ -448,8 +480,12 @@ class ElementPanel(QFrame):
             btn.setEnabled(bool(is_set()))
 
     def _reset_element(self):
-        y_col = self._series_y_column(self._key[7:]) \
-            if self._key.startswith('series:') else None
+        y_col = None
+        for prefix, coll in (('series:', 'series'), ('violin:', 'groups'),
+                             ('stack:', 'categories')):
+            if self._key.startswith(prefix):
+                y_col = self._item_y_column(
+                    coll, self._key[len(prefix):])
         self._tab.update_overrides(
             lambda o: reset_element(o, self._key, y_col))
         self.close()
@@ -491,10 +527,25 @@ class ElementPanel(QFrame):
             lambda on: self._apply_now(lambda o: set_fn(o, on)))
         return cb
 
-    def _combo(self, labels, values, current, set_fn):
+    def _style_icons(self, kind, codes):
+        """Icon-only glyphs in the palette text colour."""
+        color = self.palette().color(QPalette.ColorRole.WindowText)
+        dpr = self.devicePixelRatioF()
+        return [style_icon(kind, code, color, dpr) for code in codes]
+
+    def _combo(self, labels, values, current, set_fn, icons=None):
         combo = QComboBox()
-        for label, value in zip(labels, values):
-            combo.addItem(label, value)
+        for i, (label, value) in enumerate(zip(labels, values)):
+            if icons is not None:
+                combo.addItem(icons[i], '', value)
+                combo.setItemData(i, label,
+                                  Qt.ItemDataRole.ToolTipRole)
+                combo.setItemData(i, label,
+                                  Qt.ItemDataRole.AccessibleTextRole)
+            else:
+                combo.addItem(label, value)
+        if icons is not None:
+            combo.setIconSize(QSize(44, 14))
         combo.setCurrentIndex(
             values.index(current) if current in values else 0)
         combo.currentIndexChanged.connect(
@@ -592,12 +643,25 @@ class ElementPanel(QFrame):
                                  key == 'xticks'
                                  and doc is not None
                                  and doc.x_tick_labels))
+            if key == 'xticks' and doc is not None:
+                if doc.groups:
+                    self._build_group_labels(form, doc)
+                elif doc.categories:
+                    self._build_bar_labels(form, doc)
         elif key == 'legend':
             self._build_legend(form)
         elif key == 'frame':
             self._build_frame(form)
         elif key.startswith('series:'):
             self._build_series(form, key[7:])
+        elif key.startswith('violin:'):
+            self._build_violin_item(form, key[len('violin:'):])
+        elif key.startswith('stack:'):
+            self._build_stack_item(form, key[len('stack:'):])
+        elif key.startswith('annotation:'):
+            self._build_annotation(form, key[len('annotation:'):])
+        elif key.startswith('bracket:'):
+            self._build_bracket(form, key[len('bracket:'):])
 
     def _build_title(self, form):
         tab = self._tab
@@ -791,8 +855,8 @@ class ElementPanel(QFrame):
             lambda xo: setattr(get(xo), 'length_pt', v)))
         self._row(form, tr('row_tick_len'), length,
                   is_set=lambda: axis_stored() is not None
-                  and axis_stored().length_pt != 3.0,
-                  reset=lambda xo: setattr(get(xo), 'length_pt', 3.0),
+                  and axis_stored().length_pt != 3.5,
+                  reset=lambda xo: setattr(get(xo), 'length_pt', 3.5),
                   sync=lambda: self._respin(length, eff_axis().length_pt))
 
         self._section(tr('sec_scale'))
@@ -905,13 +969,15 @@ class ElementPanel(QFrame):
                   else (ds.linestyle if ds else '-'))
         form.addRow(tr('row_line_style'), self._combo(
             [tr(_LINE_KEYS[k]) for k in LINESTYLES], list(LINESTYLES),
-            cur_ls, lambda o, v: setattr(get(o), 'linestyle', v)))
+            cur_ls, lambda o, v: setattr(get(o), 'linestyle', v),
+            icons=self._style_icons('line', LINESTYLES)))
 
         cur_mk = (so().marker if so() and so().marker is not None
                   else (ds.marker if ds else ''))
         form.addRow(tr('row_marker'), self._combo(
             [tr(_MARKER_KEYS[k]) for k in MARKERS], list(MARKERS),
-            cur_mk, lambda o, v: setattr(get(o), 'marker', v)))
+            cur_mk, lambda o, v: setattr(get(o), 'marker', v),
+            icons=self._style_icons('marker', MARKERS)))
 
         ms = self._spin(
             (so().markersize_pt if so() and so().markersize_pt is not None
@@ -927,6 +993,88 @@ class ElementPanel(QFrame):
                       ms, (so().markersize_pt if so() and
                            so().markersize_pt is not None
                            else (ds.markersize_pt if ds else 6.0))))
+
+        if doc is not None and doc.kind == 'ridgeline':
+            self._build_ridgeline_section(form)
+
+    def _build_ridgeline_section(self, form):
+        """Ridgeline option rows bound to ``overrides.ridgeline``."""
+        o = self._tab.overrides
+        stored = lambda: o.ridgeline
+
+        def get(xo):
+            if xo.ridgeline is None:
+                xo.ridgeline = RidgeOptions()
+            return xo.ridgeline
+
+        def eff():
+            doc = self._doc()
+            return (doc.ridgeline if doc is not None
+                    and doc.ridgeline is not None else RidgeOptions())
+
+        self._section(tr('sec_ridgeline'))
+        off = QLineEdit('' if eff().offset is None
+                        else '%g' % eff().offset)
+        off.setPlaceholderText(tr('auto_placeholder'))
+        off.setValidator(QDoubleValidator(1e-9, 1e12, 9))
+        off.setMaximumWidth(90)
+
+        def commit_off():
+            t = off.text().strip()
+            if not t:
+                self._apply_now(
+                    lambda xo: setattr(get(xo), 'offset', None))
+                return
+            try:
+                v = float(t)
+            except ValueError:
+                self._set_invalid(off, True)
+                return
+            if not (0 < v and v == v):
+                self._set_invalid(off, True)
+                return
+            self._set_invalid(off, False)
+            self._apply_now(lambda xo: setattr(get(xo), 'offset', v))
+        off.editingFinished.connect(commit_off)
+        self._row(form, tr('row_offset'), off,
+                  is_set=lambda: stored() is not None
+                  and stored().offset is not None,
+                  reset=lambda xo: setattr(get(xo), 'offset', None),
+                  sync=lambda: off.setText(
+                      '' if eff().offset is None
+                      else '%g' % eff().offset))
+        alpha = self._spin(eff().fill_alpha, 0.0, 1.0,
+                           step=0.05, decimals=2)
+        alpha.valueChanged.connect(lambda v: self._apply_now(
+            lambda xo: setattr(get(xo), 'fill_alpha', v)))
+        self._row(form, tr('row_fill_opacity'), alpha,
+                  is_set=lambda: stored() is not None
+                  and stored().fill_alpha != 0.22,
+                  reset=lambda xo: setattr(get(xo), 'fill_alpha', 0.22),
+                  sync=lambda: self._respin(alpha, eff().fill_alpha))
+        form.addRow(self._checkbox(
+            tr('row_reverse_order'), eff().reverse,
+            lambda xo, v: setattr(get(xo), 'reverse', v)))
+        sw = self._color_row(
+            tr('row_baseline_colour'), eff().baseline_color,
+            lambda xo, c: setattr(get(xo), 'baseline_color', c),
+            '#444444',
+            is_set=lambda: stored() is not None
+            and stored().baseline_color != '#444444')
+        self._syncs.append(
+            lambda: sw.set_color(eff().baseline_color))
+        bw = self._spin(eff().baseline_width_pt, 0, 10, step=0.1)
+        bw.valueChanged.connect(lambda v: self._apply_now(
+            lambda xo: setattr(get(xo), 'baseline_width_pt', v)))
+        self._row(form, tr('row_baseline_width'), bw,
+                  is_set=lambda: stored() is not None
+                  and stored().baseline_width_pt != 0.6,
+                  reset=lambda xo: setattr(get(xo),
+                                           'baseline_width_pt', 0.6),
+                  sync=lambda: self._respin(bw, eff().baseline_width_pt))
+        form.addRow(self._checkbox(
+            tr('row_show_labels'), eff().labels,
+            lambda xo, v: setattr(get(xo), 'labels', v)))
 
     def _build_legend(self, form):
         o = self._tab.overrides
@@ -1027,6 +1175,49 @@ class ElementPanel(QFrame):
         form.addRow(self._checkbox(
             tr('row_hide_right'), frame.hide_right,
             lambda xo, v: setattr(fget(xo), 'hide_right', v)))
+        form.addRow(self._checkbox(
+            tr('row_hide_left'), frame.hide_left,
+            lambda xo, v: setattr(fget(xo), 'hide_left', v)))
+        form.addRow(self._checkbox(
+            tr('row_hide_bottom'), frame.hide_bottom,
+            lambda xo, v: setattr(fget(xo), 'hide_bottom', v)))
+
+        self._section(tr('sec_theme'))
+        names = list(THEMES) + ['custom:' + n
+                                for n in palettes.custom_theme_names()]
+        labels = [palettes.theme_display_name(n) for n in names]
+        dpr = self.devicePixelRatioF()
+        theme_combo = QComboBox()
+        for i, n in enumerate(names):
+            theme_combo.addItem(palette_strip(n, dpr=dpr), labels[i], n)
+        theme_combo.setIconSize(QSize(44, 14))
+        theme_combo.setCurrentIndex(
+            names.index(o.palette) if o.palette in names else 0)
+        theme_combo.currentIndexChanged.connect(
+            lambda idx: self._apply_now(
+                lambda xo: setattr(xo, 'palette',
+                                   theme_combo.itemData(idx))))
+        theme_row = QWidget()
+        th = QHBoxLayout(theme_row)
+        th.setContentsMargins(0, 0, 0, 0)
+        th.setSpacing(4)
+        th.addWidget(theme_combo, 1)
+        theme_edit = QToolButton()
+        theme_edit.setText(tr('btn_edit'))
+        theme_edit.setToolTip(tr('tip_edit_themes'))
+        theme_edit.setAutoRaise(True)
+        theme_edit.clicked.connect(self._open_theme_editor)
+        th.addWidget(theme_edit)
+        self._row(form, tr('row_theme'), theme_row,
+                  is_set=lambda: o.palette is not None,
+                  reset=lambda xo: setattr(xo, 'palette', None),
+                  sync=lambda: theme_combo.setCurrentIndex(
+                      names.index(o.palette)
+                      if o.palette in names else 0))
+        form.addRow(self._checkbox(
+            tr('row_reverse_colours'), bool(o.palette_reverse),
+            lambda xo, v: setattr(xo, 'palette_reverse',
+                                  True if v else None)))
 
         self._section(tr('sec_grid'))
         form.addRow(self._checkbox(
@@ -1050,25 +1241,521 @@ class ElementPanel(QFrame):
         form.addRow(tr('row_style'), self._combo(
             [tr(_LINE_KEYS[k]) for k in _GRID_LINESTYLES],
             _GRID_LINESTYLES, grid.linestyle,
-            lambda xo, v: setattr(gget(xo), 'linestyle', v)))
+            lambda xo, v: setattr(gget(xo), 'linestyle', v),
+            icons=self._style_icons('line', _GRID_LINESTYLES)))
         gw = self._spin(grid.linewidth_pt, 0.1, 20, step=0.1)
         gw.valueChanged.connect(lambda v: self._apply_now(
             lambda xo: setattr(gget(xo), 'linewidth_pt', v)))
         self._row(form, tr('row_width'), gw,
                   is_set=lambda: gr_stored() is not None
-                  and gr_stored().linewidth_pt != 0.5,
-                  reset=lambda xo: setattr(gget(xo), 'linewidth_pt', 0.5),
+                  and gr_stored().linewidth_pt != 0.8,
+                  reset=lambda xo: setattr(gget(xo), 'linewidth_pt', 0.8),
                   sync=lambda: self._respin(gw, eff_gr().linewidth_pt))
         alpha = self._spin(grid.alpha, 0.0, 1.0, step=0.05, decimals=2)
         alpha.valueChanged.connect(lambda v: self._apply_now(
             lambda xo: setattr(gget(xo), 'alpha', v)))
         self._row(form, tr('row_opacity'), alpha,
                   is_set=lambda: gr_stored() is not None
-                  and gr_stored().alpha != 0.4,
-                  reset=lambda xo: setattr(gget(xo), 'alpha', 0.4),
+                  and gr_stored().alpha != 1.0,
+                  reset=lambda xo: setattr(gget(xo), 'alpha', 1.0),
                   sync=lambda: self._respin(alpha, eff_gr().alpha))
 
         form.addRow(self._checkbox(
             tr('row_show_legend'),
             o.legend if o.legend is not None else doc.legend,
             lambda xo, v: setattr(xo, 'legend', v)))
+
+    def _open_theme_editor(self):
+        window = self._tab.window()
+        opener = getattr(window, 'open_theme_editor', None)
+        if opener is not None:
+            opener()
+
+    def _build_group_labels(self, form, doc):
+        """Violin xticks panel: one editable label per group, writing
+        ``overrides.series[y_column].label`` like the violin panel."""
+        tab = self._tab
+        items = tab.plot.series if tab.plot is not None else []
+        self._section(tr('sec_group_labels'))
+        for i, grp in enumerate(doc.groups):
+            y_col = getattr(items[i], 'y_column', None) \
+                if i < len(items) else None
+            if y_col is None:
+                continue
+            sheet_label = getattr(items[i], 'label', '') or grp.label
+
+            def get(xo, yc=y_col):
+                s = xo.series.get(yc)
+                if s is None:
+                    s = SeriesOverride()
+                    xo.series[yc] = s
+                return s
+
+            def stored(yc=y_col):
+                s = tab.overrides.series.get(yc)
+                return s.label if s else None
+
+            e = QLineEdit(stored() or grp.label)
+            e.setPlaceholderText(sheet_label)
+            e.editingFinished.connect(
+                lambda e=e, get=get: self._apply_now(
+                    lambda o: setattr(get(o), 'label',
+                                      e.text() or None)))
+            self._row(form, tr('row_label_n', n=i + 1), e,
+                      is_set=lambda st=stored: st() is not None,
+                      reset=lambda o, get=get:
+                          setattr(get(o), 'label', None),
+                      reset_tip=tr('tip_reset_text'),
+                      sync=lambda e=e, st=stored, g=grp:
+                          e.setText(st() or g.label))
+
+    def _build_bar_labels(self, form, doc):
+        """Stacked xticks panel: one editable label per bar, writing
+        ``overrides.bar_labels[index]``."""
+        tab = self._tab
+        entries = doc.x_tick_labels or []
+        cats = tab.plot.series if tab.plot is not None else []
+        base = getattr(cats[0], 'bar_labels', ()) if cats else ()
+        self._section(tr('sec_bar_labels'))
+        for x, text in entries:
+            idx = int(x)
+            sheet_label = base[idx] if idx < len(base) else str(idx)
+
+            def current(i=idx, t=text):
+                m = tab.overrides.bar_labels
+                return m.get(i, t) if m else t
+
+            def commit(e, i=idx):
+                def fn(o):
+                    m = dict(o.bar_labels or {})
+                    if e.text():
+                        m[i] = e.text()
+                    else:
+                        m.pop(i, None)
+                    o.bar_labels = m or None
+                self._apply_now(fn)
+
+            e = QLineEdit(current())
+            e.setPlaceholderText(sheet_label)
+            e.editingFinished.connect(lambda e=e: commit(e))
+            self._row(form, tr('row_label_n', n=idx + 1), e,
+                      is_set=lambda i=idx:
+                          bool(tab.overrides.bar_labels)
+                          and i in tab.overrides.bar_labels,
+                      reset=lambda o, i=idx:
+                          setattr(o, 'bar_labels', {
+                              k: v for k, v
+                              in (o.bar_labels or {}).items()
+                              if k != i} or None),
+                      reset_tip=tr('tip_reset_text'),
+                      sync=lambda e=e, c=current: e.setText(c()))
+
+    # ── group-item panels (violin / stacked column) ──────────────────
+
+    def _item_label_color(self, form, coll_name, iid):
+        """Label + colour rows; returns (get, so, item) or None."""
+        tab = self._tab
+        y_col = self._item_y_column(coll_name, iid)
+        doc = self._doc()
+        if y_col is None:
+            note = QLabel(tr('panel_series_detached'))
+            note.setWordWrap(True)
+            form.addRow(note)
+            return None
+        coll = getattr(doc, coll_name)
+        item = next((x for x in coll if x.id == iid), None)
+
+        def get(xo):
+            s = xo.series.get(y_col)
+            if s is None:
+                s = SeriesOverride()
+                xo.series[y_col] = s
+            return s
+
+        def so():
+            return tab.overrides.series.get(y_col)
+
+        e = QLineEdit((so().label if so() else None)
+                      or (item.label if item else ''))
+        e.setPlaceholderText(item.label if item else '')
+        e.editingFinished.connect(lambda: self._apply_now(
+            lambda o: setattr(get(o), 'label', e.text() or None)))
+        self._row(form, tr('row_label'), e,
+                  is_set=lambda: so() is not None
+                  and so().label is not None,
+                  reset=lambda o: setattr(get(o), 'label', None),
+                  reset_tip=tr('tip_reset_text'),
+                  sync=lambda: e.setText(
+                      (so().label if so() and so().label is not None
+                       else (item.label if item else ''))))
+
+        swatch = self._color_row(
+            tr('row_colour'),
+            (so().color if so() else None) or (item.color if item
+                                             else '#000000'),
+            lambda o, c: setattr(get(o), 'color', c), None,
+            is_set=lambda: so() is not None and so().color is not None)
+        self._syncs.append(lambda: swatch.set_color(
+            (so().color if so() and so().color is not None
+             else (item.color if item else '#000000'))))
+        return get, so, item
+
+    def _build_violin_item(self, form, iid):
+        o = self._tab.overrides
+        res = self._item_label_color(form, 'groups', iid)
+        if res is None:
+            return
+        item = res[2]
+        stored = lambda: o.violin
+
+        def get(xo):
+            if xo.violin is None:
+                xo.violin = ViolinOptions()
+            return xo.violin
+
+        def eff():
+            doc = self._doc()
+            return (doc.violin if doc is not None
+                    and doc.violin is not None else ViolinOptions())
+
+        def opt_row(spin, label, field, default):
+            spin.valueChanged.connect(lambda v: self._apply_now(
+                lambda xo: setattr(get(xo), field, v)))
+            self._row(form, label, spin,
+                      is_set=lambda: stored() is not None
+                      and getattr(stored(), field) != default,
+                      reset=lambda xo: setattr(get(xo), field, default),
+                      sync=lambda: self._respin(
+                          spin, getattr(eff(), field)))
+
+        self._section(tr('sec_violin'))
+        form.addRow(self._checkbox(
+            tr('row_show_box'), eff().show_box,
+            lambda xo, v: setattr(get(xo), 'show_box', v)))
+        form.addRow(self._checkbox(
+            tr('row_show_points'), eff().show_points,
+            lambda xo, v: setattr(get(xo), 'show_points', v)))
+        form.addRow(self._checkbox(
+            tr('row_points_beside'), eff().points_beside,
+            lambda xo, v: setattr(get(xo), 'points_beside', v)))
+
+        bw_row = QWidget()
+        bh = QHBoxLayout(bw_row)
+        bh.setContentsMargins(0, 0, 0, 0)
+        bh.setSpacing(4)
+        bw_combo = QComboBox()
+        bw_combo.addItem(tr('bw_scott'), 'scott')
+        bw_combo.addItem(tr('bw_silverman'), 'silverman')
+        bw_combo.addItem(tr('bw_custom'), 'custom')
+        bw_edit = QLineEdit()
+        bw_edit.setValidator(QDoubleValidator(1e-9, 1e9, 9))
+        bw_edit.setMaximumWidth(80)
+        bw_edit.setPlaceholderText(tr('bw_factor'))
+        bh.addWidget(bw_combo, 1)
+        bh.addWidget(bw_edit)
+
+        def bw_eff():
+            return eff().bandwidth
+
+        def bw_commit_edit():
+            t = bw_edit.text().strip()
+            try:
+                v = float(t)
+            except ValueError:
+                self._set_invalid(bw_edit, True)
+                return
+            if not (0 < v and v == v):
+                self._set_invalid(bw_edit, True)
+                return
+            self._set_invalid(bw_edit, False)
+            self._apply_now(
+                lambda xo: setattr(get(xo), 'bandwidth', v))
+
+        def bw_combo_changed(idx):
+            v = bw_combo.itemData(idx)
+            if v == 'custom':
+                if isinstance(bw_eff(), str):
+                    bw_edit.setText('0.3')
+                self._set_invalid(bw_edit, False)
+                bw_commit_edit()
+                return
+            self._apply_now(
+                lambda xo: setattr(get(xo), 'bandwidth', v))
+
+        bw_combo.currentIndexChanged.connect(bw_combo_changed)
+        bw_edit.editingFinished.connect(bw_commit_edit)
+
+        def bw_sync():
+            cur = bw_eff()
+            bw_combo.blockSignals(True)
+            if cur == 'scott':
+                bw_combo.setCurrentIndex(0)
+            elif cur == 'silverman':
+                bw_combo.setCurrentIndex(1)
+            else:
+                bw_combo.setCurrentIndex(2)
+                bw_edit.setText('%g' % cur if isinstance(
+                    cur, (int, float)) else '')
+            bw_combo.blockSignals(False)
+            bw_edit.setVisible(bw_combo.currentIndex() == 2)
+
+        bw_sync()
+        self._syncs.append(bw_sync)
+        self._row(form, tr('row_bandwidth'), bw_row,
+                  is_set=lambda: stored() is not None
+                  and stored().bandwidth != 'scott',
+                  reset=lambda xo: setattr(get(xo), 'bandwidth',
+                                           'scott'))
+
+        opt_row(self._spin(eff().fill_alpha, 0.0, 1.0, step=0.05),
+                tr('row_fill_opacity'), 'fill_alpha', 0.3)
+        opt_row(self._spin(eff().edge_width_pt, 0, 10, step=0.1),
+                tr('row_edge_width_none'), 'edge_width_pt', 1.0)
+        edge_fb = item.color if item is not None else '#000000'
+        swe = self._color_row(
+            tr('row_edge_colour'),
+            eff().edge_color or edge_fb,
+            lambda xo, c: setattr(get(xo), 'edge_color', c), None,
+            is_set=lambda: stored() is not None
+            and stored().edge_color is not None)
+        self._syncs.append(lambda: swe.set_color(
+            eff().edge_color or edge_fb))
+        opt_row(self._spin(eff().point_size_pt, 0, 20, step=0.5),
+                tr('row_point_size'), 'point_size_pt', 6.0)
+        opt_row(self._spin(eff().point_alpha, 0.0, 1.0, step=0.05),
+                tr('row_point_opacity'), 'point_alpha', 1.0)
+        pedge_fb = item.color if item is not None else '#000000'
+        spe = self._color_row(
+            tr('row_point_edge_colour'),
+            eff().point_edge_color or pedge_fb,
+            lambda xo, c: setattr(get(xo), 'point_edge_color', c),
+            None,
+            is_set=lambda: stored() is not None
+            and stored().point_edge_color is not None)
+        self._syncs.append(lambda: spe.set_color(
+            eff().point_edge_color or pedge_fb))
+        opt_row(self._spin(eff().point_edge_width_pt, 0, 10, step=0.1),
+                tr('row_point_edge_width'), 'point_edge_width_pt', 1.0)
+        form.addRow(self._checkbox(
+            tr('row_enhance_contrast'), eff().enhance_contrast,
+            lambda xo, v: setattr(get(xo), 'enhance_contrast', v)))
+
+    def _build_stack_item(self, form, iid):
+        o = self._tab.overrides
+        if self._item_label_color(form, 'categories', iid) is None:
+            return
+        stored = lambda: o.stacked
+
+        def get(xo):
+            if xo.stacked is None:
+                xo.stacked = StackOptions()
+            return xo.stacked
+
+        def eff():
+            doc = self._doc()
+            return (doc.stacked if doc is not None
+                    and doc.stacked is not None else StackOptions())
+
+        def opt_row(spin, label, field, default):
+            spin.valueChanged.connect(lambda v: self._apply_now(
+                lambda xo: setattr(get(xo), field, v)))
+            self._row(form, label, spin,
+                      is_set=lambda: stored() is not None
+                      and getattr(stored(), field) != default,
+                      reset=lambda xo: setattr(get(xo), field, default),
+                      sync=lambda: self._respin(
+                          spin, getattr(eff(), field)))
+
+        self._section(tr('sec_columns'))
+        opt_row(self._spin(eff().bar_width, 0.05, 1.0, step=0.05,
+                           decimals=2),
+                tr('row_bar_width'), 'bar_width', 0.8)
+        form.addRow(self._checkbox(
+            tr('row_show_values'), eff().show_values,
+            lambda xo, v: setattr(get(xo), 'show_values', v)))
+        if not eff().grouped:
+            opt_row(self._spin(eff().value_threshold, 0, 100, step=1),
+                    tr('row_value_threshold'), 'value_threshold', 5.0)
+        dec = QSpinBox()
+        dec.setRange(0, 4)
+        dec.setKeyboardTracking(False)
+        dec.setValue(eff().value_decimals)
+        dec.valueChanged.connect(lambda v: self._apply_now(
+            lambda xo: setattr(get(xo), 'value_decimals', int(v))))
+        self._row(form, tr('row_decimals'), dec,
+                  is_set=lambda: stored() is not None
+                  and stored().value_decimals != 1,
+                  reset=lambda xo: setattr(get(xo), 'value_decimals', 1),
+                  sync=lambda: self._respin(dec, eff().value_decimals))
+        sw = self._color_row(
+            tr('row_value_colour'), eff().value_color,
+            lambda xo, c: setattr(get(xo), 'value_color', c),
+            '#ffffff',
+            is_set=lambda: stored() is not None
+            and stored().value_color != '#ffffff')
+        self._syncs.append(lambda: sw.set_color(eff().value_color))
+        form.addRow(self._checkbox(
+            tr('row_bold_values'), eff().value_bold,
+            lambda xo, v: setattr(get(xo), 'value_bold', v)))
+        doc = self._doc()
+        vs = self._spin(
+            eff().value_size_pt if eff().value_size_pt is not None
+            else doc.font_size_pt * 6 / 7, 1, 72)
+        vs.valueChanged.connect(lambda v: self._apply_now(
+            lambda xo: setattr(get(xo), 'value_size_pt', v)))
+        self._row(form, tr('row_value_size'), vs,
+                  is_set=lambda: stored() is not None
+                  and stored().value_size_pt is not None,
+                  reset=lambda xo: setattr(get(xo), 'value_size_pt',
+                                           None),
+                  sync=lambda: self._respin(
+                      vs, eff().value_size_pt
+                      if eff().value_size_pt is not None
+                      else doc.font_size_pt * 6 / 7))
+        sw2 = self._color_row(
+            tr('row_edge_colour'), eff().edge_color,
+            lambda xo, c: setattr(get(xo), 'edge_color', c),
+            '#ffffff',
+            is_set=lambda: stored() is not None
+            and stored().edge_color != '#ffffff')
+        self._syncs.append(lambda: sw2.set_color(eff().edge_color))
+        opt_row(self._spin(eff().edge_width_pt, 0, 10, step=0.1),
+                tr('row_edge_width'), 'edge_width_pt', 0.0)
+
+    # ── annotation / bracket panels ──────────────────────────────────
+
+    def _lift_content(self, o, name):
+        """Ensure ``o.<name>`` mirrors the document's list; return it."""
+        items = getattr(o, name)
+        if items is None:
+            doc = self._doc()
+            items = [copy.copy(a) for a in getattr(doc, name) or ()]
+            setattr(o, name, items)
+        return items
+
+    def _content_item(self, name, iid):
+        items = getattr(self._tab.overrides, name) \
+            or getattr(self._doc(), name) or ()
+        return next((x for x in items if x.id == iid), None)
+
+    def _build_annotation(self, form, aid):
+        ann = self._content_item('annotations', aid)
+        if ann is None:
+            form.addRow(QLabel(tr('panel_series_detached')))
+            return
+
+        def get(xo):
+            items = self._lift_content(xo, 'annotations')
+            return next(x for x in items if x.id == aid)
+
+        e = QLineEdit(ann.text)
+        e.editingFinished.connect(lambda: self._apply_now(
+            lambda o: setattr(get(o), 'text', e.text() or ann.text)))
+        form.addRow(tr('row_text'), e)
+
+        anchors = list(ANNOTATION_ANCHORS)
+        pos_labels = [tr(_ANCHOR_KEYS[a]) for a in anchors]
+        pos_values = anchors
+        pos_current = ann.anchor
+        if ann.x is not None and ann.y is not None:
+            pos_labels = pos_labels + [tr('anchor_free')]
+            pos_values = anchors + ['free']
+            pos_current = 'free'
+
+        def set_pos(o, v):
+            a = get(o)
+            if v == 'free':
+                return
+            a.anchor = v
+            a.x = None
+            a.y = None
+
+        form.addRow(tr('row_position'), self._combo(
+            pos_labels, pos_values, pos_current, set_pos))
+
+        def style_get(o):
+            a = get(o)
+            if a.style is None:
+                a.style = TextStyle()
+            return a.style
+
+        doc = self._doc()
+        editor = TextStyleEditor(
+            self, get_style=style_get,
+            eff_style=lambda: ann.style or TextStyle(),
+            default_family=doc.font_family,
+            default_size=doc.font_size_pt)
+        editor._stored = lambda: (self._content_item(
+            'annotations', aid) or ann).style
+        self._syncs += [editor._sync_family, editor._sync_size]
+        form.addRow(editor)
+
+        form.addRow(self._checkbox(
+            tr('row_box'), ann.box,
+            lambda o, v: setattr(get(o), 'box', v)))
+
+        delete = QPushButton(tr('btn_delete'))
+        delete.setObjectName('plotElementPanelDelete')
+        delete.clicked.connect(lambda: self._apply_now(
+            lambda o: setattr(o, 'annotations', [
+                a for a in self._lift_content(o, 'annotations')
+                if a.id != aid] or None),
+            after=self.close))
+        form.addRow(delete)
+
+    def _build_bracket(self, form, bid):
+        bracket = self._content_item('brackets', bid)
+        if bracket is None:
+            form.addRow(QLabel(tr('panel_series_detached')))
+            return
+        doc = self._doc()
+        items = doc.groups or doc.categories
+        labels = [it.label or str(i) for i, it in enumerate(items)]
+
+        def get(xo):
+            lst = self._lift_content(xo, 'brackets')
+            return next(x for x in lst if x.id == bid)
+
+        form.addRow(tr('row_from'), self._combo(
+            labels, list(range(len(items))), int(bracket.a),
+            lambda o, v: setattr(get(o), 'a', float(v))))
+        form.addRow(tr('row_to'), self._combo(
+            labels, list(range(len(items))), int(bracket.b),
+            lambda o, v: setattr(get(o), 'b', float(v))))
+
+        e = QLineEdit(bracket.text)
+        e.editingFinished.connect(lambda: self._apply_now(
+            lambda o: setattr(get(o), 'text',
+                              e.text() or bracket.text)))
+        form.addRow(tr('row_text'), e)
+
+        off = self._spin(bracket.offset, 0.0, 1.0, step=0.01,
+                         decimals=2)
+        off.valueChanged.connect(lambda v: self._apply_now(
+            lambda o: setattr(get(o), 'offset', v)))
+        form.addRow(tr('row_offset'), off)
+
+        def style_get(o):
+            b = get(o)
+            if b.style is None:
+                b.style = TextStyle()
+            return b.style
+
+        editor = TextStyleEditor(
+            self, get_style=style_get,
+            eff_style=lambda: bracket.style or TextStyle(),
+            default_family=doc.font_family,
+            default_size=8.0)
+        editor._stored = lambda: (self._content_item(
+            'brackets', bid) or bracket).style
+        self._syncs += [editor._sync_family, editor._sync_size]
+        form.addRow(editor)
+
+        delete = QPushButton(tr('btn_delete'))
+        delete.setObjectName('plotElementPanelDelete')
+        delete.clicked.connect(lambda: self._apply_now(
+            lambda o: setattr(o, 'brackets', [
+                b for b in self._lift_content(o, 'brackets')
+                if b.id != bid] or None),
+            after=self.close))
+        form.addRow(delete)

@@ -41,6 +41,25 @@ def is_editable_plot(path: Optional[str]) -> bool:
     return has_plot_metadata(path)
 
 
+def plot_document_error(path: Optional[str]) -> Optional[str]:
+    """The document's load error message, or None when it loads.
+
+    Returns None for files that are not native editable plots.
+    """
+    if not is_editable_plot(path):
+        return None
+    try:
+        load_rendered_document(path)
+    except Exception as e:
+        return str(e)
+    return None
+
+
+def plot_is_loadable(path: Optional[str]) -> bool:
+    """True when *path* is an editable plot whose document parses."""
+    return is_editable_plot(path) and plot_document_error(path) is None
+
+
 def plot_reflows(project, cell) -> bool:
     """True when *cell* re-renders its native plot to fill the cell.
 
@@ -53,6 +72,8 @@ def plot_reflows(project, cell) -> bool:
         return False
     if getattr(cell, 'aspect_ratio_locked', False):
         return False
+    if getattr(cell, 'plot_reflow', False) is not True:
+        return False
     groups = getattr(project, 'plot_alignment_groups', None)
     if isinstance(groups, list):
         cid = getattr(cell, 'id', None)
@@ -60,13 +81,7 @@ def plot_reflows(project, cell) -> bool:
             members = getattr(group, 'cell_ids', None)
             if isinstance(members, list) and cid in members:
                 return False
-    if not is_editable_plot(path):
-        return False
-    try:
-        load_rendered_document(path)
-    except Exception:
-        return False
-    return True
+    return plot_is_loadable(path)
 
 
 def reflow_figure_size_mm(cell, clip_w_mm: float, clip_h_mm: float):

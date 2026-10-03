@@ -39,6 +39,15 @@ CHART_GROUPS = (
         ChartType('pure_scatters', 'Pure Scatters'),
         ChartType('line_scatters', 'Line + Scatters'),
         ChartType('stacked_line', 'Stacked Line'),
+        ChartType('ridgeline', 'Ridgeline'),
+    )),
+    ChartGroup('violin', 'Violin', (
+        ChartType('violin', 'Violin'),
+    )),
+    ChartGroup('column', 'Column', (
+        ChartType('column', 'Column'),
+        ChartType('stacked_column_pct', '100% Stacked Column'),
+        ChartType('stacked_column', 'Stacked Column'),
     )),
 )
 
@@ -75,19 +84,20 @@ ACTIONS = {
     'plot': ActionSpec('plot', 'Plot', 'Ctrl+Return', 'plot',
                        'Plot the selected columns as the chosen chart '
                        'type'),
-    'edit_data': ActionSpec('edit_data', 'Edit Data…', '', '',
-                            'Not implemented yet'),
-    'axes': ActionSpec('axes', 'Axes and Labels…', '', '',
-                       'Not implemented yet'),
-    'legend': ActionSpec('legend', 'Legend…', '', '', 'Not implemented yet'),
     'style': ActionSpec('style', 'Plot Style…', '', '',
                         'Not implemented yet'),
-    'guide': ActionSpec('guide', 'User Guide', 'F1', '',
-                        'Not implemented yet'),
+    'add_note': ActionSpec('add_note', 'Add Note', '', '',
+                           'Add a corner note to the plot'),
+    'add_bracket': ActionSpec('add_bracket', 'Add Significance Bracket',
+                              '', '',
+                              'Add a significance bracket between two '
+                              'groups or bars'),
+    'tutorials': ActionSpec('tutorials', 'Tutorials…', 'F1', '',
+                            'Guided lessons for the Plot Editor'),
     'shortcuts': ActionSpec('shortcuts', 'Keyboard Shortcuts', '', '',
                             'Not implemented yet'),
     'about': ActionSpec('about', 'About Plot Editor', '', '',
-                        'Not implemented yet'),
+                        'About the Plot Editor'),
     'export_ilmplot': ActionSpec('export_ilmplot',
                                  'ILM Plot (*.ilmplot.svg)…', '', '',
                                  'Export an editable ILM plot'),
@@ -111,4 +121,4 @@ EXPORT_MENU = ('export_ilmplot', 'export_pdf', 'export_svg', 'export_png',
                'export_tiff', 'export_jpg')
 EDIT_MENU = ('undo', 'redo', None, 'cut', 'copy', 'paste', 'delete', None,
              'select_all')
-HELP_MENU = ('guide', 'shortcuts', None, 'about')
+HELP_MENU = ('tutorials', 'shortcuts', None, 'about')

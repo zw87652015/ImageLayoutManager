@@ -789,11 +789,6 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
-        self._act_new_plot = QAction(tr("action_new_plot"), self)
-        self._act_new_plot.setToolTip(tr("tooltip_new_plot"))
-        self._act_new_plot.triggered.connect(lambda: self._on_new_plot())
-        file_menu.addAction(self._act_new_plot)
-
         self._act_open_plot_editor = QAction(tr("action_open_plot_editor"), self)
         self._act_open_plot_editor.setToolTip(tr("tooltip_open_plot_editor"))
         self._act_open_plot_editor.triggered.connect(self._on_open_plot_editor)
@@ -1674,9 +1669,7 @@ class MainWindow(QMainWindow):
         self._act_reload.setText(tr("action_reload"))
         self._act_export_sources.setText(tr("action_export_sources"))
         self._act_export_sources.setToolTip(tr("tooltip_export_sources"))
-        if hasattr(self, '_act_new_plot'):
-            self._act_new_plot.setText(tr("action_new_plot"))
-            self._act_new_plot.setToolTip(tr("tooltip_new_plot"))
+        if hasattr(self, '_act_open_plot_editor'):
             self._act_open_plot_editor.setText(tr("action_open_plot_editor"))
             self._act_open_plot_editor.setToolTip(tr("tooltip_open_plot_editor"))
         self._act_export_pdf.setText(tr("action_export_pdf"))
@@ -2774,6 +2767,8 @@ class MainWindow(QMainWindow):
                 cell_dict["_plot_alignment"] = None if alignment is None else {
                     "id": alignment.id, "name": alignment.name, "member_count": len(alignment.cell_ids)}
                 cell_dict["_image_aspect_ratio"] = self._cell_image_aspect_ratio(cell)
+                from src.utils.editable_plot import plot_is_loadable
+                cell_dict["_is_editable_plot"] = plot_is_loadable(cell.image_path)
                 corner_labels = {}
                 for t in self.project.text_items:
                     if t.scope == "cell" and t.parent_id == cell.id and t.anchor:
@@ -4239,6 +4234,19 @@ class MainWindow(QMainWindow):
             sb_action.triggered.connect(
                 lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
             )
+
+            # Reflow ON — native editable plots that actually load.
+            # Checkable so the menu mirrors the Inspector ReflowCard.
+            from src.utils.editable_plot import plot_is_loadable
+            if plot_is_loadable(cell.image_path):
+                menu.addSeparator()
+                reflow_action = menu.addAction(tr("ctx_reflow_on"))
+                reflow_action.setCheckable(True)
+                reflow_action.setChecked(bool(getattr(cell, 'plot_reflow', False)))
+                reflow_action.triggered.connect(
+                    lambda: self._ctx_set_cell_prop(
+                        cell_id, {"plot_reflow": not cell.plot_reflow})
+                )
 
             # SVG Text Groups (only for SVG images)
             if cell.image_path and cell.image_path.lower().endswith('.svg'):

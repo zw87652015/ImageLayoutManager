@@ -28,6 +28,12 @@ class PlotCanvas(QGraphicsView):
     """
 
     element_activated = pyqtSignal(str, QPoint)
+    # key-or-None, global pos, figure fraction (or None)
+    context_requested = pyqtSignal(object, QPoint, object)
+    # 'annotation:<id>' dropped at a new axes-fraction centre
+    element_moved = pyqtSignal(str, float, float)
+    # Delete/Backspace on a selected 'annotation:'/'bracket:' element
+    element_delete_requested = pyqtSignal(str)
 
     def __init__(self, theme, parent=None):
         super().__init__(parent)
@@ -41,7 +47,14 @@ class PlotCanvas(QGraphicsView):
         self._regions = None
         self._hover = None
         self._hover_key = None
+        self._drag = None
+        self._selected_key = None
+        self._selection = None
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context)
         scene = QGraphicsScene(self)
         scene.setBackgroundBrush(token_color(get_tokens(theme)
                                              ['canvas_bg']))
@@ -54,6 +67,9 @@ class PlotCanvas(QGraphicsView):
         self._hover_pen.setStyle(Qt.PenStyle.DashLine)
         self._hover_pen.setCosmetic(True)
         self._hover_pen.setWidth(1)
+        self._select_pen = QPen(token_color(get_tokens(theme)['accent']))
+        self._select_pen.setCosmetic(True)
+        self._select_pen.setWidthF(1.5)
 
     def show_svg(self, data, keep_view=False):
         """Replace the scene with ``data`` (SVG bytes) and fit to view.
@@ -87,6 +103,13 @@ class PlotCanvas(QGraphicsView):
         scene.addItem(hover)
         self._hover = hover
         self._hover_key = None
+        selection = QGraphicsRectItem()
+        selection.setPen(self._select_pen)
+        selection.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        selection.setZValue(2)
+        selection.hide()
+        scene.addItem(selection)
+        self._selection = selection
         if old_bounds is not None and bounds == old_bounds:
             if old_auto:
                 self._fit()
@@ -109,6 +132,42 @@ class PlotCanvas(QGraphicsView):
         self._hover_key = None
         if self._hover is not None:
             self._hover.hide()
+        # Keep the selection across re-renders while its element exists.
+        self._select(self._selected_key)
+
+    # ── selection (notes / brackets; Delete removes) ─────────────────
+
+    def _select(self, key):
+        """Select a deletable element, or clear with ``None``."""
+        bbox = None
+        if key is not None and self._regions is not None \
+                and self._item is not None:
+            bbox = self._hover_bbox(key)
+        self._selected_key = key if bbox is not None else None
+        if self._selection is None:
+            return
+        if bbox is None:
+            self._selection.hide()
+            return
+        rect = self._frac_bbox_to_scene(bbox)
+        pad = _HOVER_PAD / max(self._scale, 1e-6)
+        self._selection.setRect(rect.adjusted(-pad, -pad, pad, pad))
+        self._selection.show()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) \
+                and self._selected_key is not None:
+            key = self._selected_key
+            self._select(None)
+            event.accept()
+            self.element_delete_requested.emit(key)
+            return
+        if event.key() == Qt.Key.Key_Escape \
+                and self._selected_key is not None:
+            self._select(None)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _frac_point(self, view_pos):
         """View pos → figure fraction, or None when outside the SVG."""
@@ -172,6 +231,14 @@ class PlotCanvas(QGraphicsView):
         if key.startswith('series:'):
             entry = (self._regions.get('series') or {}).get(key[7:])
             return entry.get('bbox') if entry else None
+        for prefix, coll in (('violin:', 'violins'), ('stack:', 'stacks'),
+                             ('annotation:', 'annotations'),
+                             ('bracket:', 'brackets')):
+            if key.startswith(prefix):
+                entry = (self._regions.get(coll) or {}).get(
+                    key[len(prefix):])
+                return entry.get('bbox') \
+                    if isinstance(entry, dict) else entry
         return self._regions.get(key)
 
     def _update_hover(self, view_pos):
@@ -223,6 +290,14 @@ class PlotCanvas(QGraphicsView):
             return
         super().wheelEvent(event)
 
+    def _on_context(self, pos):
+        """Emit ``context_requested`` with the hit key and figure
+        fraction under the cursor (both possibly None)."""
+        key = self._hit_key(pos)
+        frac = self._frac_point(pos)
+        self.context_requested.emit(
+            key, self.viewport().mapToGlobal(pos), frac)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
@@ -230,9 +305,40 @@ class PlotCanvas(QGraphicsView):
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
+        if event.button() == Qt.MouseButton.LeftButton \
+                and self._regions is not None:
+            pos = event.position().toPoint()
+            key = self._hit_key(pos)
+            self._select(key if key is not None and key.startswith(
+                ('annotation:', 'bracket:')) else None)
+            if key is not None and key.startswith('annotation:'):
+                bbox = self._hover_bbox(key)
+                if bbox is not None:
+                    self._drag = {'key': key, 'pos': pos,
+                                  'rect': self._frac_bbox_to_scene(bbox),
+                                  'moved': False}
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self._drag is not None:
+            pos = event.position().toPoint()
+            delta = pos - self._drag['pos']
+            if not self._drag['moved'] and max(abs(delta.x()),
+                                               abs(delta.y())) < 4:
+                return
+            self._drag['moved'] = True
+            if self._selection is not None:
+                self._selection.hide()
+            s_delta = self.mapToScene(pos) - self.mapToScene(
+                self._drag['pos'])
+            if self._hover is not None:
+                pad = _HOVER_PAD / max(self._scale, 1e-6)
+                self._hover.setRect(
+                    self._drag['rect'].translated(s_delta).adjusted(
+                        -pad, -pad, pad, pad))
+                self._hover.show()
+            event.accept()
+            return
         if self._panning:
             delta = event.position() - self._pan_pos
             self._pan_pos = event.position()
@@ -267,6 +373,23 @@ class PlotCanvas(QGraphicsView):
         if event.button() == Qt.MouseButton.MiddleButton and self._panning:
             self._panning = False
             self.viewport().unsetCursor()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.LeftButton \
+                and self._drag is not None:
+            drag = self._drag
+            self._drag = None
+            if drag['moved'] and self._item is not None:
+                rect = drag['rect'].translated(
+                    self.mapToScene(event.position().toPoint())
+                    - self.mapToScene(drag['pos']))
+                bounds = self._item.boundingRect()
+                fx = (rect.center().x() - bounds.x()) / bounds.width()
+                fy = (rect.center().y() - bounds.y()) / bounds.height()
+                axes = hit_test.figure_to_axes(self._regions, fx, fy)
+                if axes is not None:
+                    self.element_moved.emit(drag['key'], axes[0],
+                                            axes[1])
             event.accept()
             return
         super().mouseReleaseEvent(event)

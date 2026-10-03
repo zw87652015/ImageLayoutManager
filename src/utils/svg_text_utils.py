@@ -535,7 +535,10 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         if not handled:
             mm_per_unit = svg_mm_per_unit(project, cell, base_bytes,
                                           layout_result, content_size_mm)
-            if mm_per_unit > 0:
+            # plot_reflow off keeps the stored snapshot verbatim — the
+            # exact bytes the Plot Editor saved — so no style-scaled
+            # re-render either. Placement then scales it like a picture.
+            if mm_per_unit > 0 and getattr(cell, 'plot_reflow', False):
                 try:
                     from src.plot_editor.render import render_document
                     base_bytes = render_document(

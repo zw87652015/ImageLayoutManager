@@ -1,7 +1,7 @@
 import os
 
 from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsTextItem
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QCursor
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QFontMetrics, QCursor
 from PyQt6.QtCore import Qt, QRectF, QRect, QPointF, pyqtSignal, QVariantAnimation, QEasingCurve, QTimer
 
 from src.app.motion import start_animation
@@ -509,6 +509,9 @@ class CellItem(QGraphicsRectItem):
         self._pip_drop_indicator_t = 0.0  # 0.0 = replace border, 1.0 = PiP zone border
         self._pip_anim = None
         self._accent_color = "#0891B2"
+        self._on_accent_color = "#FFFFFF"
+        self._reflow_icon = None
+        self._reflow_icon_color = None
 
         # PiP inset state
         self._pip_items = []          # list of PiPItem data objects
@@ -1004,6 +1007,7 @@ class CellItem(QGraphicsRectItem):
         # need a white backing and the cell represents paper, not UI chrome.
         accent = QColor(tokens.get("accent", "#0891B2"))
         self._accent_color = tokens.get("accent", "#0891B2")
+        self._on_accent_color = tokens.get("on_accent", "#FFFFFF")
         self.hover_brush.setColor(QColor(accent.red(), accent.green(), accent.blue(), 25))
         self.update()
 
@@ -1524,15 +1528,25 @@ class CellItem(QGraphicsRectItem):
         if self._ext_drag_active:
             self._draw_pip_drop_zone(painter, rect)
 
-        # Draw Size Group badge (small color chip in top-left corner).
-        # Suppressed in preview/export.
+        # Draw Size Group badge (small color chip in top-left corner) and
+        # the reflow icon marking a native plot actively reflowing.
+        # Both are screen-only: suppressed in preview, and exporters never
+        # call CellItem.paint (they draw through ImageExporter._paint_scene).
         if not in_preview:
             project = getattr(scene, 'project', None)
             if project is not None:
                 cell = project.find_cell_by_id(self.cell_id)
                 gid = getattr(cell, 'size_group_id', None) if cell else None
+                top_px = 4
                 if gid:
                     self._draw_size_group_badge(painter, rect, gid)
+                    top_px += 18
+                # ON badge marks *effective* reflow — a requested flag
+                # blocked by Lock Ratio or an alignment group gets no chip.
+                if cell is not None:
+                    from src.utils.editable_plot import plot_reflows
+                    if plot_reflows(project, cell):
+                        self._draw_reflow_chip(painter, rect, top_px)
 
         # Draw Border (suppressed in preview mode)
         if not in_preview:
@@ -1595,6 +1609,27 @@ class CellItem(QGraphicsRectItem):
         painter.setFont(font)
         painter.setPen(QPen(QColor("#FFFFFF")))
         painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, label)
+        painter.restore()
+
+    def _draw_reflow_chip(self, painter: QPainter, rect: QRectF, top_px: int = 4):
+        """Screen-only reflow icon, fixed in logical pixels across canvas zoom."""
+        transform = painter.transform()
+        if transform.m11() <= 0:
+            return
+        dev_rect = transform.mapRect(rect)
+        chip = QRectF(dev_rect.left() + 4, dev_rect.top() + top_px, 24, 24)
+        if self._reflow_icon_color != self._on_accent_color:
+            from src.app.icons import make_icon
+            self._reflow_icon = make_icon("reflow_on", self._on_accent_color)
+            self._reflow_icon_color = self._on_accent_color
+
+        painter.save()
+        painter.resetTransform()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(self._accent_color))
+        painter.drawRoundedRect(chip, 4, 4)
+        self._reflow_icon.paint(painter, chip.adjusted(2, 2, -2, -2).toRect())
         painter.restore()
 
     def _draw_label_cell(self, painter: QPainter, rect: QRectF):
@@ -2028,6 +2063,14 @@ class CellItem(QGraphicsRectItem):
                     parts.append(f"{size_bytes / 1_048_576:.1f} MB")
                 else:
                     parts.append(f"{size_bytes / 1024:.0f} KB")
+            scene = self.scene()
+            project = getattr(scene, 'project', None) if scene else None
+            cell = project.find_cell_by_id(self.cell_id) if project else None
+            if cell is not None:
+                from src.app.i18n import tr
+                from src.utils.editable_plot import plot_reflows
+                if plot_reflows(project, cell):
+                    parts.append(tr('tip_plot_reflow_on'))
             self.setToolTip("\n".join(parts))
         except Exception:
             self.setToolTip("")

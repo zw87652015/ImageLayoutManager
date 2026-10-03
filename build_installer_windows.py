@@ -652,7 +652,7 @@ def main(argv=None) -> int:
         Name: "{{group}}\\ImageLayoutManager CLI (shell)"; Filename: "{{cmd}}"; Parameters: "/K imagelayout-cli --help"; WorkingDir: "{{app}}"; Comment: "Opens a command prompt for imagelayout-cli"
         ; Standalone plot editor — same exe, dispatched by main.py before the
         ; main window is constructed, so no second Python bundle is needed.
-        Name: "{{group}}\\ILM Plot Editor"; Filename: "{{app}}\\ImageLayoutManager.exe"; Parameters: "--plot-editor"; WorkingDir: "{{app}}"; Comment: "Create and edit editable line plots (*.ilmplot.svg)"
+        Name: "{{group}}\\ILM Plot Editor"; Filename: "{{app}}\\ImageLayoutManager.exe"; Parameters: "--plot-editor"; WorkingDir: "{{app}}"; Comment: "Create and edit editable plots (*.ilmplot.svg)"
         Name: "{{group}}\\Uninstall ImageLayoutManager"; Filename: "{{uninstallexe}}"
         Name: "{{userdesktop}}\\ImageLayoutManager"; Filename: "{{app}}\\ImageLayoutManager.exe"; Tasks: desktopicon
 

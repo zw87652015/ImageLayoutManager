@@ -321,6 +321,8 @@ def render_document(document: PlotDocument, *,
         try:
             fig, ax = _build_figure(document, s, document.width_mm,
                                     document.height_mm)
+            _fit_figure(document, fig, ax)
+            pos = ax.get_position()
             buf = io.BytesIO()
             fig.savefig(buf, format='svg',
                         metadata={'Date': None,
@@ -335,8 +337,8 @@ def render_document(document: PlotDocument, *,
         raise PlotDocumentError(
             f"rendered SVG exceeds {MAX_FILE_BYTES // (1024 * 1024)} MiB — "
             f"reduce the number of data points")
-    l, b, w, h = (float(v) for v in document.axes_rect)
-    render = PlotRender(svg=svg, plot_area=(l, 1.0 - (b + h), l + w, 1.0 - b))
+    render = PlotRender(
+        svg=svg, plot_area=(pos.x0, 1.0 - pos.y1, pos.x1, 1.0 - pos.y0))
     _render_cache[key] = render
     if len(_render_cache) > _RENDER_CACHE_MAX:
         _render_cache.popitem(last=False)
@@ -533,6 +535,89 @@ def clip_series_to_view(x, y, xlim, ylim, xlog=False, ylog=False):
     return out_x, out_y, mask
 
 
+def clip_polygon_to_view(xs, ys, xlim, ylim, xlog=False, ylog=False):
+    """Clip a closed polygon to a view box (Sutherland–Hodgman).
+
+    QtSvg ignores ``clipPath``, so filled areas (violin bodies, stacked
+    bars, ridgeline fills) are clipped in data space when the document
+    pins a limit. Works in transformed space (log10 on log axes;
+    non-positive vertices are dropped). Returns ``(xs, ys)`` — empty
+    when the polygon lies fully outside.
+    """
+    def bound(v, log, extreme):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return extreme
+        if log:
+            return math.log10(v) if v > 0 else extreme
+        return v
+
+    x0 = bound(min(xlim), xlog, -math.inf)
+    x1 = bound(max(xlim), xlog, math.inf)
+    y0 = bound(min(ylim), ylog, -math.inf)
+    y1 = bound(max(ylim), ylog, math.inf)
+
+    pts = []
+    for xv, yv in zip(xs, ys):
+        try:
+            xv, yv = float(xv), float(yv)
+        except (TypeError, ValueError):
+            continue
+        if xlog and xv <= 0 or ylog and yv <= 0:
+            continue  # untransformable → outside
+        if xlog:
+            xv = math.log10(xv)
+        if ylog:
+            yv = math.log10(yv)
+        if math.isnan(xv) or math.isnan(yv):
+            continue
+        pts.append((xv, yv))
+    if len(pts) < 3:
+        return [], []
+
+    def clip_bound(points, axis, bound_v, is_lo):
+        """Sequential Sutherland–Hodgman against one half-plane."""
+        if bound_v in (-math.inf, math.inf):
+            return points
+        if (lo if is_lo else hi) is None:
+            return points
+        bound_v = lo if is_lo else hi
+        if bound_v in (-math.inf, math.inf):
+            return points
+        out = []
+
+        def inside(p):
+            return p[axis] >= bound_v if is_lo else p[axis] <= bound_v
+
+        for i, p in enumerate(points):
+            q = points[i - 1]
+            ip, iq = inside(p), inside(q)
+            if ip:
+                if not iq:
+                    dq = p[axis] - q[axis]
+                    t = (bound_v - q[axis]) / dq if dq else 0.0
+                    out.append((q[0] + t * (p[0] - q[0]),
+                                q[1] + t * (p[1] - q[1])))
+                out.append(p)
+            elif iq:
+                dq = p[axis] - q[axis]
+                t = (bound_v - q[axis]) / dq if dq else 0.0
+                out.append((q[0] + t * (p[0] - q[0]),
+                            q[1] + t * (p[1] - q[1])))
+        return out
+
+    for axis, lo, hi in ((0, x0, x1), (1, y0, y1)):
+        pts = clip_bound(pts, axis, lo, True)
+        pts = clip_bound(pts, axis, hi, False)
+        if not pts:
+            return [], []
+
+    out_x = [10 ** p[0] if xlog else p[0] for p in pts]
+    out_y = [10 ** p[1] if ylog else p[1] for p in pts]
+    return out_x, out_y
+
+
 def _add_underline(ax, get_texts):
     """Add an ``Artist`` that underlines text artists (matplotlib has none).
 
@@ -592,6 +677,501 @@ def _text_kwargs(ts, family, size_pt, s):
     return kw
 
 
+def _view_limits(document, ax, default_xlim, default_ylim):
+    """Final (xlim, ylim): document pins win, else the computed default."""
+    xlim = document.xlim if document.xlim is not None else default_xlim
+    ylim = document.ylim if document.ylim is not None else default_ylim
+    return xlim, ylim
+
+
+def _clip_needed(document):
+    return document.xlim is not None or document.ylim is not None
+
+
+def _draw_violin(document, ax, s):
+    """Violin bodies + inner box + jittered points (NCPlot port)."""
+    from matplotlib.patches import Polygon
+    from matplotlib.colors import to_rgb, rgb_to_hsv
+    from . import stats
+    opt = document.violin
+    if opt is None:
+        from .document import ViolinOptions
+        opt = ViolinOptions()
+    groups = document.groups
+    n = len(groups)
+    clip = _clip_needed(document)
+    y_axis = getattr(document.style, 'yaxis', None) \
+        if document.style is not None else None
+    xlog = False   # violin x is always categorical positions
+    ylog = y_axis is not None and y_axis.scale == 'log'
+    extra = 0.45 if opt.show_points and opt.points_beside else 0.0
+    default_xlim = (1 - 0.7, n + 0.7 + extra)
+    all_vals = [v for g in groups for v in g.values]
+    pad = (max(all_vals) - min(all_vals)) * 0.05 or 1.0
+    default_ylim = (min(all_vals) - pad, max(all_vals) + pad)
+    xlim, ylim = _view_limits(document, ax, default_xlim, default_ylim)
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
+    gid = 'ilmplot-violin-'
+    for i, (g, pos) in enumerate(zip(groups, range(1, n + 1))):
+        edge = g.color
+        fill_alpha = opt.fill_alpha
+        edge_w = opt.edge_width_pt
+        dot_edge = 'face'
+        dot_alpha = opt.point_alpha
+        dot_lw = opt.point_edge_width_pt
+        if opt.enhance_contrast:
+            hsv = rgb_to_hsv(to_rgb(g.color))
+            if hsv[2] > 0.8 and hsv[1] < 0.5:
+                edge = '#666666'
+                fill_alpha = 0.7
+                edge_w = 1.2
+                dot_edge = '#666666'
+                dot_alpha = 0.9
+        if opt.edge_color is not None:
+            edge = opt.edge_color
+        if opt.point_edge_color is not None:
+            dot_edge = opt.point_edge_color
+        shape = stats.violin_shape(g.values, opt.bandwidth)
+        if shape is not None:
+            pts, half = shape
+            xs = [pos + h for h in half] + \
+                [pos - h for h in half[::-1]]
+            ys = list(pts) + list(pts[::-1])
+            if clip:
+                xs, ys = clip_polygon_to_view(xs, ys, xlim, ylim,
+                                              xlog, ylog)
+            if xs:
+                # QtSvg draws a 0-width stroke as a 1-px hairline —
+                # remove the edge instead of passing width 0.
+                patch = Polygon(list(zip(xs, ys)), closed=True,
+                                facecolor=g.color,
+                                edgecolor='none' if edge_w == 0
+                                else edge,
+                                alpha=fill_alpha,
+                                linewidth=edge_w * s)
+                patch.set_gid(gid + g.id)
+                ax.add_patch(patch)
+        if opt.show_box:
+            q1, med, q3, lo, hi = stats.box_stats(g.values)
+            box_w = 0.08
+            gid_prefix = gid + g.id
+            wl, = ax.plot([pos, pos], [lo, hi], color='#333333',
+                          linewidth=1.2 * s, zorder=3)
+            wl.set_gid(gid_prefix)
+            rx, ry = ([pos - box_w, pos + box_w, pos + box_w,
+                       pos - box_w], [q1, q1, q3, q3])
+            if clip:
+                rx, ry = clip_polygon_to_view(rx, ry, xlim, ylim,
+                                              xlog, ylog)
+            if rx:
+                rect = Polygon(list(zip(rx, ry)), closed=True,
+                               facecolor='white', edgecolor='#333333',
+                               linewidth=1.2 * s, zorder=4)
+                rect.set_gid(gid_prefix)
+                ax.add_patch(rect)
+            ml, = ax.plot([pos - box_w, pos + box_w], [med, med],
+                          color='#333333', linewidth=1.8 * s, zorder=5,
+                          solid_capstyle='butt')
+            ml.set_gid(gid_prefix)
+            if clip:
+                cx, cy, _m = clip_series_to_view(
+                    [pos, pos], [lo, hi], xlim, ylim, xlog, ylog)
+                wl.set_data(cx, cy)
+                mx, my, _m = clip_series_to_view(
+                    [pos - box_w, pos + box_w], [med, med],
+                    xlim, ylim, xlog, ylog)
+                ml.set_data(mx, my)
+        if opt.show_points:
+            jit = stats.jitter(len(g.values), opt.points_beside,
+                               42 + i)
+            xs = [pos + j for j in jit]
+            ys = list(g.values)
+            if clip:
+                pts_xy = [(x, y) for x, y in zip(xs, ys)
+                          if min(xlim) <= x <= max(xlim)
+                          and min(ylim) <= y <= max(ylim)]
+                xs = [p[0] for p in pts_xy]
+                ys = [p[1] for p in pts_xy]
+            coll = ax.scatter(
+                xs, ys, s=(opt.point_size_pt * s) ** 2,
+                color=g.color, alpha=dot_alpha,
+                edgecolors='none' if dot_lw == 0 else dot_edge,
+                linewidths=0.0 if dot_lw == 0 else dot_lw * s,
+                zorder=6)
+            coll.set_gid(gid + g.id)
+
+
+def _draw_ridgeline(document, ax, s, lines):
+    """Ridgeline (mountain-stacked) series — NCPlot's generate_plot."""
+    import types
+    from matplotlib.patches import Polygon
+    from .document import RidgeOptions
+    opt = document.ridgeline or RidgeOptions()
+    series = document.series
+    n = len(series)
+    max_range = 0.0
+    all_x = []
+    for s_ in series:
+        if s_.y:
+            max_range = max(max_range, max(s_.y) - min(s_.y))
+        all_x.extend(s_.x)
+    offset = opt.offset or (max_range * 1.05 if max_range > 0 else 1.0)
+    diffs = sorted(set(all_x))
+    steps = [b - a for a, b in zip(diffs, diffs[1:]) if b - a > 0]
+    min_step = min(steps) if steps else 1.0
+    half = min_step * 0.48
+    indices = list(range(n))
+    if opt.reverse:
+        indices.reverse()
+    clip = _clip_needed(document)
+    x_axis = getattr(document.style, 'xaxis', None) \
+        if document.style is not None else None
+    y_axis = getattr(document.style, 'yaxis', None) \
+        if document.style is not None else None
+    xlog = x_axis is not None and x_axis.scale == 'log'
+    ylog = y_axis is not None and y_axis.scale == 'log'
+    tick_ts = getattr(getattr(document.style, 'yaxis', None),
+                      'ticks', None) if document.style else None
+    label_kw = _text_kwargs(tick_ts, document.font_family,
+                            document.font_size_pt, s)
+    y_top = 0.0
+    x_min = min(all_x) if all_x else 0.0
+    x_max = max(all_x) if all_x else 1.0
+    for s_ in series:
+        if s_.y:
+            i = series.index(s_)
+            y_top = max(y_top, i * offset + max(s_.y) - min(s_.y))
+    pad = (x_max - x_min) * 0.04 if x_max > x_min else 0.5
+    view_xlim = document.xlim or (x_min - pad, x_max + pad)
+    view_ylim = document.ylim or (-offset * 0.15,
+                                 y_top + offset * 0.25)
+    ax.set_xlim(view_xlim)
+    ax.set_ylim(view_ylim)
+    for i in indices:
+        s_ = series[i]
+        ymin = min(s_.y)
+        baseline = i * offset
+        y_plot = [y - ymin + baseline for y in s_.y]
+        y_top = max(y_top, max(y_plot))
+        poly_x = list(s_.x) + list(s_.x[::-1])
+        poly_y = list(y_plot) + [baseline] * len(s_.x)
+        if clip:
+            px, py = clip_polygon_to_view(poly_x, poly_y,
+                                          view_xlim, view_ylim,
+                                          xlog, ylog)
+        else:
+            px, py = poly_x, poly_y
+        if px:
+            patch = Polygon(list(zip(px, py)), closed=True,
+                            facecolor=s_.color, alpha=opt.fill_alpha,
+                            edgecolor='none', zorder=2 + i)
+            patch.set_gid(f'ilmplot-series-{s_.id}')
+            ax.add_patch(patch)
+        line, = ax.plot(s_.x, y_plot, color=s_.color,
+                        linewidth=max(s_.linewidth_pt * s, 1e-3),
+                        linestyle='None' if s_.linewidth_pt == 0 else
+                        (s_.linestyle if s_.linestyle else 'None'),
+                        marker=s_.marker or None,
+                        markersize=max(s_.markersize_pt * s, 0.0),
+                        markeredgewidth=1.0 * s, zorder=3 + i,
+                        label='_nolegend_')
+        line.set_gid(f'ilmplot-series-{s_.id}')
+        lines.append((line, types.SimpleNamespace(
+            x=list(s_.x), y=list(y_plot), marker=s_.marker)))
+        xmin, xmax = min(s_.x), max(s_.x)
+        if opt.baseline_width_pt > 0:
+            ax.plot([xmin - half, xmax + half], [baseline, baseline],
+                    color=opt.baseline_color,
+                    linewidth=opt.baseline_width_pt * s, zorder=1)
+        if opt.labels:
+            t = ax.text(xmin - half * 1.4,
+                        baseline + (max(y_plot) - baseline) * 0.5,
+                        safe_text(s_.label), ha='right', va='center',
+                        **label_kw)
+            t.set_gid(f'ilmplot-series-label-{s_.id}')
+    ax.set_yticks([])
+
+
+def _yerr_bounds(item):
+    """Per-point (lower, upper) error extents from either
+    representation, or None."""
+    if item.yerr_minus is not None:
+        return list(item.yerr_minus), list(item.yerr_plus)
+    if item.yerr is not None:
+        return list(item.yerr), list(item.yerr)
+    return None
+
+
+def _draw_series_yerr(document, ax, ser, s, gid):
+    """Capless vertical error bars for a line series, in its colour."""
+    from matplotlib.collections import LineCollection
+    lower, upper = _yerr_bounds(ser)
+    xlim = document.xlim
+    ylim = document.ylim
+    y_axis = getattr(document.style, 'yaxis', None) \
+        if document.style is not None else None
+    ylog = y_axis is not None and y_axis.scale == 'log'
+    segs = []
+    for x, y, lo_e, hi_e in zip(ser.x, ser.y, lower, upper):
+        if xlim is not None and not (min(xlim) <= x <= max(xlim)):
+            continue
+        lo, hi = y - lo_e, y + hi_e
+        if ylog and lo <= 0:
+            lo = y / 10.0
+        if ylim is not None:
+            if lo > max(ylim) or hi < min(ylim):
+                continue
+            lo, hi = max(lo, min(ylim)), min(hi, max(ylim))
+            if lo > hi:
+                continue
+        segs.append(((x, lo), (x, hi)))
+    if not segs:
+        return
+    lw = (ser.linewidth_pt if ser.linewidth_pt > 0 else 1.5) * s
+    coll = LineCollection(segs, colors=ser.color,
+                          linewidths=max(lw, 1e-3), zorder=1.9)
+    coll.set_gid(gid)
+    ax.add_collection(coll)
+
+
+def _draw_stacked(document, ax, s):
+    """Stacked or grouped columns (percent or absolute) — NCPlot
+    port."""
+    from matplotlib.patches import Polygon
+    from .document import StackOptions
+    opt = document.stacked or StackOptions()
+    cats = document.categories
+    n_bars = len(cats[0].values)
+    clip = _clip_needed(document)
+    y_axis = getattr(document.style, 'yaxis', None) \
+        if document.style is not None else None
+    xlog = False   # stacked x is always categorical positions
+    ylog = y_axis is not None and y_axis.scale == 'log'
+    totals = [sum(c.values[i] for c in cats) for i in range(n_bars)]
+    widths = opt.bar_width / 2.0
+    if opt.percent:
+        y_max = 100.0
+    elif opt.grouped:
+        uppers = [(_yerr_bounds(c) or (None, [0.0] * n_bars))[1]
+                  for c in cats]
+        y_max = max(c.values[b] + uppers[i][b]
+                    for i, c in enumerate(cats)
+                    for b in range(n_bars)) * 1.02
+    else:
+        y_max = max(totals) * 1.02
+    xlim, ylim = _view_limits(
+        document, ax, (-0.8, n_bars - 1 + 0.8), (0.0, y_max))
+    ax.set_xlim(xlim)
+    # Bars are bare Polygon patches, which never trigger y autoscaling,
+    # so the default range is set explicitly (a log axis keeps
+    # matplotlib's own range: a 0 lower bound is invalid there).
+    if opt.percent or document.ylim is not None or not ylog:
+        ax.set_ylim(ylim)
+    bottoms = [0.0] * n_bars
+    value_fs = (opt.value_size_pt
+                if opt.value_size_pt is not None
+                else document.font_size_pt * 6.0 / 7.0)
+    if opt.grouped:
+        n_cats = len(cats)
+        w = opt.bar_width / n_cats
+        for i, c in enumerate(cats):
+            gid = f'ilmplot-stack-{c.id}'
+            err_segs = []
+            bounds = _yerr_bounds(c)
+            for b in range(n_bars):
+                v = c.values[b]
+                x = b - opt.bar_width / 2.0 + w * (i + 0.5)
+                if bounds is not None and (bounds[0][b] > 0
+                                           or bounds[1][b] > 0):
+                    lo, hi = v - bounds[0][b], v + bounds[1][b]
+                    in_x = not clip or (min(xlim) <= x <= max(xlim))
+                    if in_x and clip:
+                        if lo > max(ylim) or hi < min(ylim):
+                            in_x = False
+                        else:
+                            lo = max(lo, min(ylim))
+                            hi = min(hi, max(ylim))
+                    if in_x and hi >= lo:
+                        err_segs.append(((x, lo), (x, hi)))
+                xs = [x - w / 2, x + w / 2, x + w / 2, x - w / 2]
+                ys = [0.0, 0.0, v, v]
+                if clip:
+                    xs, ys = clip_polygon_to_view(xs, ys, xlim, ylim,
+                                                  xlog, ylog)
+                if xs:
+                    patch = Polygon(list(zip(xs, ys)), closed=True,
+                                    facecolor=c.color,
+                                    edgecolor='none'
+                                    if opt.edge_width_pt == 0
+                                    else opt.edge_color,
+                                    linewidth=opt.edge_width_pt * s,
+                                    zorder=2)
+                    patch.set_gid(gid)
+                    ax.add_patch(patch)
+                if opt.show_values and v > 0:
+                    if clip and not (min(ylim) <= v <= max(ylim)):
+                        continue
+                    text = f'{v:.{opt.value_decimals}f}'
+                    # Labels sit above the bar on the background: the
+                    # default white (meant for inside stacked segments)
+                    # would vanish, so it falls back to black.
+                    t = ax.text(x, v, safe_text(text), ha='center',
+                                va='bottom', fontsize=value_fs * s,
+                                color='#000000'
+                                if opt.value_color == '#ffffff'
+                                else opt.value_color,
+                                fontweight='bold' if opt.value_bold
+                                else 'normal', zorder=3)
+                    t.set_gid(gid)
+            if err_segs:
+                from matplotlib.collections import LineCollection
+                coll = LineCollection(err_segs, colors='#000000',
+                                      linewidths=1.5 * s, zorder=3)
+                coll.set_gid(gid)
+                ax.add_collection(coll)
+        return
+    for c in cats:
+        gid = f'ilmplot-stack-{c.id}'
+        for b in range(n_bars):
+            v = c.values[b]
+            share = v / totals[b] * 100.0 if totals[b] else 0.0
+            h = share if opt.percent else v
+            y0, y1 = bottoms[b], bottoms[b] + h
+            xs = [b - widths, b + widths, b + widths, b - widths]
+            ys = [y0, y0, y1, y1]
+            if clip:
+                xs, ys = clip_polygon_to_view(xs, ys, xlim, ylim,
+                                              xlog, ylog)
+            if xs:
+                patch = Polygon(list(zip(xs, ys)), closed=True,
+                                facecolor=c.color,
+                                edgecolor='none'
+                                if opt.edge_width_pt == 0
+                                else opt.edge_color,
+                                linewidth=opt.edge_width_pt * s,
+                                zorder=2)
+                patch.set_gid(gid)
+                ax.add_patch(patch)
+            bottoms[b] += h
+            if opt.show_values and share >= opt.value_threshold \
+                    and h > 0:
+                mid = (y0 + y1) / 2.0
+                if clip and not (min(ylim) <= mid <= max(ylim)):
+                    continue
+                text = (f'{share:.{opt.value_decimals}f}%'
+                        if opt.percent
+                        else f'{v:.{opt.value_decimals}f}')
+                t = ax.text(b, mid, safe_text(text), ha='center',
+                            va='center', fontsize=value_fs * s,
+                            color=opt.value_color,
+                            fontweight='bold' if opt.value_bold
+                            else 'normal', zorder=3)
+                t.set_gid(gid)
+
+
+_ANCHOR_XY = {
+    'upper left': (0.02, 0.98, 'left', 'top'),
+    'upper center': (0.5, 0.98, 'center', 'top'),
+    'upper right': (0.98, 0.98, 'right', 'top'),
+    'lower left': (0.02, 0.02, 'left', 'bottom'),
+    'lower center': (0.5, 0.02, 'center', 'bottom'),
+    'lower right': (0.98, 0.02, 'right', 'bottom'),
+    'center left': (0.02, 0.5, 'left', 'center'),
+    'center right': (0.98, 0.5, 'right', 'center'),
+}
+
+
+def _data_y_range(document):
+    """(y_max, y_range) for bracket placement, per kind."""
+    if document.kind == 'violin':
+        vals = [v for g in document.groups for v in g.values]
+        return max(vals), (max(vals) - min(vals)) or 1.0
+    if document.kind == 'stacked_column':
+        opt = document.stacked
+        percent = opt.percent if opt is not None else True
+        if percent:
+            return 100.0, 100.0
+        if opt is not None and opt.grouped:
+            uppers = [
+                (_yerr_bounds(c)
+                 or (None, [0.0] * len(c.values)))[1]
+                for c in document.categories]
+            top = max(v + uppers[j][i]
+                      for j, c in enumerate(document.categories)
+                      for i, v in enumerate(c.values))
+            return top, top or 1.0
+        n_bars = len(document.categories[0].values)
+        totals = [sum(c.values[i] for c in document.categories)
+                  for i in range(n_bars)]
+        top = max(totals)
+        return top, top or 1.0
+    if document.kind == 'ridgeline':
+        offset = _ridge_offset(document)
+        top = 0.0
+        for i, s_ in enumerate(document.series):
+            if s_.y:
+                top = max(top, i * offset + max(s_.y) - min(s_.y))
+        return top, top or 1.0
+    ys = [y for s_ in document.series for y in s_.y]
+    return max(ys), (max(ys) - min(ys)) or 1.0
+
+
+def _ridge_offset(document):
+    opt = document.ridgeline
+    if opt is not None and opt.offset:
+        return opt.offset
+    max_range = 0.0
+    for s_ in document.series:
+        if s_.y:
+            max_range = max(max_range, max(s_.y) - min(s_.y))
+    return max_range * 1.05 if max_range > 0 else 1.0
+
+
+def _draw_annotations(document, ax, s):
+    for ann in document.annotations:
+        if ann.x is not None and ann.y is not None:
+            x, y, ha, va = ann.x, ann.y, 'center', 'center'
+        else:
+            x, y, ha, va = _ANCHOR_XY[ann.anchor]
+        kw = _text_kwargs(ann.style, document.font_family,
+                          document.font_size_pt, s)
+        if ann.box:
+            kw['bbox'] = dict(boxstyle='round,pad=0.3',
+                              facecolor='white', edgecolor='none',
+                              alpha=0.8)
+        t = ax.text(x, y, safe_text(ann.text), transform=ax.transAxes,
+                    ha=ha, va=va, zorder=10, **kw)
+        t.set_gid(f'ilmplot-annotation-{ann.id}')
+
+
+def _draw_brackets(document, ax, s):
+    if not document.brackets:
+        return
+    ymax, yrange = _data_y_range(document)
+    index_kind = document.kind in ('violin', 'stacked_column')
+    for br in document.brackets:
+        pa = br.a + 1 if document.kind == 'violin' else br.a
+        pb = br.b + 1 if document.kind == 'violin' else br.b
+        y = ymax + yrange * br.offset
+        tick = yrange * 0.01
+        color = br.style.color if br.style is not None else '#333333'
+        kw = _text_kwargs(br.style, document.font_family, 8.0, s)
+        if br.style is None:
+            kw['color'] = '#333333'
+        gid = f'ilmplot-bracket-{br.id}'
+        for xs, ys in (((pa, pb), (y, y)),
+                       ((pa, pa), (y - tick, y)),
+                       ((pb, pb), (y - tick, y))):
+            line, = ax.plot(xs, ys, color=color, linewidth=1.0 * s,
+                            zorder=10, clip_on=False)
+            line.set_gid(gid)
+        t = ax.text((pa + pb) / 2.0, y + yrange * 0.01,
+                    safe_text(br.text), ha='center', va='bottom',
+                    zorder=10, clip_on=False, **kw)
+        t.set_gid(gid)
+
+
 def _build_figure(document: PlotDocument, s: float,
                   width_mm: float, height_mm: float):
     """Build (Figure, Axes) for *document* at typography scale *s*."""
@@ -601,24 +1181,52 @@ def _build_figure(document: PlotDocument, s: float,
     style = document.style
     x_axis = getattr(style, 'xaxis', None) if style is not None else None
     y_axis = getattr(style, 'yaxis', None) if style is not None else None
-    categorical_x = bool(document.x_tick_labels)
+    kind = document.kind
+    categorical_x = bool(document.x_tick_labels) or kind in (
+        'violin', 'stacked_column')
     fig = Figure(figsize=(width_mm / 25.4, height_mm / 25.4))
     ax = fig.add_axes(list(document.axes_rect))
     lines = []
-    for s_ in document.series:
-        line, = ax.plot(
-            s_.x, s_.y,
-            color=s_.color,
-            linewidth=max(s_.linewidth_pt * s, 1e-3),
-            linestyle=s_.linestyle if s_.linestyle else 'None',
-            marker=s_.marker or None,
-            markersize=max(s_.markersize_pt * s, 0.0),
-            markeredgewidth=1.0 * s,
-            label=safe_text(s_.label) or '_nolegend_',
-        )
-        line.set_gid(f'ilmplot-series-{s_.id}')
-        lines.append((line, s_))
-    if categorical_x:
+    if kind == 'violin':
+        _draw_violin(document, ax, s)
+    elif kind == 'ridgeline':
+        _draw_ridgeline(document, ax, s, lines)
+    elif kind == 'stacked_column':
+        _draw_stacked(document, ax, s)
+    else:
+        for s_ in document.series:
+            # A 0-width stroke renders as a hairline under QtSvg — hide
+            # the stroke instead (markers still draw).
+            ls = s_.linestyle if s_.linestyle else 'None'
+            line, = ax.plot(
+                s_.x, s_.y,
+                color=s_.color,
+                linewidth=max(s_.linewidth_pt * s, 1e-3),
+                linestyle='None' if s_.linewidth_pt == 0 else ls,
+                marker=s_.marker or None,
+                markersize=max(s_.markersize_pt * s, 0.0),
+                markeredgewidth=1.0 * s,
+                label=safe_text(s_.label) or '_nolegend_',
+            )
+            line.set_gid(f'ilmplot-series-{s_.id}')
+            lines.append((line, s_))
+            if _yerr_bounds(s_) is not None:
+                _draw_series_yerr(document, ax, s_, s,
+                                  f'ilmplot-series-{s_.id}')
+    if kind == 'violin':
+        ax.set_xticks(list(range(1, len(document.groups) + 1)),
+                      [safe_text(g.label) for g in document.groups])
+    elif kind == 'stacked_column':
+        n_bars = len(document.categories[0].values)
+        if document.x_tick_labels:
+            labels = {p: safe_text(l)
+                      for p, l in document.x_tick_labels}
+        else:
+            labels = {}
+        ax.set_xticks(list(range(n_bars)),
+                      [labels.get(float(i), str(i))
+                       for i in range(n_bars)])
+    elif categorical_x:
         ax.set_xticks([p for p, _l in document.x_tick_labels],
                       [safe_text(l) for _p, l in document.x_tick_labels])
     # Axis scales first so locators/formatters see the right transform.
@@ -678,7 +1286,7 @@ def _build_figure(document: PlotDocument, s: float,
         kw = _text_kwargs(t_style, document.font_family,
                           document.title_size_pt, s)
         loc = t_style.align if t_style is not None else 'center'
-        t = ax.set_title(safe_text(document.title), pad=4.0 * s,
+        t = ax.set_title(safe_text(document.title), pad=6.0 * s,
                          loc=loc, **kw)
         t.set_gid('ilmplot-title')
         if t_style is not None and t_style.underline:
@@ -693,7 +1301,7 @@ def _build_figure(document: PlotDocument, s: float,
         xl.set_gid('ilmplot-xlabel')
         if xl_style is not None and xl_style.underline:
             underlines.append(lambda t=xl: [t])
-    if document.ylabel:
+    if document.ylabel and kind != 'ridgeline':
         yl = ax.set_ylabel(
             safe_text(document.ylabel),
             **_text_kwargs(yl_style, document.font_family,
@@ -702,8 +1310,8 @@ def _build_figure(document: PlotDocument, s: float,
         if yl_style is not None and yl_style.underline:
             underlines.append(lambda t=yl: [t])
     ax.tick_params(labelsize=document.font_size_pt * s,
-                   length=3.0 * s, width=0.8 * s,
-                   pad=3.0 * s)
+                   length=3.5 * s, width=0.8 * s,
+                   pad=3.5 * s)
     for axis_name, ast in (('x', x_axis), ('y', y_axis)):
         if ast is None:
             continue
@@ -737,18 +1345,35 @@ def _build_figure(document: PlotDocument, s: float,
                 lambda labels=labels:
                 [l for l in labels() if l.get_visible()])
     frame = getattr(style, 'frame', None) if style is not None else None
+    # Ridgeline always drops left/top/right and its y axis, like NCPlot.
+    forced = kind == 'ridgeline'
+    hide = {
+        'top': forced or (frame is not None and frame.hide_top),
+        'right': forced or (frame is not None and frame.hide_right),
+        'left': forced or (frame is not None and frame.hide_left),
+        'bottom': frame is not None and frame.hide_bottom,
+    }
     for name, spine in ax.spines.items():
+        if hide.get(name):
+            spine.set_visible(False)
+            continue
         if frame is not None:
-            if name == 'top' and frame.hide_top \
-                    or name == 'right' and frame.hide_right:
-                spine.set_visible(False)
-                continue
             spine.set_color(frame.color)
-            spine.set_linewidth(frame.linewidth_pt * s)
+            if frame.linewidth_pt == 0:
+                spine.set_visible(False)
+            else:
+                spine.set_linewidth(frame.linewidth_pt * s)
         else:
             spine.set_linewidth(0.8 * s)
-    ax.xaxis.labelpad = 3.0 * s
-    ax.yaxis.labelpad = 3.0 * s
+    # A hidden left/bottom spine also hides that axis's ticks/labels.
+    if hide['left']:
+        ax.tick_params(axis='y', which='both',
+                       left=False, labelleft=False)
+    if hide['bottom']:
+        ax.tick_params(axis='x', which='both',
+                       bottom=False, labelbottom=False)
+    ax.xaxis.labelpad = 4.0 * s
+    ax.yaxis.labelpad = 4.0 * s
     # Tick offset / scientific-notation text is not covered by
     # tick_params labelsize — set it explicitly.
     for axis in (ax.xaxis, ax.yaxis):
@@ -760,7 +1385,7 @@ def _build_figure(document: PlotDocument, s: float,
     if document.grid:
         grid = getattr(style, 'grid', None) if style is not None else None
         if grid is None:
-            ax.grid(True, linewidth=0.5 * s, alpha=0.4)
+            ax.grid(True, color='#b0b0b0', linewidth=0.8 * s, alpha=1.0)
         else:
             if grid.which == 'both':
                 for axis_name, ast in (('x', x_axis), ('y', y_axis)):
@@ -776,18 +1401,32 @@ def _build_figure(document: PlotDocument, s: float,
                         else:
                             axis.set_minor_locator(AutoMinorLocator())
                         axis.set_minor_formatter(NullFormatter())
-            ax.grid(True, which=grid.which, axis=grid.axis,
-                    color=grid.color, linestyle=grid.linestyle,
-                    linewidth=grid.linewidth_pt * s, alpha=grid.alpha)
+            if grid.linewidth_pt > 0:
+                ax.grid(True, which=grid.which, axis=grid.axis,
+                        color=grid.color, linestyle=grid.linestyle,
+                        linewidth=grid.linewidth_pt * s,
+                        alpha=grid.alpha)
     if document.legend:
-        handles = [l for l in ax.get_lines()
-                   if l.get_label()
-                   and not l.get_label().startswith('_')]
+        from matplotlib.patches import Patch
+        if kind == 'stacked_column':
+            handles = [Patch(facecolor=c.color,
+                             label=safe_text(c.label) or '_nolegend_')
+                       for c in document.categories]
+            patch_handles = True
+        else:
+            patch_handles = False
+            handles = [l for l in ax.get_lines()
+                       if l.get_label()
+                       and not l.get_label().startswith('_')]
         if handles:
             leg_style = getattr(style, 'legend', None) \
                 if style is not None else None
-            leg_kw = {'loc': document.legend_location,
+            loc = document.legend_location
+            leg_kw = {'loc': loc,
                       'fontsize': document.font_size_pt * s}
+            if loc == 'outside right':
+                leg_kw['loc'] = 'center left'
+                leg_kw['bbox_to_anchor'] = (1.02, 0.5)
             if leg_style is not None:
                 leg_kw['ncols'] = leg_style.ncols
                 leg_kw['frameon'] = leg_style.frame
@@ -805,14 +1444,31 @@ def _build_figure(document: PlotDocument, s: float,
                         weight='bold' if ts.bold else 'normal',
                         style='italic' if ts.italic else 'normal')
                     leg_kw['labelcolor'] = ts.color
-            leg = ax.legend(**leg_kw)
+            leg = ax.legend(handles=handles, **leg_kw)
             if leg is not None:
-                leg.get_frame().set_linewidth(0.6 * s)
+                frame = leg.get_frame()
+                frame.set_linewidth(frame.get_linewidth() * s)
                 if leg_style is not None and leg_style.text is not None \
                         and leg_style.text.underline:
                     underlines.append(
                         lambda leg=leg: [t for t in leg.get_texts()
                                          if t.get_visible()])
+    _draw_annotations(document, ax, s)
+    _draw_brackets(document, ax, s)
+    # Brackets sit above the data; auto-scaled y limits don't reach them.
+    # Extend the top so the bracket line plus ~10% (its text) fits —
+    # except percent-stacked bars, where 0–100 stays fixed like NCPlot.
+    if document.brackets and document.ylim is None:
+        percent = (kind == 'stacked_column'
+                   and (document.stacked is None
+                        or document.stacked.percent))
+        if not percent:
+            ymax, yrange = _data_y_range(document)
+            top = ymax + yrange * (
+                max(b.offset for b in document.brackets) + 0.10)
+            lo, hi = ax.get_ylim()
+            if top > hi:
+                ax.set_ylim(lo, top)
     if underlines:
         _add_underline(ax, lambda: [t for get in underlines
                                     for t in get()])
@@ -846,6 +1502,7 @@ def element_regions(document: PlotDocument) -> dict:
         try:
             fig, ax = _build_figure(document, 1.0, document.width_mm,
                                     document.height_mm)
+            _fit_figure(document, fig, ax)
             canvas = FigureCanvasAgg(fig)
             canvas.draw()
             renderer = canvas.get_renderer()
@@ -919,6 +1576,32 @@ def element_regions(document: PlotDocument) -> dict:
                     'points': fps,
                 }
             regions['series'] = series_regions
+            # Kind-specific element groups keyed by id.
+            for prefix, key in (('ilmplot-violin-', 'violins'),
+                                ('ilmplot-stack-', 'stacks'),
+                                ('ilmplot-annotation-', 'annotations'),
+                                ('ilmplot-bracket-', 'brackets')):
+                grouped = {}
+                for artist in ax.findobj():
+                    gid = artist.get_gid() or ''
+                    if not gid.startswith(prefix):
+                        continue
+                    aid = gid[len(prefix):]
+                    try:
+                        bb = artist.get_window_extent(renderer)
+                    except Exception:
+                        continue
+                    if bb.width <= 0 and bb.height <= 0:
+                        continue
+                    if aid in grouped:
+                        prev = grouped[aid]
+                        bb = type(bb).from_extents(
+                            min(prev.x0, bb.x0), min(prev.y0, bb.y0),
+                            max(prev.x1, bb.x1), max(prev.y1, bb.y1))
+                    grouped[aid] = bb
+                if grouped:
+                    regions[key] = {aid: {'bbox': frac(bb)}
+                                    for aid, bb in grouped.items()}
         finally:
             if fig is not None:
                 fig.clear()
@@ -964,8 +1647,9 @@ def export_document(document: PlotDocument, path: str, fmt: str,
     with matplotlib.rc_context(_deterministic_rc(document)):
         fig = None
         try:
-            fig, _ax = _build_figure(document, 1.0, document.width_mm,
-                                     document.height_mm)
+            fig, ax = _build_figure(document, 1.0, document.width_mm,
+                                    document.height_mm)
+            _fit_figure(document, fig, ax)
 
             def _write(fh):
                 if fmt in ('pdf', 'svg'):
@@ -981,6 +1665,24 @@ def export_document(document: PlotDocument, path: str, fmt: str,
 
 FIT_PAD_MM = 0.5
 MIN_AXES_FRACTION = 0.2
+
+
+def _needs_fit(document) -> bool:
+    """True when out-of-axes content requires ``_fit_axes`` margins.
+
+    Plain line documents (the historical path) keep their fixed
+    ``axes_rect`` so their rendered bytes stay identical.
+    """
+    return (document.kind != 'line'
+            or document.legend_location == 'outside right'
+            or bool(document.annotations)
+            or bool(document.brackets))
+
+
+def _fit_figure(document, fig, ax) -> None:
+    """Fit the axes rectangle when the document needs it."""
+    if _needs_fit(document):
+        _fit_axes(fig, ax, FIT_PAD_MM / 25.4 * fig.dpi)
 
 
 def _fit_axes(fig, ax, pad_px: float, fixed_y=None) -> None:
@@ -1003,7 +1705,37 @@ def _fit_axes(fig, ax, pad_px: float, fixed_y=None) -> None:
     H = fig.get_figheight() * fig.dpi
     for _ in range(4):
         pos = ax.get_window_extent(renderer)
+        # Measure the out-of-axes extras first: only the artists that can
+        # legitimately stick out (legend, brackets, annotations).  Other
+        # clip_on=False artists (stack value labels, legend packer
+        # internals) report stale/degenerate extents mid-iteration and
+        # would feed a bogus, frozen overflow back into the loop.
+        from matplotlib.transforms import Bbox
+        extras = []
+        leg = ax.get_legend()
+        if leg is not None and leg.get_visible():
+            try:
+                extras.append(leg.get_window_extent(renderer))
+            except Exception:
+                pass
+        for artist in ax.findobj():
+            gid = artist.get_gid() or ''
+            if not gid.startswith(('ilmplot-bracket-',
+                                   'ilmplot-annotation-')):
+                continue
+            try:
+                bb = artist.get_window_extent(renderer)
+            except Exception:
+                continue
+            if math.isfinite(bb.x0) and math.isfinite(bb.y0) \
+                    and math.isfinite(bb.x1) and math.isfinite(bb.y1) \
+                    and (bb.width > 0 or bb.height > 0):
+                extras.append(bb)
         tight = ax.get_tightbbox(renderer)
+        if extras:
+            union = Bbox.union(extras)
+            tight = union if tight is None \
+                else Bbox.union([tight, union])
         left = max(pos.x0 - tight.x0, 0.0)
         right = max(tight.x1 - pos.x1, 0.0)
         bottom = max(pos.y0 - tight.y0, 0.0)

@@ -3,13 +3,12 @@
 import os
 import tempfile
 
-from matplotlib.colors import to_hex
-
-from .document import LineSeries, PlotDocument
+from .document import (LineSeries, PlotDocument, StackCategory,
+                       StackOptions, ViolinGroup)
 from .i18n import tr
 from .plot_data import tick_label_map
 from .plotting import stack_offsets
-from . import render
+from . import palettes, render
 
 EXPORT_FORMATS = {
     'ilmplot': ('ILM Plot (*.ilmplot.svg)', '.ilmplot.svg'),
@@ -37,6 +36,19 @@ _STYLE = {
     'stacked_line': ('-', ''),
 }
 
+# Chart key → (document kind, percent flag for stacked column charts).
+CHART_KIND = {
+    'pure_line': ('line', None),
+    'pure_scatters': ('line', None),
+    'line_scatters': ('line', None),
+    'stacked_line': ('line', None),
+    'ridgeline': ('ridgeline', None),
+    'violin': ('violin', None),
+    'column': ('stacked_column', None),
+    'stacked_column_pct': ('stacked_column', True),
+    'stacked_column': ('stacked_column', False),
+}
+
 
 def with_suffix(path, key):
     """Return *path* with the format's suffix appended when missing."""
@@ -49,30 +61,86 @@ def with_suffix(path, key):
     return path
 
 
-def document_from_plot(series, chart_key, title=''):
-    """Build a validated ``PlotDocument`` from plot ``series``."""
-    if chart_key not in _STYLE:
+def document_from_plot(items, chart_key, title='', *,
+                       palette=None, palette_reverse=False):
+    """Build a validated ``PlotDocument`` from the chart's items.
+
+    ``items`` are ``Series`` (line kinds/ridgeline), ``Group`` (violin)
+    or ``Category`` (stacked column) objects from ``plot_data``.
+    ``palette``/``palette_reverse`` pick the colour theme; per-item
+    colours are not applied here (the overrides layer does that).
+    """
+    kind, percent = CHART_KIND.get(chart_key, (None, None))
+    if kind is None:
         raise ValueError(tr('err_unknown_chart', value=repr(chart_key)))
-    linestyle, marker = _STYLE[chart_key]
-    offsets = stack_offsets(series)
+    colors = palettes.theme_colors(palette, len(items),
+                                   chart_key, reverse=palette_reverse)
     doc = PlotDocument()
     doc.title = title
-    doc.xlabel = series[0].x_label
-    doc.ylabel = series[0].y_label
-    ticks = tick_label_map(series)
+    if kind == 'violin':
+        doc.kind = 'violin'
+        doc.series = []
+        doc.xlabel = items[0].x_label
+        doc.ylabel = items[0].y_label
+        doc.legend = False
+        doc.groups = [ViolinGroup(id='g%d' % i, label=g.label,
+                                  values=list(g.values),
+                                  color=colors[i])
+                      for i, g in enumerate(items)]
+        return doc.validate()
+    if kind == 'stacked_column':
+        doc.kind = 'stacked_column'
+        doc.series = []
+        doc.xlabel = items[0].x_label
+        doc.ylabel = 'Percentage (%)' if percent else items[0].y_label
+        doc.legend = True
+        doc.stacked = StackOptions(percent=bool(percent),
+                                   grouped=chart_key == 'column')
+        doc.categories = [StackCategory(
+            id='c%d' % i, label=c.label,
+            values=list(c.values), color=colors[i],
+            yerr=list(c.yerr) if c.yerr is not None else None,
+            yerr_minus=list(c.yerr_minus)
+            if c.yerr_minus is not None else None,
+            yerr_plus=list(c.yerr_plus)
+            if c.yerr_plus is not None else None)
+            for i, c in enumerate(items)]
+        bar_labels = items[0].bar_labels
+        if bar_labels:
+            doc.x_tick_labels = [[float(i), t]
+                                 for i, t in enumerate(bar_labels)]
+        return doc.validate()
+    linestyle, marker = _STYLE.get(chart_key, ('-', ''))
+    offsets = stack_offsets(items)
+    doc.xlabel = items[0].x_label
+    doc.ylabel = items[0].y_label
+    ticks = tick_label_map(items)
     doc.x_tick_labels = [[p, ticks[p]] for p in sorted(ticks)] or None
-    doc.legend = len(series) > 1
+    if kind == 'ridgeline':
+        doc.kind = 'ridgeline'
+        doc.legend = False
+    else:
+        doc.legend = len(items) > 1
     doc.series = []
-    for i, s in enumerate(series):
+    for i, s in enumerate(items):
         y = s.y
         if chart_key == 'stacked_line' and i > 0:
             y = tuple(v + offsets[i] for v in y)
         doc.series.append(LineSeries(
             id='s%d' % i, label=s.label,
             x=list(s.x), y=list(y),
-            color=to_hex('C%d' % (i % 10)),
+            color=colors[i],
             linewidth_pt=1.5, linestyle=linestyle, marker=marker,
-            markersize_pt=6.0))
+            markersize_pt=6.0,
+            yerr=(list(s.yerr)
+                  if kind != 'ridgeline' and s.yerr is not None
+                  else None),
+            yerr_minus=(list(s.yerr_minus)
+                        if kind != 'ridgeline'
+                        and s.yerr_minus is not None else None),
+            yerr_plus=(list(s.yerr_plus)
+                       if kind != 'ridgeline'
+                       and s.yerr_plus is not None else None)))
     return doc.validate()
 
 

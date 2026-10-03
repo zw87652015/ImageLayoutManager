@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
-PROJECT_SCHEMA_VERSION = 4
+PROJECT_SCHEMA_VERSION = 5
 
 
 class ProjectMigrationError(ValueError):
@@ -151,6 +151,8 @@ def _validate_structure(data):
         _records(cell, 'raster_text_regions')
         if points:
             _validate_point_sizes(cell, ('scale_bar_text_size_pt', 'svg_normalize_text_pt'))
+        if 'plot_reflow' in cell and type(cell['plot_reflow']) is not bool:
+            raise ProjectMigrationError('Invalid plot_reflow: expected true or false.')
         if cell.get('plot_area') is not None:
             validate_plot_area(cell['plot_area'])
 
@@ -242,8 +244,17 @@ def _migrate_schema_3_to_4(data):
     return data
 
 
+def _migrate_schema_4_to_5(data):
+    stack = list(data.get('cells', []))
+    while stack:
+        cell = stack.pop()
+        cell.setdefault('plot_reflow', True)
+        stack.extend(cell.get('children', []))
+    return data
+
+
 SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2, 2: _migrate_schema_2_to_3,
-                     3: _migrate_schema_3_to_4}
+                     3: _migrate_schema_3_to_4, 4: _migrate_schema_4_to_5}
 
 
 def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:

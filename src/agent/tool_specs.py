@@ -368,7 +368,7 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "Update image-side cell properties: rotation (0/90/180/270), "
             "fit_mode, alignment, padding (mm), crop (normalised 0–1), "
             "z_index, override_width/height_mm, aspect_ratio_locked, "
-            "and SVG text-normalisation flags. Pass only the keys you "
+            "plot_reflow, and SVG text-normalisation flags. Pass only the keys you "
             "want to change."
         ),
         "input_schema": _obj({
@@ -392,6 +392,8 @@ TOOL_SPECS: List[Dict[str, Any]] = [
             "override_width_mm":  {"type": "number", "minimum": 0},
             "override_height_mm": {"type": "number", "minimum": 0},
             "aspect_ratio_locked": {"type": "boolean"},
+            "plot_reflow": {"type": "boolean",
+                            "description": "Native ilmplot cells only: opt-in; true re-renders the plot to fill the cell at true point sizes, false (default) keeps the stored editor snapshot scaled like a picture."},
             "svg_normalize_text":   {"type": "boolean"},
             "svg_normalize_text_pt": {"type": "number",
                                       "exclusiveMinimum": 0},

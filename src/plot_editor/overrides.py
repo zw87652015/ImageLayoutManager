@@ -9,9 +9,11 @@ unstyled files at schema v1.
 import copy
 import math
 
-from .document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS, MAX_SERIES,
-                       PlotDocument, PlotStyle, _check_color,
-                       _check_limit, _is_num)
+from .document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
+                       MAX_ANNOTATIONS, MAX_BRACKETS, MAX_SERIES,
+                       Annotation, Bracket, PlotDocument, PlotStyle,
+                       RidgeOptions, StackOptions, ViolinOptions,
+                       _check_color, _check_limit, _is_num)
 
 
 class OverridesError(ValueError):
@@ -115,9 +117,13 @@ class PlotOverrides:
     """Document-level overrides plus per-series ones."""
 
     __slots__ = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
-                 'xlim', 'ylim', 'style', 'series')
+                 'xlim', 'ylim', 'style', 'series', 'palette',
+                 'palette_reverse', 'violin', 'ridgeline', 'stacked',
+                 'annotations', 'brackets', 'bar_labels')
     _KEYS = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
-             'xlim', 'ylim', 'style', 'series')
+             'xlim', 'ylim', 'style', 'series', 'palette',
+             'palette_reverse', 'violin', 'ridgeline', 'stacked',
+             'annotations', 'brackets', 'bar_labels')
 
     def __init__(self):
         self.xlabel = None
@@ -129,18 +135,30 @@ class PlotOverrides:
         self.ylim = None
         self.style = PlotStyle()
         self.series = {}
+        self.palette = None
+        self.palette_reverse = None
+        self.violin = None
+        self.ridgeline = None
+        self.stacked = None
+        self.annotations = None
+        self.brackets = None
+        self.bar_labels = None
 
     def is_empty(self):
         return (self.xlabel is None and self.ylabel is None
                 and self.legend is None and self.legend_location is None
                 and self.grid is None and self.xlim is None
                 and self.ylim is None and not self.style.to_dict()
-                and all(o.is_empty() for o in self.series.values()))
+                and all(o.is_empty() for o in self.series.values())
+                and self.palette is None and self.palette_reverse is None
+                and self.violin is None and self.ridgeline is None
+                and self.stacked is None and not self.annotations
+                and not self.brackets and not self.bar_labels)
 
     def to_dict(self):
         d = {}
         for k in ('xlabel', 'ylabel', 'legend', 'legend_location',
-                  'grid', 'xlim', 'ylim'):
+                  'grid', 'xlim', 'ylim', 'palette', 'palette_reverse'):
             v = getattr(self, k)
             if v is not None:
                 d[k] = v
@@ -151,6 +169,19 @@ class PlotOverrides:
                   if not o.is_empty()}
         if series:
             d['series'] = series
+        for k in ('violin', 'ridgeline', 'stacked'):
+            opt = getattr(self, k)
+            if opt is not None:
+                od = opt.to_dict()
+                if od:
+                    d[k] = od
+        if self.annotations:
+            d['annotations'] = [a.to_dict() for a in self.annotations]
+        if self.brackets:
+            d['brackets'] = [b.to_dict() for b in self.brackets]
+        if self.bar_labels:
+            d['bar_labels'] = {str(k): v for k, v in
+                               self.bar_labels.items()}
         return d
 
     @classmethod
@@ -193,6 +224,54 @@ class PlotOverrides:
                     raise _err(f"{ctx}.series: negative key {key!r}")
                 o.series[col] = SeriesOverride.from_dict(
                     sub, f"{ctx}.series[{key}]")
+        pal = data.get('palette')
+        if pal is not None:
+            from .palettes import valid_theme_ref
+            if not valid_theme_ref(pal):
+                raise _err(f"{ctx}.palette: unknown theme {pal!r}")
+            o.palette = pal
+        o.palette_reverse = _opt_bool(data, 'palette_reverse', ctx)
+        for name, typ in (('violin', ViolinOptions),
+                          ('ridgeline', RidgeOptions),
+                          ('stacked', StackOptions)):
+            if data.get(name) is not None:
+                try:
+                    setattr(o, name, typ.from_dict(
+                        data[name], f"{ctx}.{name}"))
+                except ValueError as e:
+                    raise _err(str(e))
+        for name, typ, limit in (('annotations', Annotation,
+                                  MAX_ANNOTATIONS),
+                                 ('brackets', Bracket, MAX_BRACKETS)):
+            items = data.get(name)
+            if items is None:
+                continue
+            if not isinstance(items, list) or len(items) > limit:
+                raise _err(f"{ctx}.{name}: expected at most {limit} "
+                           "entries")
+            try:
+                setattr(o, name, [typ.from_dict(
+                    v, f"{ctx}.{name}[{i}]")
+                    for i, v in enumerate(items)])
+            except ValueError as e:
+                raise _err(str(e))
+        bl = data.get('bar_labels')
+        if bl is not None:
+            if not isinstance(bl, dict):
+                raise _err(f"{ctx}.bar_labels: expected an object")
+            o.bar_labels = {}
+            for key, text in bl.items():
+                try:
+                    idx = int(key)
+                except (TypeError, ValueError):
+                    raise _err(f"{ctx}.bar_labels: non-integer key "
+                               f"{key!r}")
+                if idx < 0 or str(idx) != str(key):
+                    raise _err(f"{ctx}.bar_labels: bad index {key!r}")
+                if not isinstance(text, str) or len(text) > 200:
+                    raise _err(f"{ctx}.bar_labels[{key}]: expected a "
+                               "string of at most 200 characters")
+                o.bar_labels[idx] = text
         return o
 
 
@@ -209,6 +288,7 @@ def reset_element(overrides, key, y_column=None):
     elif key == 'xticks':
         overrides.xlim = None
         overrides.style.xaxis = None
+        overrides.bar_labels = None
     elif key == 'yticks':
         overrides.ylim = None
         overrides.style.yaxis = None
@@ -220,9 +300,21 @@ def reset_element(overrides, key, y_column=None):
         overrides.grid = None
         overrides.style.frame = None
         overrides.style.grid = None
-    elif key.startswith('series:'):
+        overrides.palette = None
+        overrides.palette_reverse = None
+    elif key.startswith(('series:', 'violin:', 'stack:')):
         if y_column is not None:
             overrides.series.pop(y_column, None)
+    elif key.startswith('annotation:'):
+        if overrides.annotations:
+            overrides.annotations = [
+                a for a in overrides.annotations
+                if a.id != key[len('annotation:'):]] or None
+    elif key.startswith('bracket:'):
+        if overrides.brackets:
+            overrides.brackets = [
+                b for b in overrides.brackets
+                if b.id != key[len('bracket:'):]] or None
 
 
 def parse_axis_limits(lo_text, hi_text):
@@ -257,6 +349,7 @@ def remap_series_keys(overrides, event):
             (k - count if k >= at + count else k): o
             for k, o in overrides.series.items()
             if not (at <= k < at + count)}
+    # bar_labels keys are bar (row) indices, not columns — no remap.
 
 
 def apply_update(overrides, fn, commit):
@@ -302,34 +395,59 @@ def overrides_from_document(doc):
         o.xlim = list(doc.xlim)
     if doc.ylim != base.ylim:
         o.ylim = list(doc.ylim)
+    # New-kind options and content survive regeneration: seed them as
+    # overrides so a loaded file keeps its options, notes and brackets.
+    if doc.violin is not None:
+        o.violin = copy.deepcopy(doc.violin)
+    if doc.ridgeline is not None:
+        o.ridgeline = copy.deepcopy(doc.ridgeline)
+    if doc.stacked is not None:
+        o.stacked = copy.deepcopy(doc.stacked)
+    if doc.annotations:
+        o.annotations = copy.deepcopy(doc.annotations)
+    if doc.brackets:
+        o.brackets = copy.deepcopy(doc.brackets)
     return o
 
 
-def effective_document(base_doc, series, chart_key, title, overrides):
+def effective_document(base_doc, items, chart_key, title, overrides):
     """Build the validated ``PlotDocument`` shown/saved by the editor.
 
-    ``base_doc`` (an already-loaded document) wins over regeneration from
-    ``series`` when its series count matches; otherwise the document is
-    regenerated via ``document_from_plot``. Overrides are applied on top.
+    ``items`` are Series/Group/Category objects. ``base_doc`` (an
+    already-loaded document) wins over regeneration for line kinds when
+    its series count matches; new kinds always regenerate from the
+    worksheet items. Overrides are applied on top.
     """
-    from .export import document_from_plot
+    from .export import CHART_KIND, document_from_plot
     from .plot_data import tick_label_map
-    if base_doc is not None and len(base_doc.series) == len(series):
+    kind, percent = CHART_KIND.get(chart_key, ('line', None))
+    if kind in ('line', 'ridgeline') and base_doc is not None \
+            and len(base_doc.series) == len(items) \
+            and base_doc.kind == kind:
         doc = base_doc.clone()
         # The worksheet is the data source of truth; the base only
         # contributes its look (colours, sizes, typography).
-        for ds, s in zip(doc.series, series):
+        for ds, s in zip(doc.series, items):
             ds.x = list(s.x)
             ds.y = list(s.y)
-        ticks = tick_label_map(series)
+            ds.yerr = list(s.yerr) if s.yerr is not None else None
+            ds.yerr_minus = (list(s.yerr_minus)
+                             if s.yerr_minus is not None else None)
+            ds.yerr_plus = (list(s.yerr_plus)
+                            if s.yerr_plus is not None else None)
+        ticks = tick_label_map(items)
         doc.x_tick_labels = [[p, ticks[p]] for p in sorted(ticks)] or None
     else:
-        doc = document_from_plot(series, chart_key)
+        doc = document_from_plot(items, chart_key,
+                                 palette=overrides.palette,
+                                 palette_reverse=bool(
+                                     overrides.palette_reverse))
     doc.title = title
     doc.xlabel = overrides.xlabel if overrides.xlabel is not None \
-        else series[0].x_label
+        else items[0].x_label
     doc.ylabel = overrides.ylabel if overrides.ylabel is not None \
-        else series[0].y_label
+        else doc.ylabel if kind == 'stacked_column' and percent \
+        else items[0].y_label
     if overrides.legend is not None:
         doc.legend = overrides.legend
     if overrides.legend_location is not None:
@@ -340,23 +458,55 @@ def effective_document(base_doc, series, chart_key, title, overrides):
         doc.xlim = list(overrides.xlim)
     if overrides.ylim is not None:
         doc.ylim = list(overrides.ylim)
+    # Kind options stay in the overrides across chart switches but only
+    # reach a document of their own kind.
+    if overrides.violin is not None and kind == 'violin':
+        doc.violin = copy.deepcopy(overrides.violin)
+    if overrides.ridgeline is not None and kind == 'ridgeline':
+        doc.ridgeline = copy.deepcopy(overrides.ridgeline)
+    if overrides.stacked is not None and kind == 'stacked_column':
+        doc.stacked = copy.deepcopy(overrides.stacked)
+        doc.stacked.percent = bool(percent)
+        doc.stacked.grouped = chart_key == 'column'
+    if overrides.bar_labels and doc.x_tick_labels:
+        for entry in doc.x_tick_labels:
+            idx = int(entry[0])
+            if idx in overrides.bar_labels:
+                entry[1] = overrides.bar_labels[idx]
+    if overrides.annotations:
+        doc.annotations = copy.deepcopy(overrides.annotations)
+    if overrides.brackets:
+        doc.brackets = copy.deepcopy(overrides.brackets)
     doc.style = copy.deepcopy(overrides.style) \
         if overrides.style is not None else PlotStyle()
-    for i, s in enumerate(doc.series):
-        so = overrides.series.get(series[i].y_column) \
-            if series[i].y_column is not None else None
-        if so is None:
-            s.label = series[i].label
-            continue
-        s.label = so.label if so.label is not None else series[i].label
-        if so.color is not None:
-            s.color = so.color
-        if so.linewidth_pt is not None:
-            s.linewidth_pt = so.linewidth_pt
-        if so.linestyle is not None:
-            s.linestyle = so.linestyle
-        if so.marker is not None:
-            s.marker = so.marker
-        if so.markersize_pt is not None:
-            s.markersize_pt = so.markersize_pt
+    # Per-item label/colour overrides, keyed by Y column (the other
+    # SeriesOverride fields only apply to line-kind series).
+    for coll in (doc.series, doc.groups, doc.categories):
+        pal_colors = None
+        if overrides.palette or overrides.palette_reverse:
+            from .palettes import theme_colors
+            pal_colors = theme_colors(
+                overrides.palette, len(coll), chart_key,
+                reverse=bool(overrides.palette_reverse))
+        for i, entry in enumerate(coll):
+            if i >= len(items):
+                break
+            y_col = getattr(items[i], 'y_column', None)
+            so = overrides.series.get(y_col) if y_col is not None \
+                else None
+            entry.label = so.label if so is not None \
+                and so.label is not None else items[i].label
+            if so is not None and so.color is not None:
+                entry.color = so.color
+            elif pal_colors is not None:
+                entry.color = pal_colors[i]
+            if kind in ('line', 'ridgeline') and so is not None:
+                if so.linewidth_pt is not None:
+                    entry.linewidth_pt = so.linewidth_pt
+                if so.linestyle is not None:
+                    entry.linestyle = so.linestyle
+                if so.marker is not None:
+                    entry.marker = so.marker
+                if so.markersize_pt is not None:
+                    entry.markersize_pt = so.markersize_pt
     return doc.validate()

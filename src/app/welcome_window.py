@@ -1,11 +1,13 @@
 """Startup welcome window.
 
 A small standalone launcher window shown INSTEAD of the main window at
-launch: New Project / Open Project / Close, underlined recent-project
-links, and an About button in the corner. Picking anything calls
-``MainWindow._dismiss_welcome()``, which closes this window and reveals
-the main window. Closing this window while the main window is still
-hidden (title-bar X or the Close button) quits the app.
+launch: New Project / Open Project / Plot Editor / Close, underlined
+recent-project links, and an About button in the corner. Picking a
+project action calls ``MainWindow._dismiss_welcome()``, which closes
+this window and reveals the main window; the Plot Editor button instead
+launches the standalone editor process and leaves this window visible.
+Closing this window while the main window is still hidden (title-bar X
+or the Close button) quits the app.
 """
 
 import html
@@ -20,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.app.i18n import tr
+from src.app.icons import make_icon
 from src.app.motion import MotionTween, install_button_feedback
 from src.app.theme import _assets_dir, get_tokens
 
@@ -92,7 +95,7 @@ class WelcomeWindow(QWidget):
             | Qt.WindowType.WindowCloseButtonHint
             | Qt.WindowType.MSWindowsFixedSizeDialogHint
         )
-        self.setFixedSize(480, 600)
+        self.setFixedSize(480, 640)
         self._build_ui()
         install_button_feedback(self)
         # Centre on the primary screen
@@ -147,6 +150,15 @@ class WelcomeWindow(QWidget):
         self._btn_open.clicked.connect(self._mw._on_open_project)
         btn_col.addWidget(self._btn_open)
 
+        self._btn_plot_editor = QPushButton(tr("welcome_plot_editor"))
+        self._btn_plot_editor.setObjectName("welcomePlotEditor")
+        self._btn_plot_editor.setIcon(make_icon(
+            'plot', get_tokens(self._mw._current_theme)['text']))
+        self._btn_plot_editor.setToolTip(tr("welcome_plot_editor_tip"))
+        self._btn_plot_editor.clicked.connect(
+            self._mw._on_open_plot_editor)
+        btn_col.addWidget(self._btn_plot_editor)
+
         self._btn_learn = QPushButton(tr('tutorials_welcome'))
         self._btn_learn.setFlat(True)
         self._btn_learn.setToolTip(tr("welcome_learn_tip"))
@@ -159,7 +171,8 @@ class WelcomeWindow(QWidget):
         self._btn_close.clicked.connect(self.close)
         btn_col.addWidget(self._btn_close)
 
-        for button in (self._btn_new, self._btn_open, self._btn_close):
+        for button in (self._btn_new, self._btn_open,
+                       self._btn_plot_editor, self._btn_close):
             button.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect)
 
         btn_wrap = QHBoxLayout()
@@ -237,6 +250,8 @@ class WelcomeWindow(QWidget):
 
     def apply_theme(self):
         self._logo.set_theme(self._mw._current_theme)
+        self._btn_plot_editor.setIcon(make_icon(
+            'plot', get_tokens(self._mw._current_theme)['text']))
         self._refresh_recent()
 
     def retranslate(self):
@@ -247,6 +262,8 @@ class WelcomeWindow(QWidget):
         self._btn_new.setToolTip(tr("welcome_new_tip"))
         self._btn_open.setText(tr("welcome_open_project"))
         self._btn_open.setToolTip(tr("welcome_open_tip"))
+        self._btn_plot_editor.setText(tr("welcome_plot_editor"))
+        self._btn_plot_editor.setToolTip(tr("welcome_plot_editor_tip"))
         self._btn_learn.setText(tr('tutorials_welcome'))
         self._btn_learn.setToolTip(tr("welcome_learn_tip"))
         self._btn_close.setText(tr("welcome_close"))

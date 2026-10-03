@@ -12,11 +12,14 @@ META_FIELDS = ('long_name', 'units', 'comments')
 META_LABELS = ('Long Name', 'Units', 'Comments')
 META_ROWS = 3
 MIN_DATA_ROWS = 32
-DESIGNATIONS = ('X', 'Y', 'Z', 'xErr', 'yErr', 'Label', 'Disregard')
+DESIGNATIONS = ('X', 'Y', 'Z', 'xErr', 'yErr', 'yErrPlus', 'yErrMinus',
+                'Label', 'Disregard')
 SUFFIX = {'X': 'X', 'Y': 'Y', 'Z': 'Z', 'xErr': 'xEr±', 'yErr': 'yEr±',
+          'yErrPlus': 'yEr+', 'yErrMinus': 'yEr-',
           'Label': 'L', 'Disregard': ''}
 DESIGNATION_TEXT = {'X': 'X', 'Y': 'Y', 'Z': 'Z', 'xErr': 'X Error',
-                    'yErr': 'Y Error', 'Label': 'Label',
+                    'yErr': 'Y Error', 'yErrPlus': 'Y Error +',
+                    'yErrMinus': 'Y Error -', 'Label': 'Label',
                     'Disregard': 'Disregard'}
 MAX_COLUMNS = 1024
 MAX_PASTE_CELLS = 5_000_000
@@ -245,6 +248,39 @@ class _ColsRemove:
                 for run in self._runs()]
 
 
+class _ReplaceAll:
+    """Swap the whole column list (Import → Replace)."""
+
+    def __init__(self, label, old, new, rect):
+        self.label = label
+        self.old = old
+        self.new = new
+        self.rect = rect
+
+    def apply(self, ws):
+        ws._columns = self.new
+
+    def revert(self, ws):
+        ws._columns = self.old
+
+    def apply_events(self):
+        return self._events(self.old, self.new)
+
+    def revert_events(self):
+        return self._events(self.new, self.old)
+
+    @staticmethod
+    def _events(out, into):
+        events = []
+        if out:
+            events.append(('columns_removed', 0, len(out)))
+        events.append(('columns_inserted', 0, len(into), True))
+        last = max(len(out), len(into)) - 1
+        if last >= 0:
+            events.append(('header', 0, last))
+        return events
+
+
 class _SetDesignation:
     def __init__(self, label, indices, olds, new, rect):
         self.label = label
@@ -463,6 +499,33 @@ class Worksheet:
         rect = (indices[0], 0, self.column_count - len(indices) - 1,
                 self.display_rows() - 1)
         return self._record(_ColsRemove(label, removed, rect))
+
+    def replace_all(self, columns, label='Import'):
+        """Undoably replace every column (import → current sheet)."""
+        if not columns:
+            raise ValueError(tr('err_remove_every'))
+        if len(columns) > MAX_COLUMNS:
+            raise WorksheetLimitError(
+                tr('err_too_many_cols', max=MAX_COLUMNS))
+        new = [Column(c.designation, c.long_name, c.units, c.comments,
+                      list(c.values)) for c in columns]
+        rows = max((len(c.values) for c in new), default=0)
+        rect = (0, 0, len(new) - 1,
+                META_ROWS + max(MIN_DATA_ROWS, rows + 1) - 1)
+        return self._record(_ReplaceAll(label, self._columns, new, rect))
+
+    def append_columns(self, columns, label='Import'):
+        """Undoably append columns to the right of the sheet."""
+        if not columns:
+            return None
+        if self.column_count + len(columns) > MAX_COLUMNS:
+            raise WorksheetLimitError(
+                tr('err_too_many_cols', max=MAX_COLUMNS))
+        cols = [Column(c.designation, c.long_name, c.units, c.comments,
+                       list(c.values)) for c in columns]
+        at = self.column_count
+        rect = (at, 0, at + len(cols) - 1, self.display_rows() - 1)
+        return self._record(_ColsInsert(label, at, cols, rect))
 
     def set_designation(self, cols, designation, label='Set As'):
         if designation not in DESIGNATIONS:

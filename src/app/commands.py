@@ -1212,6 +1212,8 @@ class SplitCellCommand(QUndoCommand):
                 scale_bar_position=cell.scale_bar_position,
                 scale_bar_offset_x=cell.scale_bar_offset_x,
                 scale_bar_offset_y=cell.scale_bar_offset_y,
+                # The plot travels to the first child — keep its reflow flag.
+                plot_reflow=cell.plot_reflow,
             )
             children = [first_child]
             for _ in range(1, self.count):

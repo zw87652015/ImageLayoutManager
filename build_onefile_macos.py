@@ -129,6 +129,12 @@ def main() -> int:
         "--collect-submodules=PIL",
         # rapidocr ships YAML configs and .onnx models as package data
         "--collect-all=rapidocr",
+        # matplotlib renders math text and the Plot Editor's native plots;
+        # its file backends are imported lazily by savefig(format=...).
+        "--collect-data=matplotlib",
+        "--hidden-import=matplotlib.backends.backend_agg",
+        "--hidden-import=matplotlib.backends.backend_pdf",
+        "--hidden-import=matplotlib.backends.backend_svg",
         # stdlib modules that PyInstaller can miss in --windowed mode
         "--hidden-import=encodings",
         "--hidden-import=codecs",
