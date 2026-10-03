@@ -21,6 +21,7 @@ _ROLE_TYPE = Qt.ItemDataRole.UserRole + 1      # "row"|"split"|"text_group"|"cel
 _ROLE_IMG  = Qt.ItemDataRole.UserRole + 2      # image path (cell_filled/pip_item only)
 _ROLE_META = Qt.ItemDataRole.UserRole + 3      # right-side meta string (e.g. "2 cells")
 _ROLE_ZIDX = Qt.ItemDataRole.UserRole + 4      # cell.z_index, only set when non-default (cell_filled/cell_empty)
+_ROLE_REFLOW = Qt.ItemDataRole.UserRole + 5    # truthy when a native plot cell is actively reflowing
 
 # Item types that participate in drag-to-reorder, and which "kind" of
 # z-stack they reorder within (see _BranchlessTree._compatible_target).
@@ -334,9 +335,32 @@ class LayersDelegate(QStyledItemDelegate):
             painter.drawText(z_r, Qt.AlignmentFlag.AlignCenter, z_text)
             z_reserved = z_w + 10
 
+        # "Reflow ON" chip — marks a native-plot cell actively reflowing.
+        reflow_reserved = 0
+        if index.data(_ROLE_REFLOW) and itype in ("cell_filled", "cell_empty"):
+            f_text = tr("chip_plot_reflow_on")
+            f_font = QFont(painter.font())
+            f_font.setPointSizeF(max(6.5, f_font.pointSizeF() * 0.78))
+            f_font.setWeight(QFont.Weight.Medium)
+            f_fm = QFontMetrics(f_font)
+            f_w = f_fm.horizontalAdvance(f_text) + 10
+            f_h = f_fm.height() + 2
+            f_r = QRect(r.right() - badge_reserved - z_reserved - f_w - 6,
+                        r.top() + (r.height() - f_h) // 2, f_w, f_h)
+            fill = QColor(accent)
+            fill.setAlpha(230 if is_sel else 200)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(f_r, 3, 3)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QColor(t.get("on_accent", "#FFFFFF")))
+            painter.setFont(f_font)
+            painter.drawText(f_r, Qt.AlignmentFlag.AlignCenter, f_text)
+            reflow_reserved = f_w + 10
+
         # text
         text_x  = tx + self.THUMB + self.PAD
-        text_rect = QRect(text_x, r.top(), r.right() - text_x - 4 - badge_reserved - z_reserved, r.height())
+        text_rect = QRect(text_x, r.top(), r.right() - text_x - 4 - badge_reserved - z_reserved - reflow_reserved, r.height())
         col = accent if is_sel else (text_c if itype in ("cell_filled", "pip_item", "text_leaf") else text_sec)
         painter.setPen(col)
         fnt = QFont(painter.font())
@@ -593,6 +617,13 @@ class LayersPanel(QWidget):
             if itype == "cell_filled":
                 tree_item.setData(0, _ROLE_IMG, cell.image_path)
                 tree_item.setData(0, _ROLE_META, image_format_name(cell.image_path))
+                if getattr(cell, 'plot_reflow', False):
+                    # Badge effective reflow only — a requested flag blocked
+                    # by Lock Ratio or an alignment group gets no chip.
+                    from src.utils.editable_plot import plot_reflows
+                    if plot_reflows(self._project, cell):
+                        tree_item.setData(0, _ROLE_REFLOW, True)
+                        tree_item.setToolTip(0, tr("tip_plot_reflow_on"))
 
             pip_items = getattr(cell, 'pip_items', [])
             # PiP list order is the inset stack (last = frontmost). In the

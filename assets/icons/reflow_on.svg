@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-2 -2 20 20"
+     fill="none" color="#0891B2" stroke="currentColor" stroke-width="1.5"
+     stroke-linecap="round" stroke-linejoin="round"
+     role="img" aria-labelledby="reflow-title reflow-desc">
+  <title id="reflow-title">Reflow On</title>
+  <desc id="reflow-desc">A plot inside an adjustable cell, with a two-way arrow for adaptive layout. Cyan indicates reflow is enabled.</desc>
+  <!-- Cell edges stay separate from the plot so the frame reads as adaptable. -->
+  <path d="M3.5 5H1v9h2.5M12.5 5H15v9h-2.5"/>
+  <!-- Layout changes width; the plot retains a consistent line weight. -->
+  <path d="M4 2h8M6 0 4 2l2 2M10 0l2 2-2 2"/>
+  <path d="m4.5 11 3-3 2 2 2-3.5"/>
+</svg>

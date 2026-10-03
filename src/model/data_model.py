@@ -398,6 +398,11 @@ class Cell:
     override_height_mm: float = 0.0
     aspect_ratio_locked: bool = False
 
+    # Native editable plots show the stored *.ilmplot.svg snapshot by
+    # default. plot_reflow=True opts in to re-rendering the plot to fill
+    # the cell at true final-figure point sizes.
+    plot_reflow: bool = False
+
     # Size group membership (forces shared W/H with other members). None = ungrouped.
     size_group_id: Optional[str] = None
 
@@ -468,6 +473,7 @@ class Cell:
             "override_width_mm": self.override_width_mm,
             "override_height_mm": self.override_height_mm,
             "aspect_ratio_locked": self.aspect_ratio_locked,
+            "plot_reflow": self.plot_reflow,
             "size_group_id": self.size_group_id,
             "z_index": self.z_index,
             "crop_left": self.crop_left,
@@ -513,6 +519,10 @@ class Cell:
         payload.setdefault("override_width_mm", 0.0)
         payload.setdefault("override_height_mm", 0.0)
         payload.setdefault("aspect_ratio_locked", False)
+        # Legacy payloads without this field retain the previous reflow
+        # default; explicit values are preserved. Schema 4 and older
+        # migrate to True (see _migrate_schema_4_to_5).
+        payload.setdefault("plot_reflow", True)
         payload.setdefault("size_group_id", None)
         payload.setdefault("z_index", 0)
         payload.setdefault("split_direction", "none")

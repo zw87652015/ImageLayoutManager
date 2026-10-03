@@ -340,6 +340,11 @@ _QSS_TEMPLATE = """
     QToolButton[primary="true"]:hover  { background: %(accent_hover)s; border-color: %(accent_hover)s; }
     QToolButton[primary="true"]:pressed,
     QToolButton[primary="true"]:checked { background: %(accent_press)s; border-color: %(accent_press)s; }
+    QToolButton[primary="true"]:disabled {
+        background: %(surface_subtle)s;
+        color: %(text_tert)s;
+        border-color: %(border)s;
+    }
     QToolButton[primary="true"]::menu-indicator { image: none; width: 0; }
 
     /* Startup welcome page — compact "high-DPI" density; element sizes

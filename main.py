@@ -35,13 +35,22 @@ if getattr(sys, "frozen", False) and sys.platform == "win32":
 # Add src to python path to allow imports if running from root
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
+# ``--plot-editor`` launches the standalone ILM Plot Editor in this process.
+# Dispatch *before* importing MainWindow so the editor never pulls in the
+# full ILM UI (and so ``ImageLayoutManager.exe --plot-editor [file]`` works).
+if __name__ == '__main__' and '--plot-editor' in sys.argv:
+    _pe_argv = [a for a in sys.argv[1:] if a != '--plot-editor']
+    from src.plot_editor.app import main as _plot_main
+    sys.exit(_plot_main(_pe_argv))
+
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QSurfaceFormat
-from src.app.main_window import MainWindow
 from src.app.theme import build_palette, apply_font_scale, LIGHT
 from src.utils import crash_recovery
 
 def main():
+    from src.app.main_window import MainWindow
     # File logging + crash guard must exist before any Qt code runs so
     # even import-time/startup failures leave a trace. The excepthook is
     # re-armed with a rescue callback once the window exists.
@@ -79,6 +88,7 @@ def main():
     apply_font_scale(app, _scale, LIGHT)
 
     window = MainWindow()
+    window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
     # Re-arm the crash hook with a rescue callback: on an unhandled
     # exception, every dirty tab is snapshotted to the recovery dir

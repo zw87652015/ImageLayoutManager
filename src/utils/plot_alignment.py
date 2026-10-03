@@ -174,6 +174,7 @@ def resolve_image_placements(project, layout_result=None, *, strict=False) -> Pl
     failures = {}
     marker_failures = {}
     outside_crop = set()
+    reflowing = set()
     for cid, cell in leaves.items():
         size = get_source_size(cell.image_path) if cell.image_path else None
         crop = (cell.crop_left, cell.crop_top, cell.crop_right, cell.crop_bottom)
@@ -190,6 +191,17 @@ def resolve_image_placements(project, layout_result=None, *, strict=False) -> Pl
             if not _valid_rect(clip):
                 failures[cid] = ('no_space', 'Increase the available cell area or reduce padding.')
             else:
+                reflow = False
+                try:
+                    from src.utils.editable_plot import (
+                        plot_reflows, reflow_figure_size_mm)
+                    if plot_reflows(project, cell):
+                        # The source bytes are re-rendered at exactly this
+                        # size downstream, so the placement rect IS the clip.
+                        size = reflow_figure_size_mm(cell, clip[2], clip[3])
+                        reflow = True
+                except Exception:
+                    reflow = False
                 rotated_crop = rotate_box(crop, rotation)
                 width, height = size[::-1] if rotation % 180 else size
                 sizes[cid] = width, height
@@ -199,6 +211,12 @@ def resolve_image_placements(project, layout_result=None, *, strict=False) -> Pl
                 image_w, image_h = crop_w * scale, crop_h * scale
                 x, y = _anchor(cell, clip, image_w, image_h)
                 result.placements[cid] = ImagePlacement((x, y, image_w, image_h), clip, crop, rotation)
+                if reflow:
+                    reflowing.add(cid)
+        if cid in reflowing:
+            # Reflowed plots are never in alignment groups and their stored
+            # plot_area refers to the fixed-axes snapshot — skip it.
+            continue
         area = cell.plot_area
         if area is None:
             continue

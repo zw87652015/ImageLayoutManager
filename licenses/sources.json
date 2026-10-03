@@ -1,11 +1,11 @@
 {
   "schema_version": 2,
-  "app_version": "3.4.3",
+  "app_version": "3.5.0",
   "python_version": "3.13.15",
-  "scope": "Corresponding-source pointers for the bundled components of the Windows x64 build of Image Layout Manager 3.4.3. Application source is published as the release source archive; this index locates the source of every third-party component shipped inside the binary.",
+  "scope": "Corresponding-source pointers for the bundled components of the Windows x64 build of Image Layout Manager 3.5.0. Application source is published as the release source archive; this index locates the source of every third-party component shipped inside the binary.",
   "index_status": "pointers_recorded",
   "source_status": "incomplete",
-  "application_source_archive": "ImageLayoutManager-3.4.3-application-source.zip",
+  "application_source_archive": "ImageLayoutManager-3.5.0-application-source.zip",
   "build_steps": [
     "Install Python 3.13.15 and create an environment from environment.yml.",
     "Install the exact dependency versions recorded in `installed-versions.txt` inside the release licence materials.",

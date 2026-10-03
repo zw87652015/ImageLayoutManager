@@ -242,6 +242,33 @@ LESSONS = {
              ('The marked plot rectangles, not the image-file edges, now determine the alignment. Reopen Align Plot Areas to change the marks or reference; Remove alignment restores normal image fitting. Apply is one undo step, and saving the project preserves the alignment.\n\nMatch reference exactly keeps the reference size only while every panel fits. Otherwise the group is reduced together and a notice explains why. Axis titles remain part of their source images, not independently movable labels. Finish keeps this practice tab.',
               '现在决定对齐的是标记的绘图矩形，而不是图片文件的边缘。可重新打开“对齐绘图区”修改标记或参照图；“移除对齐”恢复普通图片适配。“应用”只占一步撤销，保存工程会保留对齐关系。\n\n“精确匹配参照图”仅在所有面板都能容纳时保持参照尺寸，否则整组一起缩小并显示原因。坐标轴标题仍是源图的一部分，不会变成可单独移动的标注。完成后保留练习页。')),
     ),
+    'native_plots': (
+        Step('intro', ('A plot that is still a plot', '一张仍然可编辑的图'),
+             ('This practice tab holds one chart made in the Plot Editor and saved as a native .ilmplot.svg. That file is an ordinary SVG — any viewer shows it exactly the same — but it also carries the editable plot and its data inside.\n\nBy default ILM shows the file exactly as saved: text and lines scale with the panel, like a picture. We will resize it once to see that, then turn on REFLOW and resize again to see the difference.',
+              '练习页中有一张用图表编辑器制作并以原生 .ilmplot.svg 保存的图表。它是普通的 SVG——任何查看器看到的效果完全一致——但内部还带着可编辑的图表和数据。\n\n默认情况下，ILM 按保存时的样子显示：文字和线条像图片一样随面板整体缩放。我们先缩放一次看看效果，然后开启 REFLOW，再缩放一次对比差别。')),
+        Step('resize_off', ('Resize it like a picture', '像图片一样缩放'),
+             ('Select the panel below if it is not selected already — or click Make the cell narrower, which selects it and applies an undoable width.\n\nWith Reflow off (the default), the saved SVG is scaled to the new width: text and line widths shrink with the picture, exactly like any other image.\n\nIn the Inspector\u2019s Image Cell Properties, the highlighted Width (mm) field under Manual Size Override sets an exact width; 0 returns to automatic.',
+              '如果面板尚未选中，请先选中——或点击下方“缩小单元格”，它会选中该面板并应用一个可撤销的宽度修改。\n\nReflow 关闭时（默认），保存的 SVG 会按新宽度整体缩放：文字和线宽随图片一起缩小，与任何普通图片完全相同。\n\n检查器“图像单元格属性”中，“手动尺寸覆盖”的高亮“宽度 (mm)”字段可设置精确宽度；填 0 恢复自动。'),
+             target='override_w', action='narrow_cell'),
+        Step('reflow_on', ('Switch REFLOW ON', '开启 REFLOW'),
+             ('The REFLOW card is at the top of the Inspector. Click Turn REFLOW ON below, click the card itself, or right-click the panel \u2192 Reflow ON.\n\nThe card lights up, the panel re-renders to fit its cell, and a Reflow icon appears on the canvas (screen-only — it never appears in exports). Now text and line widths keep their true point sizes no matter how the cell is resized.',
+              'REFLOW 卡片位于检查器顶部。点击下方“开启 REFLOW”、直接点击卡片，或右键面板 → “Reflow ON”。\n\n卡片会点亮，面板按单元格大小重新渲染，画布上出现 Reflow 图标（仅在屏幕显示，导出文件中不会出现）。此后无论单元格如何缩放，文字和线宽都保持真实磅值。'),
+             target='reflow_card', action='reflow_on'),
+        Step('resize_on', ('Resize again — watch the difference', '再缩放一次——观察差别'),
+             ('Make the cell narrower or wider again — click Make the cell wider below, or edit Width (mm) directly.\n\nThis time the plot re-lays itself out for the new shape: axes, margins, and legend refit the space while every letter stays at its true point size. Toggle REFLOW off any time to get the saved picture back.',
+              '再次缩小或放大单元格——点击下方“放大单元格”，或直接修改“宽度 (mm)”。\n\n这次图表会按新形状重新排版：坐标轴、边距和图例重新适配空间，而每个文字仍保持真实磅值。随时关闭 REFLOW 即可恢复保存时的图片外观。'),
+             target='override_w', action='widen_cell'),
+        Step('paused', ('PAUSED: when Reflow holds off', 'PAUSED：Reflow 暂时不生效时'),
+             ('Some features need fixed geometry, so they pause Reflow. Turn on Lock Ratio in Image Cell Properties (the highlighted lock) and watch the card switch to PAUSED: the switch stays on, but the plot keeps its locked proportions.\n\nA plot-alignment group pauses Reflow for the same reason — the group owns the plot\u2019s geometry. Unlock the ratio (or leave the group) and Reflow resumes on its own.',
+              '有些功能需要固定几何尺寸，因此会让 Reflow 暂停。在“图像单元格属性”中打开“锁定比例”（高亮的锁），观察卡片变为 PAUSED：开关仍然保持开启，但图表保持锁定的宽高比。\n\n加入图表对齐组同理会暂停 Reflow——绘图区几何由对齐组管理。解除锁定（或退出对齐组）后，Reflow 会自动恢复。'),
+             target='aspect_lock', action='select_cell'),
+        Step('edit_plot', ('Round-trip to the Plot Editor', '回到图表编辑器往返编辑'),
+             ('Right-click the panel \u2192 Edit Plot… reopens this plot in the Plot Editor with its worksheet and every style override intact; saved edits come back into this same cell.\n\nThe editor\u2019s own Help \u2192 Tutorials… lessons walk through making and styling a plot. No action needed here — Next continues.',
+              '右键面板 → “编辑图表…”会在图表编辑器中重新打开这张图，工作表和所有样式覆盖项都完整保留；保存的修改会回到同一个单元格。\n\n编辑器自带的“帮助 → 教程…”课程会讲解如何制作和设置图表。此步无需操作——点击“下一步”继续。')),
+        Step('finish', ('One file, two ways to place it', '一个文件，两种摆放方式'),
+             ('A native .ilmplot.svg is an ordinary SVG plus its editable plot. ILM shows the saved picture by default; REFLOW ON re-lays the plot to fit the cell at true point sizes, and Lock Ratio or a plot-alignment group pauses Reflow.\n\nFinish returns to your previous tab and keeps this practice tab available. Reopen lessons from Help \u2192 Guided Tutorials.',
+              '原生 .ilmplot.svg 既是普通 SVG，又包含可编辑图表。ILM 默认显示保存时的图片；REFLOW ON 会让图表按单元格重新排版并保持真实磅值，而锁定比例或图表对齐组会暂停 Reflow。\n\n完成后返回之前的标签页并保留练习页；可从“帮助 → 引导教程”重新学习。')),
+    ),
     'size_groups': (
         Step('intro', ('Keep several panels the same size', '让多个面板保持相同大小'),
              ('When several images should occupy equally sized slots, changing each cell separately is easy to get wrong. A Size Group links the member cells\u2019 width and height so you can set those dimensions once. It does not align the axes drawn inside their images; that is the Align Plot Areas lesson.\n\nIn this separate practice tab, we will group the first two sample panels, set a shared size, then add the third. The group changes layout, not the source files.',
@@ -266,13 +293,15 @@ LESSONS = {
 
 
 LESSON_ORDER = (
-    'first_figure', 'divide_cells', 'arrange_panels', 'size_groups', 'align_plots',
+    'first_figure', 'divide_cells', 'arrange_panels', 'size_groups',
+    'align_plots', 'native_plots',
     'labels_titles', 'text_sizes', 'insets_scale_bars', 'publication',
 )
 LESSONS = {key: LESSONS[key] for key in LESSON_ORDER}
 
 LESSON_GROUPS = (
     (('Build the layout', '搭建布局'), ('first_figure', 'divide_cells', 'arrange_panels', 'size_groups', 'align_plots')),
+    (('Native plots', '原生图表'), ('native_plots',)),
     (('Annotate the figure', '标注图形'), ('labels_titles', 'text_sizes', 'insets_scale_bars')),
     (('Prepare to publish', '准备发表'), ('publication',)),
 )
@@ -288,6 +317,8 @@ _LESSON_SUMMARIES = {
                     '使用尺寸组统一面板尺寸。'),
     'align_plots': ('Mark plot interiors and match their height and bottom axis across panels.',
                     '标记绘图区，让多个面板的绘图高度和底部坐标轴对齐。'),
+    'native_plots': ('Place a Plot Editor plot, then switch REFLOW ON and resize it.',
+                     '放置一张图表编辑器的图，然后开启 REFLOW 并缩放。'),
     'labels_titles': ('Add panel numbers and shared titles.',
                       '添加面板编号和共享标题。'),
     'text_sizes': ('Match typography across SVG and raster panels.',
@@ -309,6 +340,7 @@ _LESSON_TITLES = {
     'insets_scale_bars':  ('Insets and scale bars',          '插图与比例尺'),
     'size_groups':        ('Size groups',                    '尺寸组'),
     'align_plots':        ('Align plot areas',               '对齐绘图区'),
+    'native_plots':       ('Native plots & Reflow',          '原生图表与 REFLOW'),
 }
 
 
@@ -486,6 +518,26 @@ def make_samples():
             else:
                 _render_raster(svg, path, fmt)
         created[name] = str(path)
+    # A real native plot for the Reflow lesson: rendered once into a
+    # content-addressed *.ilmplot.svg carrying the editable document.
+    plots_root = root / 'plots'
+    plots_root.mkdir(parents=True, exist_ok=True)
+    from src.utils.editable_plot import store_plot_document
+    from src.plot_editor.document import LineSeries, PlotDocument
+    plot_doc = PlotDocument(title='Practice signals', xlabel='Time (s)',
+                            ylabel='Signal (mV)')
+    xs = [0., 1., 2., 3., 4., 5.]
+    plot_doc.series = [
+        LineSeries(label='Signal A', x=xs,
+                   y=[0.0, 1.1, 1.9, 3.2, 4.1, 4.9]),
+        LineSeries(label='Signal B', x=xs,
+                   y=[0.4, 0.8, 1.6, 2.4, 3.0, 3.6]),
+        LineSeries(label='Signal C', x=xs,
+                   y=[0.2, 0.5, 1.0, 1.6, 2.6, 3.4]),
+    ]
+    plot_doc.validate()
+    native_path, _render = store_plot_document(plot_doc,
+                                               root=str(plots_root))
     base = [created['panel-1.svg'], created['panel-2.png'], created['panel-3.tiff']]
     return {
         'first_figure': base,
@@ -505,6 +557,9 @@ def make_samples():
         # Deliberately misaligned plot frames (see _sample_misaligned_chart)
         # so the lesson has something visible to fix.
         'align_plots': [created['plot-panel-1.svg'], created['plot-panel-2.png'], created['plot-panel-3.svg']],
+        # One native editable plot: Reflow OFF keeps the saved look,
+        # ON re-lays it for the cell at true point sizes.
+        'native_plots': [native_path],
     }
 
 
@@ -790,6 +845,8 @@ class TutorialController(QObject):
         self._reposition_baseline = None
         self._rename_baseline = None
         self._pip_baseline = None
+        self._w_off_baseline = None
+        self._w_on_baseline = None
         self.highlight = None
         self.card = TutorialCard(self)
         self._feedback_step = None
@@ -851,7 +908,7 @@ class TutorialController(QObject):
         self.center = QDialog(self.window)
         self.center.setObjectName('tutorialCenter')
         self.center.setWindowTitle(tr('tutorials_title'))
-        self.center.resize(480, 460)
+        self.center.resize(480, 480)
         self.center.setMinimumSize(420, 360)
         layout = QVBoxLayout(self.center)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -933,6 +990,8 @@ class TutorialController(QObject):
         self._reposition_baseline = None
         self._rename_baseline = None
         self._pip_baseline = None
+        self._w_off_baseline = None
+        self._w_on_baseline = None
         if lesson == 'first_figure':
             # Starts exactly like a real new project (File → New's 2×2
             # grid), not a pre-built row — the lesson's own first steps
@@ -958,6 +1017,11 @@ class TutorialController(QObject):
             project.rows = [RowTemplate(index=0, column_count=len(paths))]
             project.cells = [Cell(row_index=0, col_index=i, image_path=path, is_placeholder=False)
                              for i, path in enumerate(paths)]
+            if lesson == 'native_plots':
+                # Explicit off: the lesson's first steps demonstrate the
+                # saved-picture behaviour before REFLOW is switched on.
+                project.cells[0].plot_reflow = False
+                project.cells[0].aspect_ratio_locked = False
             if lesson in ('insets_scale_bars', 'align_plots'):
                 # These panels are dark end-to-end (see _sample_micrograph),
                 # so any letterboxing from a column/image aspect mismatch
@@ -1161,6 +1225,20 @@ class TutorialController(QObject):
             return any(abs(a - b) > 0.005 for a, b in zip(current, self._pip_baseline))
         if key == 'scale_bar':
             return project.cells[0].scale_bar_enabled
+        # native_plots
+        if self.lesson == 'native_plots':
+            cell = project.cells[0]
+            if key == 'resize_off':
+                return self._cell_width_changed(cell, '_w_off_baseline')
+            if key == 'reflow_on':
+                from src.utils.editable_plot import plot_reflows
+                return plot_reflows(project, cell)
+            if key == 'resize_on':
+                return self._cell_width_changed(cell, '_w_on_baseline')
+            if key == 'paused':
+                return cell.aspect_ratio_locked
+            if key == 'edit_plot':
+                return True  # informational — nothing to detect
         # size_groups
         if key == 'create_group':
             return bool(project.size_groups) and any(c.size_group_id for c in project.cells)
@@ -1169,6 +1247,16 @@ class TutorialController(QObject):
         if key == 'add_member':
             return bool(project.size_groups) and project.cells[2].size_group_id == project.size_groups[0].id
         return False
+
+    def _cell_width_changed(self, cell, name):
+        """Lazy baseline on the manual width override (mm), captured on
+        the first poll so a manual edit counts the same as the guided
+        button; a >0.5 mm change marks the step done. 0 = automatic."""
+        base = getattr(self, name)
+        if base is None:
+            setattr(self, name, cell.override_width_mm)
+            return False
+        return abs(cell.override_width_mm - base) > 0.5
 
     def _clear_highlight(self):
         if self.highlight and not sip.isdeleted(self.highlight):
@@ -1242,6 +1330,9 @@ class TutorialController(QObject):
         'create_size_group': ('Create group', '创建组'),
         'add_to_size_group': ('Add third panel', '添加第三个面板'),
         'open_align_plots': ('Open Align Plot Areas', '打开对齐绘图区'),
+        'narrow_cell': ('Make the cell narrower', '缩小单元格'),
+        'widen_cell': ('Make the cell wider', '放大单元格'),
+        'reflow_on': ('Turn REFLOW ON', '开启 REFLOW'),
     }
 
     #: target -> Inspector widget attribute name, for steps that highlight a
@@ -1257,6 +1348,11 @@ class TutorialController(QObject):
         'pip_w': 'pip_w',
         'scale_bar_enabled': 'scale_bar_enabled',
         'size_group_pinned_w': 'size_group_pinned_w',
+        'override_w': 'override_w',
+        'aspect_lock': 'aspect_lock_btn',
+        # The REFLOW hero card sits above the cell section — no
+        # collapsible ancestor, so it resolves like a plain field.
+        'reflow_card': 'reflow_card',
     }
 
     @staticmethod
@@ -1634,6 +1730,32 @@ class TutorialController(QObject):
             item.setSelected(True)
             self.window._on_selection_changed()
             self._rename_baseline = label.text
+        # ── native_plots ──
+        elif action in ('narrow_cell', 'widen_cell', 'reflow_on'):
+            from src.app.commands import PropertyChangeCommand
+            if action == 'reflow_on':
+                self._select_cells(0)
+                cell = self.tab.project.cells[0]
+                if cell.plot_reflow:
+                    return
+                self.tab.undo_stack.push(PropertyChangeCommand(
+                    cell, {"plot_reflow": True},
+                    self.window._refresh_and_update, "Reflow On"))
+            else:
+                self._select_cells(0)
+                cell = self.tab.project.cells[0]
+                width = 60.0 if action == 'narrow_cell' else 120.0
+                if abs(cell.override_width_mm - width) < 0.01:
+                    return
+                if action == 'narrow_cell':
+                    self._w_off_baseline = cell.override_width_mm
+                    label = "Narrow Cell"
+                else:
+                    self._w_on_baseline = cell.override_width_mm
+                    label = "Widen Cell"
+                self.tab.undo_stack.push(PropertyChangeCommand(
+                    cell, {"override_width_mm": width},
+                    self.window._refresh_and_update, label))
         # ── publication ──
         elif action == 'show_project':
             # Deselecting reveals Project Settings in the Inspector; the

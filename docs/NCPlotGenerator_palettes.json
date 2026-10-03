@@ -1,0 +1,64 @@
+{
+  "catalog_version": 1,
+  "purpose": "Research capture for future plot-style presets; not an installed ILM theme format.",
+  "source_root": "E:/Codes/NCPlotGenerator",
+  "source_file": "scatter_line_generator.py",
+  "palettes": [
+    {
+      "id": "colorful",
+      "name": "Colorful",
+      "source_lines": [22, 35],
+      "colors": ["#0072B2", "#E69F00", "#009E73", "#CC79A7", "#56B4E9", "#D55E00", "#F0E442", "#000000"],
+      "proposed_use": "Discrete categories. Same color set as Wong, with a different ordering."
+    },
+    {
+      "id": "rainbow",
+      "name": "Muted Rainbow",
+      "source_lines": [37, 52],
+      "colors": ["#C0504D", "#D07030", "#C8A020", "#5A9E5A", "#3A87A8", "#4A6EB5", "#7B5EA7", "#A85482"],
+      "proposed_use": "Preserve as an optional legacy appearance. Continuous use needs an explicit value-to-color mapping."
+    },
+    {
+      "id": "ocean",
+      "name": "Ocean",
+      "source_lines": [54, 68],
+      "colors": ["#081D58", "#253494", "#225EA8", "#1D91C0", "#41B6C4", "#7FCDBB", "#C7E9B4", "#EDF8B1"],
+      "proposed_use": "Ordered series or sequential values. Pale end colors need visible outlines on white."
+    },
+    {
+      "id": "wong",
+      "name": "Wong / Okabe-Ito",
+      "source_lines": [70, 77],
+      "colors": ["#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"],
+      "proposed_use": "Discrete categories, with markers/dashes available as additional distinctions."
+    },
+    {
+      "id": "blue-pink",
+      "name": "Blue–Pink",
+      "source_lines": [79, 86],
+      "colors": ["#104e8b", "#376b9e", "#5f89b1", "#afc3d8", "#c5e9e3", "#d7e1eb", "#f2dada", "#e5b5b5", "#d89090", "#b22222"],
+      "proposed_use": "Ordered or diverging appearance. Preserve the exact source order; do not assume a numerical midpoint."
+    },
+    {
+      "id": "blue-red",
+      "name": "Blue–Red",
+      "source_lines": [88, 95],
+      "colors": ["#1b3b70", "#276faf", "#4d9ac7", "#99c8e0", "#d4e6ef", "#f8f4f2", "#fbd8c3", "#f2a481", "#d6604d", "#b5202e", "#700c22"],
+      "proposed_use": "Diverging values around an explicitly configured reference. Pale center colors also need consideration for thin lines."
+    },
+    {
+      "id": "blue-red-preserve-ends",
+      "name": "Blue–Red · Preserve Ends",
+      "source_lines": [97, 104],
+      "colors": ["#1b3b70", "#276faf", "#4a6a9a", "#7a78a6", "#a07c93", "#b56e6e", "#d6604d", "#b5202e", "#700c22"],
+      "proposed_use": "Legacy ordered-series alternative without the near-white center of Blue–Red. It is a separate palette."
+    },
+    {
+      "id": "purple-brown",
+      "name": "Purple–Brown",
+      "source_lines": [106, 112],
+      "colors": ["#4e659b", "#8a8cbf", "#b8a8cf", "#e7bcc6", "#fdcf9e", "#efa484", "#b6766c"],
+      "proposed_use": "Preserve as an optional custom palette. Pale colors work better as outlined fills than unoutlined thin lines."
+    }
+  ]
+}

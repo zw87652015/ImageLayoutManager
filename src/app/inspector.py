@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QToolButton, QButtonGroup, QCheckBox,
     QScrollArea, QColorDialog, QFrame, QSizePolicy
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF
+from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF, QVariantAnimation
 from PyQt6.QtGui import QColor, QPainter, QPalette, QFont, QFontMetrics, QPen
 import os
 from typing import Optional
@@ -536,6 +536,212 @@ class CollapsibleSection(QWidget):
         anim.finished.connect(_finished)
         self._anim = anim
         start_animation(anim, 180, spatial=True)
+
+
+class ReflowCard(QFrame):
+    """Prominent 'REFLOW' hero toggle for native editable plots.
+
+    The product's RTX-ON-style branded control: opt-in reflow re-renders a
+    native plot to fill its cell at true point sizes. Entirely custom
+    painted so the wordmark/state/switch read as one branded card.
+    """
+
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from src.app.theme import get_tokens, LIGHT
+        self._tokens = get_tokens(LIGHT)
+        self._on = False
+        self._blocked = False  # requested but held off by Lock Ratio/alignment
+        self._knob_t = 0.0
+        self._anim = None
+        self._reflow_icon = None
+        self._reflow_icon_color = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFixedHeight(62)
+        self._refresh_tooltip()
+        self._update_accessible()
+
+    def apply_tokens(self, tokens: dict) -> None:
+        self._tokens = tokens
+        self.update()
+
+    def set_state(self, on: bool, blocked: bool) -> None:
+        """Populate: snaps to the state, no animation, no signal."""
+        self._on = bool(on)
+        self._blocked = bool(blocked)
+        self._knob_t = 1.0 if self._on else 0.0
+        self._refresh_tooltip()
+        self._update_accessible()
+        self.update()
+
+    def is_on(self) -> bool:
+        return self._on
+
+    def is_blocked(self) -> bool:
+        return self._blocked
+
+    def retranslate(self) -> None:
+        self._refresh_tooltip()
+        self._update_accessible()
+        self.update()
+
+    def _refresh_tooltip(self) -> None:
+        tip = tr("tip_plot_reflow")
+        if self._blocked:
+            tip += "\n\n" + tr("tip_plot_reflow_blocked_note")
+        self.setToolTip(tip)
+
+    def _update_accessible(self) -> None:
+        if self._blocked:
+            state = tr("reflow_state_paused")
+        else:
+            state = "ON" if self._on else "OFF"
+        self.setAccessibleName(f"Reflow {state}")
+
+    # ── interaction ──────────────────────────────────────────────────
+
+    def _toggle(self):
+        self._on = not self._on
+        target = 1.0 if self._on else 0.0
+        if self._anim is not None:
+            self._anim.stop()
+        anim = QVariantAnimation(self)
+        anim.setStartValue(float(self._knob_t))
+        anim.setEndValue(target)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(self._set_knob_t)
+        self._anim = anim
+        start_animation(anim, 160)
+        self._update_accessible()
+        self.update()
+        self.toggled.emit(self._on)
+
+    def _set_knob_t(self, value):
+        self._knob_t = float(value)
+        self.update()
+
+    def mouseReleaseEvent(self, event):
+        if (event.button() == Qt.MouseButton.LeftButton
+                and self.rect().contains(event.position().toPoint())):
+            self._toggle()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Space,
+                           Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._toggle()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    # ── painting ─────────────────────────────────────────────────────
+
+    def _switch_rect(self) -> QRectF:
+        w, h = 40.0, 22.0
+        return QRectF(self.width() - 12 - w, (self.height() - h) / 2.0, w, h)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        t = self._tokens
+        accent = QColor(t.get("accent", "#0891B2"))
+        surface = QColor(t.get("surface", "#FFFFFF"))
+        border = QColor(t.get("border", "#D8D8D8"))
+        text_c = QColor(t.get("text", "#1C1C1E"))
+        text_sec = QColor(t.get("text_sec", "#6E6E73"))
+        on_accent = QColor(t.get("on_accent", "#FFFFFF"))
+        active = self._on and not self._blocked
+
+        # Card body: accent_tint + accent 1px when ON, surface/border else.
+        card = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        if active:
+            tint = QColor(accent)
+            tint.setAlpha(34)
+            painter.setBrush(tint)
+            painter.setPen(QPen(accent, 1))
+        else:
+            painter.setBrush(surface)
+            painter.setPen(QPen(border, 1))
+        painter.drawRoundedRect(card, 8, 8)
+
+        # Focus ring (accent_ring).
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            ring = QColor(accent)
+            ring.setAlpha(100)
+            painter.setPen(QPen(ring, 2))
+            painter.drawRoundedRect(
+                QRectF(self.rect()).adjusted(1, 1, -1, -1), 9, 9)
+
+        switch = self._switch_rect()
+        icon_color = (accent if active else text_sec).name()
+        if self._reflow_icon_color != icon_color:
+            from src.app.icons import make_icon
+            self._reflow_icon = make_icon("reflow_on", icon_color)
+            self._reflow_icon_color = icon_color
+        self._reflow_icon.paint(painter, QRect(10, 7, 24, 24))
+
+        # Wordmark + state word — heavy italic, RTX style.
+        mark_font = QFont()
+        mark_font.setPixelSize(15)
+        mark_font.setItalic(True)
+        mark_font.setWeight(QFont.Weight.Black)
+        painter.setFont(mark_font)
+        fm = QFontMetrics(mark_font)
+        mark = "REFLOW"  # brand wordmark — stays English in both languages
+        state = tr("reflow_state_paused") if self._blocked \
+            else ("ON" if self._on else "OFF")
+        left = 40.0
+        mark_w = fm.horizontalAdvance(mark)
+        text_right = switch.left() - 8
+        painter.setPen(QPen(text_c))
+        painter.drawText(QRectF(left, 8, mark_w, fm.height()),
+                         Qt.AlignmentFlag.AlignVCenter
+                         | Qt.AlignmentFlag.AlignLeft, mark)
+        painter.setPen(QPen(accent if active else text_sec))
+        painter.drawText(QRectF(left + mark_w + 6, 8,
+                                text_right - left - mark_w - 6, fm.height()),
+                         Qt.AlignmentFlag.AlignVCenter
+                         | Qt.AlignmentFlag.AlignLeft, state)
+
+        # One-line subtitle.
+        sub_font = QFont()
+        sub_font.setPixelSize(10)
+        painter.setFont(sub_font)
+        painter.setPen(QPen(text_sec))
+        sub = tr("tip_plot_reflow_blocked_note") if self._blocked else tr(
+            "reflow_card_on_sub" if self._on else "reflow_card_off_sub")
+        sub_fm = QFontMetrics(sub_font)
+        sub_left = 12.0
+        sub_w = max(0, int(text_right - sub_left - 4))
+        painter.drawText(
+            QRectF(sub_left, 34, sub_w, sub_fm.height() + 2),
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            sub_fm.elidedText(sub, Qt.TextElideMode.ElideRight, sub_w))
+
+        # Switch: accent track when on (dimmed while blocked), neutral off.
+        if self._on:
+            track_c = QColor(accent)
+            if self._blocked:
+                track_c.setAlpha(140)
+        else:
+            track_c = QColor(border)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(track_c)
+        painter.drawRoundedRect(switch, 11, 11)
+        margin = 3.0
+        d = switch.height() - 2 * margin
+        x = (switch.left() + margin
+             + self._knob_t * (switch.width() - d - 2 * margin))
+        painter.setBrush(on_accent if self._on else surface)
+        painter.setPen(QPen(QColor(0, 0, 0, 40), 1))
+        painter.drawEllipse(QRectF(x, switch.top() + margin, d, d))
+        painter.end()
 
 
 class Inspector(QWidget):
@@ -1073,6 +1279,15 @@ class Inspector(QWidget):
         self.scale_bar_offset_y.setSingleStep(0.5)
         self.scale_bar_offset_y.valueChanged.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self._fl("lbl_offset_y_mm"), self.scale_bar_offset_y)
+
+        # Reflow hero card sits above the cell group — the branded opt-in
+        # control for native-plot reflow, only for editable plots.
+        self.reflow_card = ReflowCard()
+        self.reflow_card.toggled.connect(
+            lambda v: self.cell_property_changed.emit({"plot_reflow": v})
+        )
+        self.layout.addWidget(self.reflow_card)
+        self.reflow_card.hide()
 
         self.layout.addWidget(self.cell_group)
         self.layout.addWidget(self.scale_bar_group)
@@ -1819,6 +2034,7 @@ class Inspector(QWidget):
         self.group_label_group.set_title(tr("grp_group_label"))
         self.scale_bar_group.set_title(tr("grp_scale_bar"))
         self.svg_normalize_group.set_title(tr("grp_svg_normalize"))
+        self.reflow_card.retranslate()
         self.svg_normalize_chk.setText(tr("chk_svg_normalize"))
         self.svg_normalize_chk.setToolTip(tr("tip_svg_normalize"))
 
@@ -1918,6 +2134,7 @@ class Inspector(QWidget):
         from src.app.icons import make_icon
         color = tokens.get("text", "#333333")
         self._icon_theme_color = color
+        self.reflow_card.apply_tokens(tokens)
         self._icon_lock_closed = make_icon("lock_closed", color, 16)
         self._icon_lock_open   = make_icon("lock_open",   color, 16)
         locked = self.aspect_lock_btn.isChecked()
@@ -2567,6 +2784,8 @@ class Inspector(QWidget):
         self._update_typography_labels()
         self._current_item_type = item_type
         self.multi_label.hide()
+        # The reflow hero card only lives in the 'cell' branch.
+        self.reflow_card.hide()
 
         if item_type == 'multi_cell':
             self.no_selection_label.hide()
@@ -2811,6 +3030,9 @@ class Inspector(QWidget):
 
             # SVG normalize section (only for SVG images)
             self._populate_svg_normalize_section(data)
+
+            # Reflow hero card (only for native editable plots)
+            self._populate_reflow_card(data)
 
             self.blockSignals(False)
             
@@ -3062,6 +3284,17 @@ class Inspector(QWidget):
         self.svg_normalize_pt.setValue(float(data.get("svg_normalize_text_pt", 8.0)))
         self.blockSignals(False)
         self.svg_normalize_group.show()
+
+    def _populate_reflow_card(self, data: dict) -> None:
+        """Show/populate the ReflowCard for native editable plot cells."""
+        if not data or not data.get("_is_editable_plot"):
+            self.reflow_card.hide()
+            return
+        blocked = bool(data.get("aspect_ratio_locked")
+                       or data.get("_plot_alignment"))
+        self.reflow_card.set_state(bool(data.get("plot_reflow", False)),
+                                   blocked)
+        self.reflow_card.show()
 
     def _populate_scale_bar_section(self, data: dict):
         """Populate the collapsible scale bar group with data from a Cell or PiPItem."""

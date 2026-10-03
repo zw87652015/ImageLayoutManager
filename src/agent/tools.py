@@ -146,6 +146,7 @@ def _cell_summary(cell: Cell,
         "override_mm": {"w": cell.override_width_mm,
                         "h": cell.override_height_mm,
                         "aspect_ratio_locked": cell.aspect_ratio_locked},
+        "plot_reflow": getattr(cell, "plot_reflow", False),
         "freeform": {
             "x_mm": cell.freeform_x_mm,
             "y_mm": cell.freeform_y_mm,
@@ -1140,7 +1141,7 @@ _CELL_PROP_FIELDS = {
     "padding_top", "padding_bottom", "padding_left", "padding_right",
     "crop_left", "crop_top", "crop_right", "crop_bottom",
     "z_index", "override_width_mm", "override_height_mm",
-    "aspect_ratio_locked",
+    "aspect_ratio_locked", "plot_reflow",
     "svg_normalize_text", "svg_normalize_text_pt",
 }
 
@@ -1153,7 +1154,10 @@ def cell_set_properties(ctx: ToolContext, cell_id: str,
     rotation (0/90/180/270), align_h (left/center/right),
     align_v (top/center/bottom), padding_*/crop_* (mm/normalised),
     z_index, override_width_mm, override_height_mm,
-    aspect_ratio_locked, svg_normalize_text, svg_normalize_text_pt.
+    aspect_ratio_locked, plot_reflow (off by default — the stored
+    ilmplot snapshot is scaled like a picture; true re-renders to
+    fill the cell at true point sizes),
+    svg_normalize_text, svg_normalize_text_pt.
     """
     cell = _find_cell(ctx, cell_id)
     bad = set(changes) - _CELL_PROP_FIELDS

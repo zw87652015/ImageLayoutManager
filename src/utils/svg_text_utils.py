@@ -456,7 +456,15 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     from src.utils.typography import uses_points
     precise = uses_points(project)
 
-    if not do_normalize and not overrides:
+    # Cheap cached metadata probe BEFORE reading the file — ordinary SVGs
+    # with no overrides/normalization must not re-read bytes per layout.
+    try:
+        from src.plot_editor.document import has_plot_metadata
+        native = has_plot_metadata(path)
+    except Exception:
+        native = False
+
+    if not native and not do_normalize and not overrides:
         return None
 
     try:
@@ -465,6 +473,80 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     except OSError:
         return None
 
+    # Native editable plot (ilm-plot metadata): re-render the embedded
+    # document so fonts/line widths come out at true final-figure points for
+    # this cell's placed size. A corrupt/future metadata payload keeps the
+    # stored vector snapshot (display only — the editor explains the issue).
+    native_doc = None
+    if native:
+        try:
+            from src.plot_editor.render import load_rendered_document
+            native_doc = load_rendered_document(path)
+        except Exception:
+            native_doc = None
+
+    mm_per_unit = None
+    if native_doc is not None:
+        reflow = False
+        try:
+            from src.utils.editable_plot import plot_reflows, reflow_figure_size_mm
+            reflow = plot_reflows(project, cell)
+        except Exception:
+            reflow = False
+        handled = False
+        if reflow:
+            # Re-render at the exact content-area size: the figure fills the
+            # cell (any aspect) with true point sizes. mm_per_unit stays
+            # None so normalize/group steps recompute it from the new bytes.
+            clip_w = clip_h = 0.0
+            if content_size_mm is not None:
+                clip_w, clip_h = content_size_mm
+            else:
+                if layout_result is None:
+                    from src.model.layout_engine import LayoutEngine
+                    layout_result = LayoutEngine.calculate_layout(project)
+                rect = layout_result.cell_rects.get(cell.id)
+                if rect is not None:
+                    clip_w, clip_h = rect[2], rect[3]
+                    if project.layout_mode != 'freeform':
+                        clip_w -= cell.padding_left + cell.padding_right
+                        clip_h -= cell.padding_top + cell.padding_bottom
+            if clip_w > 0 and clip_h > 0:
+                handled = True
+                try:
+                    from src.model.layout_engine import LayoutEngine
+                    from src.plot_editor.render import render_document_fitted
+                    from src.utils.editable_plot import resolve_plot_row_frames
+                    if layout_result is None:
+                        layout_result = LayoutEngine.calculate_layout(project)
+                    fig_size = reflow_figure_size_mm(cell, clip_w, clip_h)
+                    v_span = resolve_plot_row_frames(
+                        project, layout_result).get(cell.id)
+                    try:
+                        base_bytes = render_document_fitted(
+                            native_doc, *fig_size, v_span_mm=v_span).svg
+                    except Exception:
+                        if v_span is None:
+                            raise
+                        base_bytes = render_document_fitted(
+                            native_doc, *fig_size).svg
+                except Exception:
+                    pass  # fall back to the stored snapshot bytes
+        if not handled:
+            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes,
+                                          layout_result, content_size_mm)
+            # plot_reflow off keeps the stored snapshot verbatim — the
+            # exact bytes the Plot Editor saved — so no style-scaled
+            # re-render either. Placement then scales it like a picture.
+            if mm_per_unit > 0 and getattr(cell, 'plot_reflow', False):
+                try:
+                    from src.plot_editor.render import render_document
+                    base_bytes = render_document(
+                        native_doc,
+                        style_scale=(25.4 / 72.0) / mm_per_unit).svg
+                except Exception:
+                    pass  # fall back to the stored snapshot bytes
+
     if overrides:
         # A group size is points in the final figure, so convert it to the
         # SVG's own user units and write it as "px" (1 px = 1 user unit).
@@ -472,15 +554,17 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         # QtSvg resolves pt at ~1.24 px/pt rather than the 96/72 the page
         # maths assumes, which rendered synced text ~7% too small and left
         # it inconsistent with raster panels in the same group.
-        mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result, content_size_mm)
+        if mm_per_unit is None:
+            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result, content_size_mm)
         overrides = {key: (size * 25.4 / 72.0) / mm_per_unit for key, size in overrides.items()}
 
     # Step 1 — normalise
     if do_normalize:
         target_pt = float(getattr(cell, 'svg_normalize_text_pt', 8.0))
         if precise:
-            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result,
-                                          content_size_mm)
+            if mm_per_unit is None:
+                mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result,
+                                              content_size_mm)
             base_bytes = normalize_svg_text(
                 base_bytes, (target_pt * 25.4 / 72.0) / mm_per_unit,
                 unit='px', precise=True)
@@ -494,4 +578,6 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         if result:
             return _positioned_text_runs(result) if precise else result
 
-    return _positioned_text_runs(base_bytes) if do_normalize and precise else base_bytes if do_normalize else None
+    changed = native_doc is not None or do_normalize
+    return _positioned_text_runs(base_bytes) if changed and precise \
+        else base_bytes if changed else None
