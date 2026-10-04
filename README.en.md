@@ -22,63 +22,62 @@ See [docs/mcp_setup.md](docs/mcp_setup.md) for setup. Inside the app: **Tools �
 
 ## What you can do with it
 
-- **Assemble multi-panel figures**
-  Place multiple images into a single layout with consistent margins and gaps.
-- **Keep layouts reproducible**
-  Save and re-open layout definitions so a figure can be regenerated later.
-- **Export for papers and reports**
-  Export layouts to common formats suitable for academic writing workflows.
-
-Additional highlights:
-
-- **Hierarchical cell splitting**
-  Split cells infinitely in vertical or horizontal stacks with proportional sizing. Label cells can be added above sub-cell groups without disrupting the layout.
-- **WYSIWYG export**
-  PDF, raster, and SVG exports match the on-canvas layout and label placement exactly.
-- **Vector image import (SVG)**
-  SVG can be placed into cells and renders as vector graphics in PDF and SVG export.
-- **Label editing**
-  Labels are editable per-item. Label color can be applied to a single label, or synced to all labels in the same group via an explicit “Apply to All” button.
-- **Portable project bundles (.figpack)**
-  Pack a project and all its referenced images into a single portable `.figpack` file. Share it with collaborators without worrying about broken image paths.
-- **File locking**
-  Opening a project file locks it so the same file cannot be opened twice — in the same instance or in a separate one — preventing accidental concurrent edits.
+- **Grid and freeform layouts**
+  Arrange panels with consistent margins and gaps, split cells into nested rows or columns, or position panels freely and reorder them in the Layers panel.
+- **Editable scientific plots**
+  Create line, scatter, violin, ridgeline and column plots in the bundled ILM Plot Editor. Save the data, settings and vector image together as `*.ilmplot.svg`.
+- **Plot alignment**
+  Mark the plot areas inside imported panels, then match their heights and baselines while preserving image proportions.
+- **Consistent typography**
+  New projects use real final-figure points for labels, titles, annotations and scale-bar text. Match selected text sizes across SVG and raster panels without modifying the source files; raster text detection uses the bundled OCR backend.
+- **Labels, scale bars and insets**
+  Add panel numbering, shared labels, scale bars and picture-in-picture (PiP) insets. Edit individual labels or explicitly apply their style to the whole group.
+- **Image and clipboard import**
+  Drag in images or folders, or paste images and text from the clipboard. Work with raster images, SVG and PDF panels.
+- **Publication exports**
+  Export PDF, SVG, TIFF, PNG and JPEG with physical page dimensions and configurable raster DPI.
+- **Portable projects**
+  Keep a lightweight `.figlayout` project or bundle the layout and referenced images into one `.figpack` for sharing. File locking helps prevent concurrent edits.
+- **Guided tutorials**
+  Learn layout, annotation, text sizing, plot alignment and native-plot Reflow in practice projects. The Plot Editor also has its own guided lessons.
 - **AI/MCP-assisted figure editing**
-  Connect Claude Desktop, Claude Code, Cursor, Windsurf, Cline, or another MCP host to the running app. AI can build layouts, import images, style labels/text, crop/rotate/pad panels, add scale bars, add PiP insets, manage size groups, set export regions, request screenshots, and save/export projects.
+  Connect Claude Desktop, Claude Code, Cursor, Windsurf, Cline, or another MCP host to the running app. AI can build layouts, import images, style labels/text, crop/rotate/pad panels, add scale bars and PiP insets, manage size groups, set export regions, request screenshots, and save/export projects.
 
 ## Downloads
+
+Windows users can install ImageLayoutManager from the [Microsoft Store](https://apps.microsoft.com/detail/9NGNW4D8L5QH). Updates are delivered through the Store.
 
 Pre-built binaries are attached to each [GitHub Release](../../releases).
 
 | File | Platform | Notes |
 |---|---|---|
-| `ImageLayoutManager_version_Setup.exe` | Windows | **Recommended.** Installer build — extracts once on install, opens instantly every launch. |
-| `ImageLayoutManager_version.exe` | Windows | Portable single-file build — no installation needed, but takes 5-10 s to open on every launch while it self-extracts. |
-| `ImageLayoutManager_version.zip` | macOS | App bundle — unzip and move to Applications. |
+| `ImageLayoutManager_version_Setup.exe` | Windows | Standalone installer; extracts files once during installation. |
+| `ImageLayoutManager_version.exe` | Windows | Portable single-file build; extracts files at each launch. |
+| `ImageLayoutManager_<version>_macOS.zip` | macOS (Apple Silicon) | App bundle for Apple Silicon Macs — unzip and move to Applications. |
+| `ImageLayoutManager_<version>_macOS_Intel.zip` | macOS (Intel) | App bundle for Intel Macs — unzip and move to Applications. |
 
-Windows builds embed version, publisher, and Apache-2.0 copyright metadata in the installer, GUI executable, and CLI executable. Current public Windows binaries may still be unsigned; this is common for small open-source projects, but Windows SmartScreen may show an "Unknown publisher" or security warning. Prefer downloads from the official GitHub Releases page and verify checksums when provided.
+Standalone Windows builds embed version, publisher, and Apache-2.0 copyright metadata in the installer, GUI executable, and CLI executable. Downloads from GitHub Releases may be unsigned and trigger Windows SmartScreen warnings; use the official release page and verify checksums when provided. Microsoft Store packages are signed by Microsoft during distribution. See the License section for the bundled dependencies' license terms.
 
 Before upgrading an installed Windows build, close ImageLayoutManager and any AI host using MCP (Claude Desktop, Claude Code, Cursor, Windsurf, Cline, etc.). Those hosts can keep `imagelayout-cli.exe mcp` running in the background, which locks files under `_internal\PyQt6\` and can make the installer fail with "DeleteFile failed; code 5: Access is denied".
 
 ## Getting started
 
-### Prerequisites
-
-- Python 3.9+ recommended
-- Qt/PyQt6 runtime via pip
-
-### Install
-
-This repository may be used in two common ways:
-
-1. **Run from source** (recommended during development)
-2. **Package/installer build** (if the project provides one)
-
-Install dependencies:
+Pre-built downloads include the runtime; Python is only needed when running from source. From the repository root, create the provided Python 3.13 environment:
 
 ```bash
-pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate imagelayout
+python main.py
 ```
+
+Alternatively, use an activated Python 3.13 virtual environment:
+
+```bash
+python -m pip install -r requirements.txt
+python main.py
+```
+
+Dependencies are pinned in [`requirements.txt`](requirements.txt); the Conda environment also includes PyInstaller for packaging.
 
 ## Usage
 
@@ -156,11 +155,12 @@ For setup instructions, see [`docs/mcp_setup.md`](docs/mcp_setup.md). After upgr
 
 ### Access
 
-After installing the Windows version, the CLI is available via:
+For the standalone Windows installer, the CLI is available via:
+
 - **Start Menu**: "ImageLayoutManager CLI (shell)" — opens a PowerShell pre-configured with the CLI in PATH
 - **Installation directory**: `C:\Program Files\ImageLayoutManager\imagelayout-cli.exe`
 
-Run `imagelayout-cli.exe --help` for full usage information.
+Run `imagelayout-cli.exe --help` for full usage information. From source, use `python cli_main.py --help` and replace `imagelayout-cli.exe` in the examples with `python cli_main.py`. The macOS app bundle includes the CLI at `ImageLayoutManager.app/Contents/MacOS/imagelayout-cli`.
 
 ## File types
 
@@ -171,12 +171,14 @@ Run `imagelayout-cli.exe --help` for full usage information.
 | `*.figlayout` | Default project format. A JSON file that stores the layout; image files are referenced by path and stay separate. Lightweight and VCS-friendly. |
 | `*.figpack` | Portable bundle format. A ZIP archive containing the layout JSON and all referenced images. Use **File → Convert to .figpack…** to bundle an open `.figlayout` project. Ideal for sharing or archiving a completed figure. |
 
+Projects saved by 3.5.0 require ImageLayoutManager 3.5.0 or later. Older projects remain readable and retain their original layout and text-sizing behavior; keep an original copy if you need to return to an older version.
+
 When a project file is open, a hidden presence file (`~$filename`) is written next to it. If you try to open the same file in another instance, the app will refuse and show the owner's username. The lock is released automatically when the tab is closed.
 
 ### Image import
 
 Supported raster formats: PNG, JPG, TIFF, BMP, GIF, WebP.  
-SVG files are also supported and render as vector graphics in PDF and SVG export.
+SVG and PDF panels are also supported. Native `*.ilmplot.svg` files can be reopened in the Plot Editor.
 
 ### Export formats
 
@@ -192,10 +194,51 @@ SVG files are also supported and render as vector graphics in PDF and SVG export
 
 ## Editable plots
 
-The bundled **ILM Plot Editor** creates editable line plots saved as self-contained `*.ilmplot.svg` files (vector snapshot + editable data in one file). Use File → New Plot… / Open Plot Editor…, or Edit Plot… from the cell context menu / double-click on a native plot cell, or the "ILM Plot Editor" Start Menu shortcut. See [`docs/PLOT_EDITOR.md`](docs/PLOT_EDITOR.md).
+Version 3.5.0 includes the **ILM Plot Editor**, a separate window with a worksheet and plot preview. Open it from the Welcome window, **File → Open Plot Editor**, or an empty cell's context menu via **New .ilmplot.svg**. Double-click a native plot cell or choose **Edit Plot…** to edit an existing plot.
+
+- **Chart types:** line, scatter, line + scatter, stacked line, ridgeline, violin, column, stacked column and 100% stacked column.
+- **Data:** import CSV, TSV, TXT or Excel (`.xlsx`), drag files into the editor, or paste into the worksheet. Y error columns support symmetric and asymmetric error bars on line/scatter and ordinary column plots.
+- **Styling:** double-click plot elements to edit them; add free text and significance brackets, choose or create colour themes, and reuse style presets.
+- **Save:** `*.ilmplot.svg` keeps the vector snapshot, plot data and settings in one file. It can be used as an ordinary SVG and included in a `.figpack`.
+
+Native plots keep their saved SVG appearance when first placed in ILM. Enable **REFLOW ON** in the Inspector or cell context menu to adapt the plot to the cell while keeping text and line widths at their true point sizes. Locking the cell's aspect ratio pauses Reflow.
+
+To launch the editor directly from source:
+
+```bash
+python plot_editor_main.py
+```
+
+## Build a Windows Store package (MSIX)
+
+Use a Windows x64 environment with the project dependencies and PyInstaller installed. Activate the `imagelayout` Conda environment and run these commands from the repository root in PowerShell. Set `$makeappx` to an existing x64 `MakeAppx.exe` from the Windows SDK or the `Microsoft.Windows.SDK.BuildTools` package.
+
+```powershell
+conda activate imagelayout
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$candidate = "build\store-candidate-$stamp"
+$output = "dist\msix-$stamp"
+$makeappx = "C:\path\to\x64\makeappx.exe"
+
+python build_installer_windows.py --onedir-only --output-root $candidate
+if ($LASTEXITCODE -ne 0) { throw "Onedir build failed" }
+
+python build_msix.py `
+    --bundle "$candidate\dist\ImageLayoutManager" `
+    --output $output `
+    --identity-name "RiverQuasar.ImageLayoutManager" `
+    --publisher "CN=3A918967-921B-4748-8927-958534864D92" `
+    --publisher-display-name "River Quasar" `
+    --makeappx $makeappx
+if ($LASTEXITCODE -ne 0) { throw "MSIX packaging failed" }
+```
+
+The first command creates an isolated bundle containing the GUI and CLI without invoking Inno Setup. Both output directories must be new; existing builds are preserved. The second command creates `$output\ImageLayoutManager-<version>-x64.msix` (for application version 3.5.0, the package version is 3.5.0.0). Upload that `.msix` file in Partner Center for this app. The local package is unsigned; Microsoft signs Store packages. Omitting `--makeappx` creates only a layout directory, not an MSIX.
+
+The Store identity above belongs to this app; use your own registered identity for a separately published fork. Build outputs under `build/` and `dist/` are Git-ignored. Downloaded dependency sources are not automatically included in the MSIX. The generated license manifest currently records `source_status: incomplete`; successful packaging does not complete the outstanding source verification and publication work.
 
 ## License
 
 The source code is licensed under Apache-2.0. See `LICENSE`.
 
-**Note on pre-built binaries:** the official binaries bundle PyQt6 (GPL v3) and PyMuPDF (AGPL-3.0). As a combined work, the distributed binaries are governed by GPL v3 / AGPL-3.0 terms in addition to Apache-2.0. If you redistribute the binaries — or ship your own build that includes these components — you must comply with those licenses, or obtain commercial licenses from Riverbank Computing (PyQt6) and Artifex Software (PyMuPDF). See `NOTICE` for the full third-party list.
+**Note on pre-built binaries:** the official binaries bundle PyQt6 (GPL v3) and PyMuPDF (AGPL-3.0). As a combined work, the distributed binaries are governed by GPL v3 / AGPL-3.0 terms in addition to Apache-2.0. If you redistribute the binaries — or ship your own build that includes these components — you must comply with those licenses, or obtain commercial licenses from Riverbank Computing (PyQt6) and Artifex Software (PyMuPDF). See `NOTICE` for the full third-party list. Use **About → Licenses and source…** to read bundled notices offline. [`SOURCES.md`](SOURCES.md) lists corresponding-source locations and their recorded verification status; [`NOTICE`](NOTICE) lists third-party notices.

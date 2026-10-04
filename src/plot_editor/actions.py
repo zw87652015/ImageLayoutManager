@@ -86,6 +86,9 @@ ACTIONS = {
                        'type'),
     'style': ActionSpec('style', 'Plot Style…', '', '',
                         'Not implemented yet'),
+    'figure_size': ActionSpec('figure_size', 'Figure Size…', '', '',
+                              'Change the figure width, height and '
+                              'aspect ratio'),
     'add_note': ActionSpec('add_note', 'Add Note', '', '',
                            'Add a corner note to the plot'),
     'add_bracket': ActionSpec('add_bracket', 'Add Significance Bracket',

@@ -23,6 +23,7 @@ from .plot_data import (PlotSelectionError, build_categories,
 from .plot_file import (PlotFileError, chart_from_document,
                         items_from_document, save_plot_file)
 from .document import PlotDocumentError
+from .figure_size import FigureSize
 from .render import element_regions, render_document
 from .chrome import reset_all_stylesheet, themed_icon
 from .title_field import PlotTitleField
@@ -132,6 +133,19 @@ class PlotTab(QSplitter):
         self._preset_menu.aboutToShow.connect(
             self._rebuild_preset_menu)
         self.style_presets.setMenu(self._preset_menu)
+        # "Size" figure-size dialog button, left of the Style button.
+        self.figure_size_button = QToolButton(right)
+        self.figure_size_button.setObjectName('plotFigureSize')
+        self.figure_size_button.setText(tr('btn_figure_size'))
+        self.figure_size_button.setToolTip(tr('tip_figure_size'))
+        self.figure_size_button.setAccessibleName(
+            tr('act_figure_size'))
+        self.figure_size_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.figure_size_button.setStyleSheet(
+            reset_all_stylesheet(theme, scale))
+        self.figure_size_button.setVisible(False)
+        self.figure_size_button.clicked.connect(self.edit_figure_size)
         right.installEventFilter(self)
         self.changed.connect(self._update_reset_all)
         # Dropped files belong to the window: children must not swallow
@@ -148,6 +162,8 @@ class PlotTab(QSplitter):
         self.plot = None
         self.plot_title = ''
         self.overrides = PlotOverrides()
+        self.figure_size = FigureSize()
+        self._figure_size_locked = False
         self.regions = None
         self.title_field.title_changed.connect(self._on_title_changed)
         self.plot_canvas.element_activated.connect(self._open_element_panel)
@@ -184,7 +200,8 @@ class PlotTab(QSplitter):
         base = self.plot.document if self.plot.legacy_base else None
         return effective_document(base, self.plot.series,
                                   self.plot.chart_key, self.plot_title,
-                                  self.overrides)
+                                  self.overrides,
+                                  figure_size=self.figure_size)
 
     def update_overrides(self, fn):
         """Apply ``fn(self.overrides)`` then re-render + mark dirty.
@@ -223,20 +240,50 @@ class PlotTab(QSplitter):
         area = self._right_area
         self.reset_all.adjustSize()
         self.style_presets.adjustSize()
+        self.figure_size_button.adjustSize()
         self.reset_all.move(area.width() - self.reset_all.width() - 12,
                             area.height() - self.reset_all.height() - 12)
         self.style_presets.move(
             self.reset_all.x() - self.style_presets.width() - 6,
             self.reset_all.y())
+        self.figure_size_button.move(
+            self.style_presets.x() - self.figure_size_button.width() - 6,
+            self.reset_all.y())
         self.reset_all.raise_()
         self.style_presets.raise_()
+        self.figure_size_button.raise_()
 
     def _update_reset_all(self):
         self.reset_all.setVisible(self.plot is not None)
         self.reset_all.setEnabled(not self.overrides.is_empty())
         self.style_presets.setVisible(self.plot is not None)
+        self.figure_size_button.setVisible(self.plot is not None)
         if self.plot is not None:
             self._position_reset_all()
+
+    # ── figure size ──────────────────────────────────────────────────
+
+    def set_figure_size(self, size):
+        if self.plot is None or size == self.figure_size:
+            return False
+        # Validate even if called outside the dialog.
+        size = FigureSize(size.width_mm, size.height_mm)
+        old = self.figure_size
+        self.worksheet.record_external_edit(
+            'Resize Plot',
+            lambda: setattr(self, 'figure_size', size),
+            lambda: setattr(self, 'figure_size', old))
+        return True
+
+    def edit_figure_size(self):
+        if self.plot is None:
+            return
+        from .figure_size_dialog import FigureSizeDialog
+        dialog = FigureSizeDialog(self.figure_size,
+                                  self._figure_size_locked, self)
+        if dialog.exec() == dialog.DialogCode.Accepted:
+            self._figure_size_locked = dialog.locked()
+            self.set_figure_size(dialog.figure_size())
 
     # ── Style presets ────────────────────────────────────────────────
 
@@ -622,6 +669,9 @@ class PlotTab(QSplitter):
         self.regions = None
         self._set_path(path)
         self.plot_title = pf.document.title or ''
+        # Geometry comes from the actual native document, even when the
+        # file carries a v2 overrides node.
+        self.figure_size = FigureSize.from_document(pf.document)
         self.title_field.set_title(self.plot_title)
         # Preview uses the same native effective document that save and
         # ILM rendering consume; if it can't render, keep the file's SVG.

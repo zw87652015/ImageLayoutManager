@@ -34,6 +34,7 @@ _STRINGS = {
     'act_select_all': {'en': 'Select All', 'zh': '全选'},
     'act_plot':     {'en': 'Plot',       'zh': '绘图'},
     'act_style':    {'en': 'Plot Style…', 'zh': '图表样式…'},
+    'act_figure_size': {'en': 'Figure Size…', 'zh': '图表尺寸…'},
     'act_add_note':    {'en': 'Add Text', 'zh': '添加文本'},
     'act_add_bracket': {'en': 'Add Significance Bracket',
                         'zh': '添加显著性标注'},
@@ -181,6 +182,7 @@ _STRINGS = {
     'hist_delete_column':  {'en': 'Delete Column',  'zh': '删除列'},
     'hist_set_as':         {'en': 'Set As',         'zh': '设置为'},
     'hist_import':         {'en': 'Import',         'zh': '导入'},
+    'hist_resize_plot':    {'en': 'Resize Plot',    'zh': '调整图表尺寸'},
 
     # ── Toolbar export button ────────────────────────────────────────
     'export_ready':    {'en': 'Export the plot', 'zh': '导出图表'},
@@ -563,6 +565,28 @@ _STRINGS = {
     'err_import_empty': {'en': 'The file contains no importable '
                                'columns',
                          'zh': '文件中没有可导入的列'},
+
+    # ── Figure size ──────────────────────────────────────────────────
+    'btn_figure_size':    {'en': 'Size…',         'zh': '尺寸…'},
+    'tip_figure_size':    {'en': 'Change the figure width, height and '
+                                 'aspect ratio',
+                           'zh': '调整图表宽高与宽高比'},
+    'size_width':         {'en': 'Width',         'zh': '宽度'},
+    'size_height':        {'en': 'Height',        'zh': '高度'},
+    'size_ratio':         {'en': 'Aspect ratio',  'zh': '宽高比'},
+    'size_custom':        {'en': 'Custom',        'zh': '自定义'},
+    'size_lock':          {'en': 'Lock aspect ratio',
+                           'zh': '锁定宽高比'},
+    'size_swap':          {'en': 'Swap width and height',
+                           'zh': '交换宽高'},
+    'size_apply':         {'en': 'Apply',         'zh': '应用'},
+    'size_cancel':        {'en': 'Cancel',        'zh': '取消'},
+    'figure_size_hint':   {'en': 'Text and line widths keep their '
+                                 'point sizes.',
+                           'zh': '文字与线宽保持原有磅值。'},
+    'err_figure_size':    {'en': 'Dimensions must be greater than '
+                                 'zero and no more than {maximum:g} mm.',
+                           'zh': '尺寸须大于零，且不超过 {maximum:g} mm。'},
 
     # ── Style presets ────────────────────────────────────────────────
     'btn_style':          {'en': 'Style',         'zh': '样式'},

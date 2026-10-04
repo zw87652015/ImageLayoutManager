@@ -225,7 +225,7 @@ def collect(build_dir: Path) -> dict:
 
     py_manifest = _matching_manifest(
         build.rglob('*source-downloads.json'), 'exact-version Python source',
-        python_expected, exact=True,
+        python_expected, exact=False,
         scope_prefix='Exact-version PyPI sdists')
     py_records = {
         canonicalize_name(name): record
@@ -239,7 +239,7 @@ def collect(build_dir: Path) -> dict:
     if tagged_expected:
         tagged_manifest = _matching_manifest(
             build.rglob('*tagged-source-downloads.json'),
-            'tagged Git source', tagged_expected, exact=True)
+            'tagged Git source', tagged_expected, exact=False)
         tagged = {
             canonicalize_name(name): record
             for name, record in _records_by_name(

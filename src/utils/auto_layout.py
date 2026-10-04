@@ -4,14 +4,34 @@ from PIL import Image
 from PyQt6.QtSvg import QSvgRenderer
 from src.model.data_model import Project, RowTemplate, Cell
 
+# Active Reflow plots can fit any panel; use a common landscape starting
+# shape instead of treating their saved SVG dimensions as a constraint.
+_REFLOW_LAYOUT_ASPECT = 4.0 / 3.0
+
 class AutoLayout:
     @staticmethod
     def _get_image_aspect_ratios(project: Project) -> Dict[str, float]:
-        """Extracts the native w/h aspect ratio for all images in the project."""
+        """Return layout aspects, keeping active Reflow independent of source size.
+
+        Grid Reflow cells share a 4:3 starting shape. In freeform mode their
+        existing panel aspect is retained. Fixed artwork keeps its cropped,
+        rotated source aspect.
+        """
         aspect_ratios = {}
         for cell in project.get_all_leaf_cells():
             if cell.image_path and os.path.exists(cell.image_path) and not cell.is_placeholder:
                 try:
+                    if getattr(cell, 'plot_reflow', False) is True:
+                        from src.utils.editable_plot import plot_reflows
+                        if plot_reflows(project, cell):
+                            ratio = _REFLOW_LAYOUT_ASPECT
+                            if project.layout_mode == 'freeform':
+                                w = cell.freeform_w_mm
+                                h = cell.freeform_h_mm
+                                if w > 0 and h > 0:
+                                    ratio = w / h
+                            aspect_ratios[cell.id] = ratio
+                            continue
                     ext = os.path.splitext(cell.image_path)[1].lower()
                     if ext == '.svg':
                         # Handle SVG vector format
@@ -64,7 +84,8 @@ class AutoLayout:
         Strategy:
         1. Within a row, we want all images to have the SAME physical height to look neat.
            - To achieve this, column width W_i must be proportional to image aspect ratio a_i (W_i = H * a_i).
-           - So, column_ratios = [a_1, a_2, ... a_n].
+           - So, column_ratios = [a_1, a_2, ... a_n]. Fixed artwork uses its
+             source aspect; active Reflow plots share a neutral preference.
            
         2. Across rows, we want to respect the natural height of each row.
            - A row's natural height H_row is determined by the page width W_page.
@@ -74,58 +95,9 @@ class AutoLayout:
            - So, row.height_ratio should be proportional to 1 / Sum(a_i).
         """
         
-        # 1. Gather image aspect ratios
-        aspect_ratios = {} # cell_id -> float (w/h)
-        
-        for cell in project.get_all_leaf_cells():
-            if cell.image_path and os.path.exists(cell.image_path) and not cell.is_placeholder:
-                try:
-                    ext = os.path.splitext(cell.image_path)[1].lower()
-                    if ext == '.svg':
-                        # Handle SVG vector format
-                        renderer = QSvgRenderer(cell.image_path)
-                        if renderer.isValid():
-                            size = renderer.defaultSize()
-                            if size.height() > 0:
-                                ratio = (size.width() * max(0.001, cell.crop_right - cell.crop_left)
-                                         / (size.height() * max(0.001, cell.crop_bottom - cell.crop_top)))
-                                # Adjust ratio if rotated 90 or 270 degrees
-                                if getattr(cell, 'rotation', 0) in [90, 270]:
-                                    ratio = 1.0 / ratio if ratio != 0 else 0
-                                aspect_ratios[cell.id] = ratio
-                    elif ext == '.pdf':
-                        # Handle PDF format with PyMuPDF
-                        try:
-                            import fitz
-                            doc = fitz.open(cell.image_path)
-                            if doc.page_count > 0:
-                                page = doc[0]
-                                rect = page.rect
-                                if rect.height > 0:
-                                    ratio = (rect.width * max(0.001, cell.crop_right - cell.crop_left)
-                                             / (rect.height * max(0.001, cell.crop_bottom - cell.crop_top)))
-                                    # Adjust ratio if rotated 90 or 270 degrees
-                                    if getattr(cell, 'rotation', 0) in [90, 270]:
-                                        ratio = 1.0 / ratio if ratio != 0 else 0
-                                    aspect_ratios[cell.id] = ratio
-                            doc.close()
-                        except ImportError:
-                            pass
-                    else:
-                        # Handle raster formats with PIL
-                        with Image.open(cell.image_path) as img:
-                            w, h = img.size
-                            if h > 0:
-                                crop_w = max(0.001, getattr(cell, 'crop_right', 1.0) - getattr(cell, 'crop_left', 0.0))
-                                crop_h = max(0.001, getattr(cell, 'crop_bottom', 1.0) - getattr(cell, 'crop_top', 0.0))
-                                ratio = (w * crop_w) / (h * crop_h)
-                                # Adjust ratio if rotated 90 or 270 degrees
-                                if getattr(cell, 'rotation', 0) in [90, 270]:
-                                    ratio = 1.0 / ratio if ratio != 0 else 0
-                                aspect_ratios[cell.id] = ratio
-                except Exception:
-                    pass
-        
+        # Resolve fixed source shapes and flexible Reflow preferences once.
+        aspect_ratios = AutoLayout._get_image_aspect_ratios(project)
+
         # 1a-group. Size-group aware aspect bucketing.
         # Cells that belong to the same size group must end up with the same W/H.
         # Using the MIN aspect of the group ensures the shared size fits every member.

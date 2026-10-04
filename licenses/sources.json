@@ -12,7 +12,7 @@
     "Run `python build_licenses.py` to stage the licence materials.",
     "Run `python build_installer_windows.py` for the Windows installer, `python build_onefile.py` for the portable executable, or `python build_msix.py` for the Store package."
   ],
-  "component_count": 87,
+  "component_count": 86,
   "no_open_source_counterpart": [
     {
       "name": "Conda vc14_runtime runtime notices",
@@ -677,19 +677,6 @@
         "type": "pypi_sdist",
         "url": "https://files.pythonhosted.org/packages/8c/21/c2bcdd5906101a30244eaffc1b6e6ce71a31bd0742a01eb89e660ebfac2d/pillow-12.2.0.tar.gz",
         "sha256": "a830b1a40919539d07806aa58e1b114df53ddd43213d9c8b75847eee6c0182b5"
-      }
-    },
-    {
-      "name": "pip",
-      "version": "26.2.1",
-      "role": "dependency",
-      "license_expression": "MIT",
-      "kind": "python",
-      "status": "sdist_downloaded_not_correspondence_verified",
-      "source": {
-        "type": "pypi_sdist",
-        "url": "https://files.pythonhosted.org/packages/ae/15/4500e320e6b101ec3b719ae85b697d9940b6cda672bc555bd6016fc60c6f/pip-26.2.1.tar.gz",
-        "sha256": "f6ad667e89a1fe78046c8f13232b247200f5258d7828f3f7883d660878e0813f"
       }
     },
     {

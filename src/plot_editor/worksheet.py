@@ -303,6 +303,32 @@ class _SetDesignation:
     revert_events = apply_events
 
 
+class _ExternalEdit:
+    """History entry for a change outside the worksheet grid.
+
+    The apply/revert callables own the mutation (e.g. a tab's figure
+    size); the worksheet only chronicles it so editor Undo/Redo stays
+    chronological. Returns no selection rectangle and emits no cell
+    events — the ('history',) event still refreshes the plot.
+    """
+
+    def __init__(self, label, apply, revert):
+        self.label, self._apply, self._revert = label, apply, revert
+        self.rect = None
+
+    def apply(self, worksheet):
+        self._apply()
+
+    def revert(self, worksheet):
+        self._revert()
+
+    def apply_events(self):
+        return ()
+
+    def revert_events(self):
+        return ()
+
+
 class Worksheet:
     """Editable in-memory grid: 3 meta header rows over data rows."""
 
@@ -394,6 +420,11 @@ class Worksheet:
         self._redo.clear()
         self._emit(*command.apply_events(), ('history',))
         return command.rect
+
+    def record_external_edit(self, label, apply, revert):
+        """Record one non-cell edit in the same chronological undo
+        history. Returns the command's rect (None) like ``_record``."""
+        return self._record(_ExternalEdit(label, apply, revert))
 
     def _fresh_columns(self, count):
         return [Column() for _ in range(count)]

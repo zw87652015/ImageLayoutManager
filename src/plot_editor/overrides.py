@@ -410,7 +410,8 @@ def overrides_from_document(doc):
     return o
 
 
-def effective_document(base_doc, items, chart_key, title, overrides):
+def effective_document(base_doc, items, chart_key, title, overrides, *,
+                       figure_size=None):
     """Build the validated ``PlotDocument`` shown/saved by the editor.
 
     ``items`` are Series/Group/Category objects. ``base_doc`` (an
@@ -509,4 +510,7 @@ def effective_document(base_doc, items, chart_key, title, overrides):
                     entry.marker = so.marker
                 if so.markersize_pt is not None:
                     entry.markersize_pt = so.markersize_pt
+    if figure_size is not None:
+        doc.width_mm = figure_size.width_mm
+        doc.height_mm = figure_size.height_mm
     return doc.validate()

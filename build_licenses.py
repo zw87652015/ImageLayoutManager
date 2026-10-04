@@ -54,10 +54,11 @@ ROOT_FILES = [
     'main.py', 'cli_main.py', 'requirements.txt', 'environment.yml',
     'LICENSE', 'NOTICE', 'build_licenses.py', 'build_onefile.py',
     'build_installer_windows.py', 'build_onefile_macos.py',
-    'build_dmg_macos.py', 'build_icns_figpack.py', 'verify_licenses.py',
-    'build_msix.py', 'verify_msix.py', 'audit_release.py',
-    'verify_release_audit.py', 'SOURCES.md', 'build_source_index.py',
-    'verify_source_index.py',
+    'build_dmg_macos.py', 'build_icns_figpack.py',
+    'tests/verify_licenses.py',
+    'build_msix.py', 'tests/verify_msix.py', 'audit_release.py',
+    'tests/verify_release_audit.py', 'SOURCES.md', 'build_source_index.py',
+    'tests/verify_source_index.py',
 ]
 
 SOURCE_TREES = {'src': {'.py'}, 'assets': None, 'docs': None, 'licenses': None}
@@ -82,7 +83,15 @@ def dependency_distributions(requirements_path: Path,
     extras_of = {}
     root_lines = requirements_path.read_text(
         encoding='utf-8').splitlines()
-    for raw in [*root_lines, *extra_requirements, 'PyInstaller']:
+    build_requirements = ['PyInstaller']
+    try:
+        metadata.distribution('wheel')
+    except metadata.PackageNotFoundError:
+        pass
+    else:
+        # PyInstaller's setuptools hook can include the installed wheel package.
+        build_requirements.append('wheel')
+    for raw in [*root_lines, *extra_requirements, *build_requirements]:
         line = raw.strip()
         if not line or line.startswith('#'):
             continue

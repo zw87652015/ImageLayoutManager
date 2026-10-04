@@ -4,7 +4,7 @@ The application source in this repository is licensed under Apache-2.0. The dist
 
 - Application version: **3.5.0**
 - Python runtime: **3.13.15**
-- Components covered: **87**
+- Components covered: **86**
 - Components with no open-source counterpart: **1** (see the exceptions section)
 - Application source archive: `ImageLayoutManager-3.5.0-application-source.zip`
 
@@ -17,7 +17,7 @@ The application source in this repository is licensed under Apache-2.0. The dist
 
 Each archive below is identified by its SHA-256 where the upstream project publishes stable archives. Components taken from Git are identified by commit, because generated archive bytes are not stable while a commit identifies the exact tree.
 
-## Python distributions (70)
+## Python distributions (69)
 
 | Component | Version | Licence | Source | Recorded status |
 | --- | --- | --- | --- | --- |
@@ -54,7 +54,6 @@ Each archive below is identified by its SHA-256 where the upstream project publi
 | packaging | 26.3 | Apache-2.0 OR BSD-2-Clause | [sdist](https://files.pythonhosted.org/packages/7d/fa/3944b40b07da9ce895c0e6303a5ab7d53da063554f534556b134a54d6093/packaging-26.3.tar.gz)<br>`94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79` | `sdist_downloaded_not_correspondence_verified` |
 | pefile | 2024.8.26 | MIT | [sdist](https://files.pythonhosted.org/packages/03/4f/2750f7f6f025a1507cd3b7218691671eecfd0bbebebe8b39aa0fe1d360b8/pefile-2024.8.26.tar.gz)<br>`3ff6c5d8b43e8c37bb6e6dd5085658d658a7a0bdcd20b6a07b1fcfc1c4e9d632` | `sdist_downloaded_not_correspondence_verified` |
 | pillow | 12.2.0 | MIT-CMU | [sdist](https://files.pythonhosted.org/packages/8c/21/c2bcdd5906101a30244eaffc1b6e6ce71a31bd0742a01eb89e660ebfac2d/pillow-12.2.0.tar.gz)<br>`a830b1a40919539d07806aa58e1b114df53ddd43213d9c8b75847eee6c0182b5` | `sdist_downloaded_not_correspondence_verified` |
-| pip | 26.2.1 | MIT | [sdist](https://files.pythonhosted.org/packages/ae/15/4500e320e6b101ec3b719ae85b697d9940b6cda672bc555bd6016fc60c6f/pip-26.2.1.tar.gz)<br>`f6ad667e89a1fe78046c8f13232b247200f5258d7828f3f7883d660878e0813f` | `sdist_downloaded_not_correspondence_verified` |
 | protobuf | 7.36.1 | 3-Clause BSD License | [sdist](https://files.pythonhosted.org/packages/86/73/f66c748df06e7fe24e658eddd600d19c4b40bad836c97ce2d0ad9851fb6b/protobuf-7.36.1.tar.gz)<br>`d0f6470f0ce2b84e3feaea2d4b816378b37ba4d4aa08a274305373de93e2d524` | `sdist_downloaded_not_correspondence_verified` |
 | pyclipper | 1.4.0 | MIT | [sdist](https://files.pythonhosted.org/packages/f6/21/3c06205bb407e1f79b73b7b4dfb3950bd9537c4f625a68ab5cc41177f5bc/pyclipper-1.4.0.tar.gz)<br>`9882bd889f27da78add4dd6f881d25697efc740bf840274e749988d25496c8e1` | `sdist_downloaded_not_correspondence_verified` |
 | pycparser | 3.0 | BSD-3-Clause | [sdist](https://files.pythonhosted.org/packages/1b/7d/92392ff7815c21062bea51aa7b87d45576f649f16458d78b7cf94b9ab2e6/pycparser-3.0.tar.gz)<br>`600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29` | `sdist_downloaded_not_correspondence_verified` |

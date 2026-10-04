@@ -185,6 +185,7 @@ class PlotEditorWindow(QMainWindow):
         for key in EXPORT_MENU:
             self.editor_actions[key].setEnabled(ready)
         self.editor_actions['add_note'].setEnabled(ready)
+        self.editor_actions['figure_size'].setEnabled(ready)
         bracket_ok = False
         if ready:
             from .export import CHART_KIND
@@ -232,6 +233,8 @@ class PlotEditorWindow(QMainWindow):
             view.select_all()
         elif key == 'style':
             self._open_style_manager()
+        elif key == 'figure_size':
+            tab.edit_figure_size()
         elif key == 'tutorials':
             self.show_tutorials()
         elif key == 'about':
@@ -588,6 +591,7 @@ class PlotEditorWindow(QMainWindow):
                 self._theme_menu))
         plot_menu.addSeparator()
         plot_menu.addAction(self.editor_actions['style'])
+        plot_menu.addAction(self.editor_actions['figure_size'])
 
         help_menu = bar.addMenu(tr('menu_help'))
         self._add_menu_items(help_menu, HELP_MENU)
