@@ -9,7 +9,7 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
-    ("3.5.0", "2026-10-03", [
+    ("3.5.1", "2026-10-05", [
         {"en": "New Plot Editor: a separate window for making editable scientific plots. Open it from the Welcome window, File → Open Plot Editor, or right-click an empty cell → New .ilmplot.svg.",
          "zh": "全新图表编辑器：用于制作可编辑科学图表的独立窗口。可从欢迎窗口、“文件 → 打开图表编辑器”，或右键空单元格 →“新建 .ilmplot.svg”打开。"},
         {"en": "Plots are saved as .ilmplot.svg: an ordinary SVG that any viewer shows as-is, which also keeps the data and every setting so it can be edited again.",
@@ -30,8 +30,8 @@ CHANGELOG = [
          "zh": "新增教程：图表编辑器的两节课程（帮助 → 教程…），以及 ILM 中的“原生图表与 REFLOW”课程。"},
         {"en": "Plots made by a newer version are still shown as saved, with a clear message explaining that editing needs an update.",
          "zh": "由更新版本创建的图表仍按保存时的样子显示，并清楚提示需要更新后才能编辑。"},
-        {"en": "Projects saved by this version use an updated file format and need 3.5.0 or later to open; older projects open unchanged.",
-         "zh": "本版本保存的工程使用更新后的文件格式，需要 3.5.0 或更高版本打开；旧工程可照常打开。"},
+        {"en": "Projects saved by this version use an updated file format and need 3.5.1 or later to open; older projects open unchanged.",
+         "zh": "本版本保存的工程使用更新后的文件格式，需要 3.5.1 或更高版本打开；旧工程可照常打开。"},
     ]),
     ("3.4.3", "2026-09-22", [
         {"en": "About now has Licenses and source, which lists the licences of this app and every bundled component and reads them offline.",

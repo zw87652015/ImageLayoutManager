@@ -171,7 +171,7 @@ Run `imagelayout-cli.exe --help` for full usage information. From source, use `p
 | `*.figlayout` | Default project format. A JSON file that stores the layout; image files are referenced by path and stay separate. Lightweight and VCS-friendly. |
 | `*.figpack` | Portable bundle format. A ZIP archive containing the layout JSON and all referenced images. Use **File → Convert to .figpack…** to bundle an open `.figlayout` project. Ideal for sharing or archiving a completed figure. |
 
-Projects saved by 3.5.0 require ImageLayoutManager 3.5.0 or later. Older projects remain readable and retain their original layout and text-sizing behavior; keep an original copy if you need to return to an older version.
+Projects saved by 3.5.1 require ImageLayoutManager 3.5.1 or later. Older projects remain readable and retain their original layout and text-sizing behavior; keep an original copy if you need to return to an older version.
 
 When a project file is open, a hidden presence file (`~$filename`) is written next to it. If you try to open the same file in another instance, the app will refuse and show the owner's username. The lock is released automatically when the tab is closed.
 
@@ -194,7 +194,7 @@ SVG and PDF panels are also supported. Native `*.ilmplot.svg` files can be reope
 
 ## Editable plots
 
-Version 3.5.0 includes the **ILM Plot Editor**, a separate window with a worksheet and plot preview. Open it from the Welcome window, **File → Open Plot Editor**, or an empty cell's context menu via **New .ilmplot.svg**. Double-click a native plot cell or choose **Edit Plot…** to edit an existing plot.
+Version 3.5.1 includes the **ILM Plot Editor**, a separate window with a worksheet and plot preview. Open it from the Welcome window, **File → Open Plot Editor**, or an empty cell's context menu via **New .ilmplot.svg**. Double-click a native plot cell or choose **Edit Plot…** to edit an existing plot.
 
 - **Chart types:** line, scatter, line + scatter, stacked line, ridgeline, violin, column, stacked column and 100% stacked column.
 - **Data:** import CSV, TSV, TXT or Excel (`.xlsx`), drag files into the editor, or paste into the worksheet. Y error columns support symmetric and asymmetric error bars on line/scatter and ordinary column plots.
@@ -233,7 +233,7 @@ python build_msix.py `
 if ($LASTEXITCODE -ne 0) { throw "MSIX packaging failed" }
 ```
 
-The first command creates an isolated bundle containing the GUI and CLI without invoking Inno Setup. Both output directories must be new; existing builds are preserved. The second command creates `$output\ImageLayoutManager-<version>-x64.msix` (for application version 3.5.0, the package version is 3.5.0.0). Upload that `.msix` file in Partner Center for this app. The local package is unsigned; Microsoft signs Store packages. Omitting `--makeappx` creates only a layout directory, not an MSIX.
+The first command creates an isolated bundle containing the GUI and CLI without invoking Inno Setup. Both output directories must be new; existing builds are preserved. The second command creates `$output\ImageLayoutManager-<version>-x64.msix` (for application version 3.5.1, the package version is 3.5.1.0). Upload that `.msix` file in Partner Center for this app. The local package is unsigned; Microsoft signs Store packages. Omitting `--makeappx` creates only a layout directory, not an MSIX.
 
 The Store identity above belongs to this app; use your own registered identity for a separately published fork. Build outputs under `build/` and `dist/` are Git-ignored. Downloaded dependency sources are not automatically included in the MSIX. The generated license manifest currently records `source_status: incomplete`; successful packaging does not complete the outstanding source verification and publication work.
 

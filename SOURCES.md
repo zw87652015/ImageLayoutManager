@@ -1,12 +1,12 @@
-# Corresponding source for Image Layout Manager 3.5.0
+# Corresponding source for Image Layout Manager 3.5.1
 
 The application source in this repository is licensed under Apache-2.0. The distributed Windows builds also bundle components under the GNU GPL v3 and AGPL v3, so this page records where to obtain the source of every third-party component inside those builds, at the exact versions shipped.
 
-- Application version: **3.5.0**
+- Application version: **3.5.1**
 - Python runtime: **3.13.15**
 - Components covered: **86**
 - Components with no open-source counterpart: **1** (see the exceptions section)
-- Application source archive: `ImageLayoutManager-3.5.0-application-source.zip`
+- Application source archive: `ImageLayoutManager-3.5.1-application-source.zip`
 
 ## How to rebuild
 
