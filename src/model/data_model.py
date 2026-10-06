@@ -8,7 +8,11 @@ from src.version import APP_VERSION
 from .migrations import (
     PROJECT_SCHEMA_VERSION, migrate_project_data,
     validate_plot_area, validate_plot_alignment_group,
+    validate_mark,
+    MARK_KINDS, MARK_LINE_STYLES, MARK_ARROW_STYLES,
 )
+
+MARK_TOOLS = ("dot", "line", "arrow", "rect", "ellipse", "polygon", "polyline")
 
 @dataclass
 class TextItem:
@@ -710,6 +714,84 @@ class GroupLabel:
 
 
 @dataclass
+class Mark:
+    """A vector annotation fixed on the page in absolute mm.
+
+    Points are scene coordinates: dot takes one centre point, line two
+    endpoints, rect/ellipse two opposite corners (normalized on render),
+    polygon/polyline the vertex list. ``closed=False`` makes a polygon an
+    open polyline. Arrows apply to lines and open polylines only.
+    """
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    kind: str = "line"  # see MARK_KINDS
+    points: List[List[float]] = field(default_factory=list)
+    closed: bool = True  # polygon only
+    dot_diameter_mm: float = 1.5
+    stroke_enabled: bool = True
+    stroke_color: str = "#000000"
+    stroke_width_pt: float = 1.0
+    stroke_style: str = "solid"  # see MARK_LINE_STYLES
+    fill_enabled: bool = False
+    fill_color: str = "#FFFFFF"
+    fill_opacity: float = 1.0
+    arrow_start: str = "none"  # see MARK_ARROW_STYLES
+    arrow_end: str = "none"
+    arrow_start_length_mm: float = 2.0
+    arrow_start_width_mm: float = 1.6
+    arrow_end_length_mm: float = 2.0
+    arrow_end_width_mm: float = 1.6
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "points": [[float(x), float(y)] for x, y in self.points],
+            "closed": self.closed,
+            "dot_diameter_mm": self.dot_diameter_mm,
+            "stroke_enabled": self.stroke_enabled,
+            "stroke_color": self.stroke_color,
+            "stroke_width_pt": self.stroke_width_pt,
+            "stroke_style": self.stroke_style,
+            "fill_enabled": self.fill_enabled,
+            "fill_color": self.fill_color,
+            "fill_opacity": self.fill_opacity,
+            "arrow_start": self.arrow_start,
+            "arrow_end": self.arrow_end,
+            "arrow_start_length_mm": self.arrow_start_length_mm,
+            "arrow_start_width_mm": self.arrow_start_width_mm,
+            "arrow_end_length_mm": self.arrow_end_length_mm,
+            "arrow_end_width_mm": self.arrow_end_width_mm,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Mark':
+        validate_mark(data)
+        allowed = {f.name for f in fields(cls)}
+        clean = {k: v for k, v in data.items() if k in allowed}
+        clean["points"] = [[float(x), float(y)] for x, y in data["points"]]
+        return cls(**clean)
+
+
+def mark_for_tool(tool: str, points) -> 'Mark':
+    """Build a Mark with per-tool defaults from a draw-tool name."""
+    overrides = {
+        "dot":      {"kind": "dot", "closed": True, "fill_enabled": True,
+                     "fill_color": "#000000", "stroke_enabled": False},
+        "line":     {"kind": "line"},
+        "arrow":    {"kind": "line", "arrow_end": "triangle"},
+        "rect":     {"kind": "rect"},
+        "ellipse":  {"kind": "ellipse"},
+        "polygon":  {"kind": "polygon", "closed": True},
+        "polyline": {"kind": "polygon", "closed": False},
+    }
+    if tool not in overrides:
+        raise ValueError(f"unknown mark tool: {tool}")
+    mark = Mark(**overrides[tool])
+    mark.points = [[float(x), float(y)] for x, y in points]
+    return mark
+
+
+@dataclass
 class Project:
     name: str = "Untitled Project"
     typography_mode: str = "points"
@@ -748,6 +830,9 @@ class Project:
 
     # Group Labels (span several cells or a whole row, and reserve space)
     group_labels: List[GroupLabel] = field(default_factory=list)
+
+    # Vector marks fixed on the page in mm; list order = z-order, last = front
+    marks: List[Mark] = field(default_factory=list)
 
     # Global Label Settings (Numbering)
     label_scheme: str = "(a)" # see src/utils/label_numbering.SCHEMES
@@ -841,6 +926,12 @@ class Project:
                 return g
         return None
 
+    def find_mark(self, mark_id: str) -> Optional[Mark]:
+        for m in self.marks:
+            if m.id == mark_id:
+                return m
+        return None
+
     def remove_group_label(self, group_label_id: str) -> None:
         self.group_labels = [g for g in self.group_labels if g.id != group_label_id]
 
@@ -922,6 +1013,7 @@ class Project:
             "svg_text_groups": [g.to_dict() for g in self.svg_text_groups],
             "text_items": [t.to_dict() for t in self.text_items],
             "group_labels": [g.to_dict() for g in self.group_labels],
+            "marks": [m.to_dict() for m in self.marks],
             "label_scheme": self.label_scheme,
             "label_scheme_sub": self.label_scheme_sub,
             "label_sub_prefix_parent": self.label_sub_prefix_parent,
@@ -980,6 +1072,7 @@ class Project:
         p.svg_text_groups = [SvgTextGroup.from_dict(g) for g in data.get("svg_text_groups", [])]
         p.text_items = [TextItem.from_dict(t) for t in data.get("text_items", [])]
         p.group_labels = [GroupLabel.from_dict(g) for g in data.get("group_labels", [])]
+        p.marks = [Mark.from_dict(m) for m in data.get("marks", [])]
 
         # Prune orphan group references (group deleted but cell still refers to it)
         valid_group_ids = {g.id for g in p.size_groups}

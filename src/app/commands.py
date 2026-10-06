@@ -1990,3 +1990,163 @@ class SetPiPOriginCommand(QUndoCommand):
         self.new_crop = other.new_crop
         self.timestamp = time.time()
         return True
+
+
+class AddMarkCommand(QUndoCommand):
+    """Append a vector mark; list order is the mark z-order (last = front)."""
+    def __init__(self, project, mark, update_callback=None):
+        super().__init__("Add Mark")
+        self.project = project
+        self.mark = mark
+        self.update_callback = update_callback
+
+    def redo(self):
+        if self.project.find_mark(self.mark.id) is None:
+            self.project.marks.append(self.mark)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.project.marks = [m for m in self.project.marks
+                              if m.id != self.mark.id]
+        if self.update_callback:
+            self.update_callback()
+
+
+class AddMarksCommand(QUndoCommand):
+    """Append several marks at the front of the z-stack as one undo step
+    (paste / duplicate). Idempotent like AddMarkCommand."""
+    def __init__(self, project, marks, update_callback=None, text="Add Marks"):
+        super().__init__(text)
+        self.project = project
+        self.marks = list(marks)
+        self.update_callback = update_callback
+
+    def redo(self):
+        have = {m.id for m in self.project.marks}
+        for m in self.marks:
+            if m.id not in have:
+                self.project.marks.append(m)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        ids = {m.id for m in self.marks}
+        self.project.marks = [m for m in self.project.marks
+                              if m.id not in ids]
+        if self.update_callback:
+            self.update_callback()
+
+
+class DeleteMarksCommand(QUndoCommand):
+    """Remove marks, remembering each original index for a faithful undo."""
+    def __init__(self, project, mark_ids, update_callback=None):
+        super().__init__("Delete Mark" if len(list(mark_ids)) == 1 else "Delete Marks")
+        self.project = project
+        self.update_callback = update_callback
+        self.pairs = [(i, m) for i, m in enumerate(project.marks)
+                      if m.id in set(mark_ids)]
+
+    def redo(self):
+        ids = {m.id for _, m in self.pairs}
+        self.project.marks = [m for m in self.project.marks if m.id not in ids]
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        for index, mark in sorted(self.pairs):
+            if self.project.find_mark(mark.id) is None:
+                self.project.marks.insert(min(index, len(self.project.marks)), mark)
+        if self.update_callback:
+            self.update_callback()
+
+
+class MarkPropertyChangeCommand(QUndoCommand):
+    """Change fields on marks resolved by id on every apply/undo.
+
+    Old and new values are deep-copied so mutable fields (points) undo
+    faithfully. Pass merge=True for slider-style streams that should collapse
+    into one undo step; merge=False disables id() merging entirely.
+    """
+    def __init__(self, project, mark_ids, changes: dict, update_callback=None,
+                 description="Edit Mark", merge: bool = False):
+        super().__init__(description)
+        self.project = project
+        self.mark_ids = list(mark_ids)
+        self.changes = copy.deepcopy(dict(changes))
+        self.update_callback = update_callback
+        self.merge = merge
+        self.timestamp = time.time()
+        self.old_values = {
+            mid: {k: copy.deepcopy(getattr(mark, k)) for k in self.changes
+                  if hasattr(mark, k)}
+            for mid in self.mark_ids
+            if (mark := project.find_mark(mid)) is not None
+        }
+
+    def id(self):
+        if not self.merge:
+            return -1
+        prop_key = tuple(sorted(self.changes.keys()))
+        return (hash(tuple(sorted(self.mark_ids))) ^ hash(prop_key)) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        if (not self.merge or not isinstance(other, MarkPropertyChangeCommand)
+                or not other.merge):
+            return False
+        if set(other.mark_ids) != set(self.mark_ids):
+            return False
+        if other.changes.keys() != self.changes.keys():
+            return False
+        if time.time() - self.timestamp > MERGE_TIMEOUT:
+            return False
+        self.changes = other.changes
+        self.timestamp = time.time()
+        return True
+
+    def _apply(self, values_by_id):
+        for mid in self.mark_ids:
+            mark = self.project.find_mark(mid)
+            if mark is None:
+                continue
+            for key, value in values_by_id.get(mid, {}).items():
+                setattr(mark, key, copy.deepcopy(value))
+        if self.update_callback:
+            self.update_callback()
+
+    def redo(self):
+        self._apply({mid: self.changes for mid in self.mark_ids})
+
+    def undo(self):
+        self._apply(self.old_values)
+
+
+class ReorderMarksCommand(QUndoCommand):
+    """Reorder project.marks to *new_order_ids* (list order = z-order).
+
+    Missing ids are ignored; marks not listed keep their relative order
+    at the end of the stack.
+    """
+    def __init__(self, project, new_order_ids, update_callback=None,
+                 description="Reorder Marks"):
+        super().__init__(description)
+        self.project = project
+        self.new_order_ids = list(new_order_ids)
+        self.update_callback = update_callback
+        self.old_order_ids = [m.id for m in project.marks]
+
+    def _apply(self, order_ids):
+        wanted = [mid for mid in order_ids
+                  if self.project.find_mark(mid) is not None]
+        wanted_set = set(wanted)
+        rest = [m.id for m in self.project.marks if m.id not in wanted_set]
+        by_id = {m.id: m for m in self.project.marks}
+        self.project.marks = [by_id[mid] for mid in wanted + rest]
+        if self.update_callback:
+            self.update_callback()
+
+    def redo(self):
+        self._apply(self.new_order_ids)
+
+    def undo(self):
+        self._apply(self.old_order_ids)

@@ -828,6 +828,136 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         }, required=("group_label_id",)),
     },
 
+    # ── vector marks (fixed page-mm annotations) ─────────────────────
+    {
+        "name": "mark_add",
+        "description": (
+            "Add a vector mark fixed on the page in absolute mm — it does "
+            "NOT follow panels when the layout reflows. `points` are page-mm "
+            "scene coordinates: dot takes one centre point, line two "
+            "endpoints, rect/ellipse two opposite corners (any order), "
+            "polygon its vertices (pass `closed=false` for an open "
+            "polyline). For kind='polygon' a regular polygon can instead "
+            "be generated from `sides` (3–24) + `center` [x, y] mm + "
+            "`radius_mm` (>0) and optional `rotation_deg` (default −90 = "
+            "vertex up); pass either `points` or the sides form, not both. "
+            "Arrowheads go on lines and open polygons via "
+            "`arrow_start`/`arrow_end`. List order of project marks is the "
+            "z-stack; use mark_reorder to bring forward."
+        ),
+        "input_schema": _obj({
+            "kind": {"type": "string",
+                     "enum": ["dot", "line", "rect", "ellipse", "polygon"]},
+            "points": {"type": "array",
+                       "items": {"type": "array",
+                                 "items": {"type": "number"},
+                                 "minItems": 2, "maxItems": 2},
+                       "description": "Page-mm [x, y] pairs; counts per kind."},
+            "sides": {"type": "integer", "minimum": 3, "maximum": 24,
+                      "description": "polygon only: regular-polygon side "
+                                     "count; needs center + radius_mm."},
+            "center": {"type": "array",
+                       "items": {"type": "number"},
+                       "minItems": 2, "maxItems": 2,
+                       "description": "polygon only: centre [x, y] in mm."},
+            "radius_mm": {"type": "number", "exclusiveMinimum": 0,
+                          "description": "polygon only: circumradius in mm."},
+            "rotation_deg": {"type": "number",
+                             "description": "polygon only: vertex-0 angle "
+                                            "in degrees, default −90 (up)."},
+            "closed": {"type": "boolean",
+                       "description": "polygon only; false = open polyline."},
+            "dot_diameter_mm": {"type": "number",
+                                "exclusiveMinimum": 0, "maximum": 1000},
+            "stroke_enabled": {"type": "boolean"},
+            "stroke_color": {"type": "string",
+                             "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+            "stroke_width_pt": {"type": "number",
+                                "exclusiveMinimum": 0, "maximum": 100},
+            "stroke_style": {"type": "string",
+                             "enum": ["solid", "dashed", "dotted", "dash_dot"]},
+            "fill_enabled": {"type": "boolean"},
+            "fill_color": {"type": "string",
+                           "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+            "fill_opacity": {"type": "number", "minimum": 0, "maximum": 1},
+            "arrow_start": {"type": "string",
+                            "enum": ["none", "triangle", "open", "stealth",
+                                     "circle", "bar"]},
+            "arrow_end": {"type": "string",
+                          "enum": ["none", "triangle", "open", "stealth",
+                                   "circle", "bar"]},
+            "arrow_start_length_mm": {"type": "number",
+                                      "exclusiveMinimum": 0, "maximum": 1000},
+            "arrow_start_width_mm": {"type": "number",
+                                     "exclusiveMinimum": 0, "maximum": 1000},
+            "arrow_end_length_mm": {"type": "number",
+                                    "exclusiveMinimum": 0, "maximum": 1000},
+            "arrow_end_width_mm": {"type": "number",
+                                   "exclusiveMinimum": 0, "maximum": 1000},
+        }, required=("kind",)),
+    },
+    {
+        "name": "mark_update",
+        "description": (
+            "Update fields of one mark (same keys as mark_add, plus "
+            "`points` to move/reshape). `id` and `kind` cannot change. "
+            "Find mark ids via project_describe."
+        ),
+        "input_schema": _obj({
+            "mark_id": {"type": "string"},
+            "points": {"type": "array",
+                       "items": {"type": "array",
+                                 "items": {"type": "number"},
+                                 "minItems": 2, "maxItems": 2}},
+            "closed": {"type": "boolean"},
+            "dot_diameter_mm": {"type": "number",
+                                "exclusiveMinimum": 0, "maximum": 1000},
+            "stroke_enabled": {"type": "boolean"},
+            "stroke_color": {"type": "string",
+                             "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+            "stroke_width_pt": {"type": "number",
+                                "exclusiveMinimum": 0, "maximum": 100},
+            "stroke_style": {"type": "string",
+                             "enum": ["solid", "dashed", "dotted", "dash_dot"]},
+            "fill_enabled": {"type": "boolean"},
+            "fill_color": {"type": "string",
+                           "pattern": "^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$"},
+            "fill_opacity": {"type": "number", "minimum": 0, "maximum": 1},
+            "arrow_start": {"type": "string",
+                            "enum": ["none", "triangle", "open", "stealth",
+                                     "circle", "bar"]},
+            "arrow_end": {"type": "string",
+                          "enum": ["none", "triangle", "open", "stealth",
+                                   "circle", "bar"]},
+            "arrow_start_length_mm": {"type": "number",
+                                      "exclusiveMinimum": 0, "maximum": 1000},
+            "arrow_start_width_mm": {"type": "number",
+                                     "exclusiveMinimum": 0, "maximum": 1000},
+            "arrow_end_length_mm": {"type": "number",
+                                    "exclusiveMinimum": 0, "maximum": 1000},
+            "arrow_end_width_mm": {"type": "number",
+                                   "exclusiveMinimum": 0, "maximum": 1000},
+        }, required=("mark_id",)),
+    },
+    {
+        "name": "mark_remove",
+        "description": "Delete a vector mark by id.",
+        "input_schema": _obj({
+            "mark_id": {"type": "string"},
+        }, required=("mark_id",)),
+    },
+    {
+        "name": "mark_reorder",
+        "description": (
+            "Move a mark to 'front' or 'back' of the mark z-stack (marks "
+            "draw above cells but below text items)."
+        ),
+        "input_schema": _obj({
+            "mark_id": {"type": "string"},
+            "to": {"type": "string", "enum": ["front", "back"]},
+        }, required=("mark_id", "to")),
+    },
+
     # ── labels & best-fit ────────────────────────────────────────────
     {
         "name": "auto_label_cells",

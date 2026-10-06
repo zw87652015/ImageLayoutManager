@@ -37,10 +37,16 @@ _SHORTCUTS_EN = [
     ("Ctrl + Shift + K",  "Auto Above-Cell Labels"),
     ("Ctrl + Shift + A",  "Auto Layout"),
     ("Ctrl + Shift + P",  "Toggle export preview"),
-    ("Ctrl + ]",          "Bring selected cell to front"),
-    ("Ctrl + [",          "Send selected cell to back"),
+    ("Ctrl + ]",          "Bring selected cell or mark to front"),
+    ("Ctrl + [",          "Send selected cell or mark to back"),
     ("Ctrl + Delete",     "Remove image from selected cell, not the source file"),
-    ("Delete",            "Delete selected text or shared label"),
+    ("Delete",            "Delete selected text, mark, or shared label"),
+    ("Shift (drawing)",   "Snap 45° · square/circle · aspect resize · axis-locked move"),
+    ("Ctrl (drawing)",    "Draw rectangles/ellipses from the centre"),
+    ("Enter / double-click", "Finish a polyline"),
+    ("Backspace",         "Remove the last polyline vertex"),
+    ("Esc (Draw mode)",   "Cancel the in-progress shape; otherwise leave Draw mode"),
+    ("Ctrl + C / V / D (Draw mode)", "Copy, paste (cascades 2 mm) and duplicate selected shapes"),
     ("F5",                "Reload images from disk"),
     ("Wheel",             "Scroll canvas"),
     ("Ctrl + Wheel",      "Zoom canvas around the pointer"),
@@ -74,10 +80,16 @@ _SHORTCUTS_ZH = [
     ("Ctrl + Shift + K",  "自动图外标注"),
     ("Ctrl + Shift + A",  "自动布局"),
     ("Ctrl + Shift + P",  "切换导出预览"),
-    ("Ctrl + ]",          "将选中单元格置于顶层"),
-    ("Ctrl + [",          "将选中单元格置于底层"),
+    ("Ctrl + ]",          "将选中单元格或标记置于顶层"),
+    ("Ctrl + [",          "将选中单元格或标记置于底层"),
     ("Ctrl + Delete",     "移除选中单元格中的图片，不删除源文件"),
-    ("Delete",            "删除选中的文字或共享标注"),
+    ("Delete",            "删除选中的文字、标记或共享标注"),
+    ("Shift（绘制时）",    "吸附 45° · 正方形/圆形 · 等比缩放 · 单轴移动"),
+    ("Ctrl（绘制时）",     "从中心绘制矩形/椭圆"),
+    ("Enter / 双击",      "完成折线"),
+    ("Backspace",         "删除上一个折线顶点"),
+    ("Esc（绘制模式）",    "取消正在绘制的图形；否则退出绘制模式"),
+    ("Ctrl + C / V / D（绘制模式）", "复制、粘贴（每次级联偏移 2 毫米）和创建选中形状的副本"),
     ("F5",                "从磁盘重新加载图片"),
     ("Wheel",             "滚轮：滚动画布"),
     ("Ctrl + Wheel",      "Ctrl + 滚轮：以指针位置为中心缩放画布"),
@@ -403,6 +415,34 @@ Cell corner labels provide short annotations anchored to an image corner.</p>
 in µm per pixel, then choose the bar length and appearance. Obtain calibration from the acquisition data;
 do not infer it from screen zoom. Verify the scale bar after cropping, resizing, and export.</p>
 <p>In new projects, label and scale-bar font sizes are final-figure points (1 pt = 1/72 inch), independent of export DPI and canvas zoom. Older projects retain legacy sizing and show a legacy notice; their original numeric values are not silently converted. Math text and text-size groups already use points in both modes.</p>
+<h3>Vector marks</h3>
+<p>The <b>Draw</b> toolbar button toggles <b>Draw mode</b>, also reachable from <b>Edit → Draw</b> or by
+picking a tool. While the mode is on, only shapes (marks) can be selected or edited — a status-bar
+pill shows the mode and the active tool, and clicking it or pressing Esc leaves the mode. Outside
+Draw mode marks are visible but locked. Tools: dot, line, arrow, rectangle, circle/ellipse,
+polygon, and polyline. Click once for a dot; drag for lines, arrows, and shapes. Polygon draws a
+<b>regular polygon</b>: press at the centre, drag out to set the radius and rotation (the cursor
+sits on a vertex, Shift snaps the rotation to 15°), and set the side count in the Inspector's
+<b>Sides</b> field or ahead of time via the last-used value. For polylines click each vertex, then
+double-click or press Enter to finish (Backspace removes the last vertex, right-click or clicking
+near the start also finishes, Esc cancels the shape or leaves the mode). A closed free-form shape
+is a polyline with the Inspector's <b>Closed</b> toggle on. Marks stay fixed on the page in millimetres — they do not follow panels when the layout
+reflows.</p>
+<ul>
+  <li><b>Shift</b> snaps lines to 45°, constrains rectangles to squares and ellipses to circles,
+      keeps the aspect ratio while resizing, and locks movement to one axis.</li>
+  <li><b>Ctrl</b> draws rectangles and ellipses from the centre.</li>
+  <li>One shape switches the tool to <b>Select Shapes</b> while staying in Draw mode; enable
+      <b>Keep Tool Active</b> in the Draw menu to keep the tool armed.</li>
+  <li>Style marks in the Inspector: border colour, thickness, and line type; fill colour and
+      opacity; and independent start/end arrowheads with their own length and width.</li>
+  <li>Drag a mark to move it, drag its handles to reshape; <b>Bring to Front</b>/<b>Send to Back</b>
+      (<code>Ctrl+]</code>/<code>Ctrl+[</code>) reorder marks, which also appear in the Layers panel.
+      Selecting a mark there enters Draw mode automatically.</li>
+  <li><b>Copy</b> (<code>Ctrl+C</code>), <b>paste</b> (<code>Ctrl+V</code>, cascades 2 mm per paste)
+      and <b>duplicate</b> (<code>Ctrl+D</code>) work on selected shapes; only shapes can be pasted
+      in Draw mode.</li>
+</ul>
 """
 
 _LABELS_HTML_ZH = """
@@ -426,6 +466,30 @@ _LABELS_HTML_ZH = """
 <p>在单元格右键菜单或检查器中启用比例尺。输入正确的源图像校准值（µm/像素），再设置长度和外观。
 校准值应来自采集数据，不可根据屏幕缩放推断。裁剪、调整尺寸和导出后，均应核对比例尺。</p>
 <p>新建工程中的标注和比例尺字号使用最终成图磅值（1 pt = 1/72 英寸），不随导出 DPI 或画布缩放改变。旧工程保留旧版单位并显示提示，不会静默转换原数值。两种模式中的数学文字和文字大小组都使用磅值。</p>
+<h3>矢量标记</h3>
+<p>工具栏的<b>绘制</b>按钮用于切换<b>绘制模式</b>，也可通过<b>编辑 → 绘制</b>菜单或选择任一工具进入。
+开启后只能选中或编辑形状（标记），状态栏会显示模式与当前工具的徽标，单击徽标或按 Esc 退出；
+绘制模式之外标记仅可见、处于锁定状态。工具包括点、直线、箭头、矩形、圆/椭圆、
+多边形和折线。单击放置点；拖动绘制直线、箭头和形状。多边形工具绘制<b>正多边形</b>：
+在中心按下并拖动，以设置半径和旋转（光标位于顶点上，Shift 将旋转吸附到 15°），
+边数在检查器的<b>边数</b>中设置（默认沿用上次的值）。折线逐点单击，
+然后双击或按回车完成（退格删除上一顶点，右键或单击起点附近也可完成，Esc 取消图形或退出模式）。
+需要闭合的自由形状可用折线绘制后，在检查器中勾选<b>闭合</b>。
+标记以毫米为单位固定在页面上，布局重排时不会跟随面板移动。</p>
+<ul>
+  <li><b>Shift</b> 将直线吸附到 45°，把矩形约束为正方形、椭圆约束为圆形，
+      调整大小时保持长宽比，移动时锁定到单一坐标轴。</li>
+  <li><b>Ctrl</b> 从中心绘制矩形和椭圆。</li>
+  <li>绘制一个图形后工具切换为<b>选择形状</b>，但仍处于绘制模式；在绘制菜单中启用
+      <b>保持工具激活</b>可连续绘制。</li>
+  <li>在检查器中设置标记样式：描边颜色、粗细与线型；填充颜色与不透明度；
+      以及各自独立的起点/终点箭头及其长度和宽度。</li>
+  <li>拖动标记移动位置，拖动手柄调整形状；<b>置于顶层</b>/<b>置于底层</b>
+      （<code>Ctrl+]</code>/<code>Ctrl+[</code>）调整标记叠放顺序，标记也显示在图层面板中；
+      在图层面板中选中标记会自动进入绘制模式。</li>
+  <li><b>复制</b>（<code>Ctrl+C</code>）、<b>粘贴</b>（<code>Ctrl+V</code>，每次粘贴级联偏移
+      2 毫米）和<b>创建副本</b>（<code>Ctrl+D</code>）作用于选中形状；绘制模式下只能粘贴形状。</li>
+</ul>
 """
 
 _TYPOGRAPHY_HTML_EN = """

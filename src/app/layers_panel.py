@@ -361,7 +361,13 @@ class LayersDelegate(QStyledItemDelegate):
         # text
         text_x  = tx + self.THUMB + self.PAD
         text_rect = QRect(text_x, r.top(), r.right() - text_x - 4 - badge_reserved - z_reserved - reflow_reserved, r.height())
-        col = accent if is_sel else (text_c if itype in ("cell_filled", "pip_item", "text_leaf") else text_sec)
+        # In Draw mode only mark rows stay active; everything else is dimmed.
+        dimmed = (getattr(self._tree, "draw_mode_locked", False)
+                  and itype != "mark_leaf")
+        col = accent if is_sel else (
+            text_sec if dimmed else (
+                text_c if itype in ("cell_filled", "pip_item",
+                                    "text_leaf", "mark_leaf") else text_sec))
         painter.setPen(col)
         fnt = QFont(painter.font())
         fnt.setPointSizeF(max(8.0, fnt.pointSizeF() * 0.92))
@@ -485,6 +491,18 @@ class LayersPanel(QWidget):
 
         self._project = None
         self._is_updating = False
+        self._draw_mode = False
+        # Read by LayersDelegate to grey non-mark rows while Draw mode is on.
+        self.tree.draw_mode_locked = False
+
+    def set_draw_mode(self, on: bool) -> None:
+        """Draw mode: only mark rows stay selectable/draggable."""
+        on = bool(on)
+        if on == self._draw_mode:
+            return
+        self._draw_mode = on
+        self.tree.draw_mode_locked = on
+        self.refresh()
 
     # ── theme ────────────────────────────────────────────────────────────────
 
@@ -536,10 +554,38 @@ class LayersPanel(QWidget):
                 t_item.setData(0, _ROLE_TYPE, "text_leaf")
                 # Global text always draws above every cell (fixed Z), so it
                 # doesn't participate in z-stack drag-and-drop.
-                t_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                t_item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled if self._draw_mode else
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             text_root.setExpanded(True)
 
+        marks = getattr(self._project, 'marks', [])
+        if marks:
+            mark_root = QTreeWidgetItem(self.tree, [tr("layers_marks")])
+            mark_root.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            mark_root.setData(0, _ROLE_TYPE, "text_group")
+            # Top row = frontmost (project.marks list order is the z-stack).
+            n = len(marks)
+            for i, mark in enumerate(reversed(marks)):
+                kind = self._mark_kind_name(mark)
+                m_item = QTreeWidgetItem(
+                    mark_root, [f"{tr(f'mark_kind_{kind}')} {n - i}"])
+                m_item.setData(0, _ROLE_ID, mark.id)
+                m_item.setData(0, _ROLE_TYPE, "mark_leaf")
+                m_item.setFlags(Qt.ItemFlag.ItemIsEnabled
+                                | Qt.ItemFlag.ItemIsSelectable)
+            mark_root.setExpanded(True)
+
         self._is_updating = False
+
+    @staticmethod
+    def _mark_kind_name(mark):
+        has_arrow = mark.arrow_start != "none" or mark.arrow_end != "none"
+        if mark.kind == "line":
+            return "arrow" if has_arrow else "line"
+        if mark.kind == "polygon" and not mark.closed:
+            return "arrow" if has_arrow else "polyline"
+        return mark.kind
 
     def _refresh_freeform_layers(self):
         """Photoshop-style flat layer list for freeform mode: the list *is*
@@ -600,7 +646,9 @@ class LayersPanel(QWidget):
             # Drag/drop flags only exist in freeform mode, where the flat
             # layer list *is* the z-stack — in grid mode cells can't overlap
             # so reordering them would change nothing visible.
-            if self.tree.cells_reorderable:
+            if self._draw_mode:
+                tree_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            elif self.tree.cells_reorderable:
                 tree_item.setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                     | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
@@ -643,9 +691,12 @@ class LayersPanel(QWidget):
                 # PiP list order *is* the stacking order (last = frontmost),
                 # so dragging one onto a sibling under the same cell directly
                 # reorders cell.pip_items — see _BranchlessTree._compatible_target.
-                pip_tree_item.setFlags(
-                    pip_tree_item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
-                )
+                if self._draw_mode:
+                    pip_tree_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                else:
+                    pip_tree_item.setFlags(
+                        pip_tree_item.flags() | Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled
+                    )
                 if pip_img:
                     pip_tree_item.setData(0, _ROLE_IMG, pip_img)
                     pip_tree_item.setData(0, _ROLE_META, image_format_name(pip_img))

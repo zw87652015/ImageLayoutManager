@@ -13,6 +13,7 @@ from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
 from src.app.wheel_guard import install_wheel_guard
+from src.utils import mark_geometry
 
 
 # Sentinel for "mixed values across a multi-selection". Inspector helpers
@@ -768,6 +769,10 @@ class Inspector(QWidget):
     # Group Label (spanning / row-title label) signals
     group_label_property_changed = pyqtSignal(str, dict)           # (group_label_id, changes)
     group_label_delete_requested = pyqtSignal(str)                 # group_label_id
+    # Vector mark signals (applied to every selected mark via ids upstream)
+    mark_property_changed = pyqtSignal(dict)                       # {property: value}
+    mark_delete_requested = pyqtSignal()
+    polygon_sides_changed = pyqtSignal(int)                        # last-used sides for the tool
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1697,6 +1702,183 @@ class Inspector(QWidget):
         self.layout.addWidget(self.group_label_group)
         self.group_label_group.hide()
 
+        def _pair_row(a_label, a_widget, b_label, b_widget):
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(6)
+            la = QLabel(a_label); la.setFixedWidth(14)
+            lb = QLabel(b_label); lb.setFixedWidth(14)
+            h.addWidget(la); h.addWidget(a_widget, 1)
+            h.addWidget(lb); h.addWidget(b_widget, 1)
+            return row
+
+        # --- Mark Group (vector marks: dots, lines, arrows, shapes) ---
+        self.mark_group = CollapsibleSection(tr("grp_mark"))
+        self.mark_layout = self.mark_group._form
+        self._mark_count = 0
+
+        self._mk_kind_options = [
+            ("mark_kind_dot",     "dot"),
+            ("mark_kind_line",    "line"),
+            ("mark_kind_arrow",   "arrow"),
+            ("mark_kind_rect",    "rect"),
+            ("mark_kind_ellipse", "ellipse"),
+            ("mark_kind_polygon", "polygon"),
+            ("mark_kind_polyline", "polyline"),
+        ]
+        self._mk_arrow_options = [
+            ("opt_arrow_none",     "none"),
+            ("opt_arrow_triangle", "triangle"),
+            ("opt_arrow_open",     "open"),
+            ("opt_arrow_stealth",  "stealth"),
+            ("opt_arrow_circle",   "circle"),
+            ("opt_arrow_bar",      "bar"),
+        ]
+        self._mk_line_style_options = [
+            ("opt_border_solid",   "solid"),
+            ("opt_border_dashed",  "dashed"),
+            ("opt_line_dotted",    "dotted"),
+            ("opt_line_dash_dot",  "dash_dot"),
+        ]
+
+        self.mk_kind_label = QLabel("")
+        self.mark_layout.addRow(self._fl("lbl_kind"), self.mk_kind_label)
+
+        self._sec_mk_stroke = QLabel(tr("sec_border"))
+        self.mark_layout.addRow(self._sec_mk_stroke)
+
+        self.mk_stroke_enabled = QCheckBox(tr("chk_border_enabled"))
+        self.mk_stroke_enabled.toggled.connect(
+            lambda v: self._emit_mark_change({"stroke_enabled": v}))
+        self._mk_stroke_enabled_lbl = QLabel("")
+        self.mark_layout.addRow(self._mk_stroke_enabled_lbl, self.mk_stroke_enabled)
+
+        self.mk_stroke_color = ColorPickerWidget()
+        self.mk_stroke_color.colorChanged.connect(
+            lambda c: self._emit_mark_change({"stroke_color": c}) if c else None)
+        self.mark_layout.addRow(self._fl("lbl_color"), self.mk_stroke_color)
+
+        self.mk_stroke_width = QDoubleSpinBox()
+        self.mk_stroke_width.setRange(0.1, 100.0)
+        self.mk_stroke_width.setSingleStep(0.25)
+        self.mk_stroke_width.setDecimals(2)
+        self.mk_stroke_width.setSuffix(" pt")
+        self.mk_stroke_width.valueChanged.connect(
+            lambda v: self._emit_mark_change({"stroke_width_pt": v}))
+        self.mark_layout.addRow(self._fl("lbl_line_width"), self.mk_stroke_width)
+
+        self.mk_stroke_style = QComboBox()
+        for key, _v in self._mk_line_style_options:
+            self.mk_stroke_style.addItem(tr(key))
+        self.mk_stroke_style.currentIndexChanged.connect(
+            lambda i: self._emit_mark_change(
+                {"stroke_style": self._mk_line_style_options[i][1]}))
+        self.mark_layout.addRow(self._fl("lbl_line_type"), self.mk_stroke_style)
+
+        self._sec_mk_fill = QLabel(tr("sec_fill"))
+        self.mark_layout.addRow(self._sec_mk_fill)
+
+        self.mk_fill_enabled = QCheckBox(tr("chk_fill_enabled"))
+        self.mk_fill_enabled.toggled.connect(
+            lambda v: self._emit_mark_change({"fill_enabled": v}))
+        self._mk_fill_enabled_lbl = QLabel("")
+        self.mark_layout.addRow(self._mk_fill_enabled_lbl, self.mk_fill_enabled)
+
+        self.mk_fill_color = ColorPickerWidget()
+        self.mk_fill_color.colorChanged.connect(
+            lambda c: self._emit_mark_change({"fill_color": c}) if c else None)
+        self._mk_fill_color_lbl = self._fl("lbl_fill_color")
+        self.mark_layout.addRow(self._mk_fill_color_lbl, self.mk_fill_color)
+
+        self.mk_fill_opacity = QSpinBox()
+        self.mk_fill_opacity.setRange(0, 100)
+        self.mk_fill_opacity.setSuffix(" %")
+        self.mk_fill_opacity.valueChanged.connect(
+            lambda v: self._emit_mark_change({"fill_opacity": v / 100.0}))
+        self._mk_fill_opacity_lbl = self._fl("lbl_opacity")
+        self.mark_layout.addRow(self._mk_fill_opacity_lbl, self.mk_fill_opacity)
+
+        self.mk_dot_diameter = QDoubleSpinBox()
+        self.mk_dot_diameter.setRange(0.1, 100.0)
+        self.mk_dot_diameter.setSingleStep(0.25)
+        self.mk_dot_diameter.setDecimals(2)
+        self.mk_dot_diameter.setSuffix(" mm")
+        self.mk_dot_diameter.valueChanged.connect(
+            lambda v: self._emit_mark_change({"dot_diameter_mm": v}))
+        self._mk_dot_lbl = self._fl("lbl_dot_diameter")
+        self.mark_layout.addRow(self._mk_dot_lbl, self.mk_dot_diameter)
+
+        # Sides — only for a single selected regular closed polygon.
+        self.mk_sides = QSpinBox()
+        self.mk_sides.setRange(3, 24)
+        self.mk_sides.valueChanged.connect(self._on_sides_changed)
+        self._mk_sides_lbl = self._fl("lbl_sides")
+        self.mark_layout.addRow(self._mk_sides_lbl, self.mk_sides)
+
+        self.mk_closed = QCheckBox(tr("chk_closed"))
+        self.mk_closed.toggled.connect(
+            lambda v: self._emit_mark_change({"closed": v}))
+        self._mk_closed_lbl = QLabel("")
+        self.mark_layout.addRow(self._mk_closed_lbl, self.mk_closed)
+
+        self._sec_mk_arrows = QLabel(tr("sec_arrowheads"))
+        self.mark_layout.addRow(self._sec_mk_arrows)
+
+        def _mk_arrow_dim(emit_key):
+            s = QDoubleSpinBox()
+            s.setRange(0.1, 100.0)
+            s.setDecimals(2)
+            s.setSingleStep(0.25)
+            s.setSuffix(" mm")
+            s.setMinimumWidth(56)
+            s.valueChanged.connect(
+                lambda v, k=emit_key: self._emit_mark_change({k: v}))
+            return s
+
+        self.mk_arrow_start = QComboBox()
+        for key, _v in self._mk_arrow_options:
+            self.mk_arrow_start.addItem(tr(key))
+        self.mk_arrow_start.currentIndexChanged.connect(
+            lambda i: self._emit_mark_change(
+                {"arrow_start": self._mk_arrow_options[i][1]}))
+        self._mk_arrow_start_lbl = self._fl("lbl_arrow_start")
+        self.mark_layout.addRow(self._mk_arrow_start_lbl, self.mk_arrow_start)
+
+        self.mk_arrow_start_len = _mk_arrow_dim("arrow_start_length_mm")
+        self.mk_arrow_start_wid = _mk_arrow_dim("arrow_start_width_mm")
+        self._mk_arrow_start_dim_lbl = self._fl("lbl_arrow_start_size")
+        self.mark_layout.addRow(
+            self._mk_arrow_start_dim_lbl,
+            _pair_row("L", self.mk_arrow_start_len, "W", self.mk_arrow_start_wid))
+
+        self.mk_arrow_end = QComboBox()
+        for key, _v in self._mk_arrow_options:
+            self.mk_arrow_end.addItem(tr(key))
+        self.mk_arrow_end.currentIndexChanged.connect(
+            lambda i: self._emit_mark_change(
+                {"arrow_end": self._mk_arrow_options[i][1]}))
+        self._mk_arrow_end_lbl = self._fl("lbl_arrow_end")
+        self.mark_layout.addRow(self._mk_arrow_end_lbl, self.mk_arrow_end)
+
+        self.mk_arrow_end_len = _mk_arrow_dim("arrow_end_length_mm")
+        self.mk_arrow_end_wid = _mk_arrow_dim("arrow_end_width_mm")
+        self._mk_arrow_end_dim_lbl = self._fl("lbl_arrow_end_size")
+        self.mark_layout.addRow(
+            self._mk_arrow_end_dim_lbl,
+            _pair_row("L", self.mk_arrow_end_len, "W", self.mk_arrow_end_wid))
+        self.mk_arrow_start.currentIndexChanged.connect(
+            lambda _i: self._update_mark_arrow_rows())
+        self.mk_arrow_end.currentIndexChanged.connect(
+            lambda _i: self._update_mark_arrow_rows())
+
+        self.mk_delete_btn = QPushButton(tr("btn_delete"))
+        self.mk_delete_btn.clicked.connect(self.mark_delete_requested.emit)
+        self.mark_layout.addRow("", self.mk_delete_btn)
+
+        self.layout.addWidget(self.mark_group)
+        self.mark_group.hide()
+
         # --- Row Properties Group ---
         self.row_group = CollapsibleSection("Row Settings")
         self.row_layout = self.row_group._form
@@ -1774,17 +1956,6 @@ class Inspector(QWidget):
         self.pip_h = _mk_pct_spin("h")
         self.pip_w.setMinimum(1.0)
         self.pip_h.setMinimum(1.0)
-
-        def _pair_row(a_label, a_widget, b_label, b_widget):
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(0, 0, 0, 0)
-            h.setSpacing(6)
-            la = QLabel(a_label); la.setFixedWidth(14)
-            lb = QLabel(b_label); lb.setFixedWidth(14)
-            h.addWidget(la); h.addWidget(a_widget, 1)
-            h.addWidget(lb); h.addWidget(b_widget, 1)
-            return row
 
         self.pip_layout.addRow(self._fl("lbl_pip_pos"), _pair_row("X", self.pip_x, "Y", self.pip_y))
         self.pip_layout.addRow(self._fl("lbl_pip_size"), _pair_row("W", self.pip_w, "H", self.pip_h))
@@ -2082,6 +2253,20 @@ class Inspector(QWidget):
         _retranslate_combo(self.page_preset,        [tr(k) for k in self._page_preset_options])
         _retranslate_combo(self.pip_border_style,   [tr("opt_border_solid"), tr("opt_border_dashed")])
         _retranslate_combo(self.scale_bar_position, [tr(k) for k, _ in self._scale_bar_position_options])
+        _retranslate_combo(self.mk_stroke_style, [tr(k) for k, _ in self._mk_line_style_options])
+        _retranslate_combo(self.mk_arrow_start,  [tr(k) for k, _ in self._mk_arrow_options])
+        _retranslate_combo(self.mk_arrow_end,    [tr(k) for k, _ in self._mk_arrow_options])
+
+        self.mark_group.set_title(tr("grp_mark"))
+        self._sec_mk_stroke.setText(tr("sec_border"))
+        self._sec_mk_fill.setText(tr("sec_fill"))
+        self._sec_mk_arrows.setText(tr("sec_arrowheads"))
+        self.mk_stroke_enabled.setText(tr("chk_border_enabled"))
+        self.mk_fill_enabled.setText(tr("chk_fill_enabled"))
+        self.mk_closed.setText(tr("chk_closed"))
+        self.mk_stroke_color.retranslate_ui()
+        self.mk_fill_color.retranslate_ui()
+        self.mk_delete_btn.setText(tr("btn_delete"))
         
         self.scale_bar_custom_text.setPlaceholderText(tr("placeholder_scale_bar_text"))
         self.label_text_edit.setPlaceholderText(tr("placeholder_label_text"))
@@ -2737,6 +2922,121 @@ class Inspector(QWidget):
         self.group_label_group.set_collapsed(False, animate=False)
         self.group_label_group.show()
 
+    # --- Mark helpers ---
+
+    def _emit_mark_change(self, changes: dict):
+        if self._mark_count:
+            self.mark_property_changed.emit(dict(changes))
+
+    def _on_sides_changed(self, n: int):
+        """Regenerate the selected regular polygon with n sides, keeping
+        its centre, radius and rotation; remember n for the draw tool."""
+        if not getattr(self, '_mk_is_regular', False):
+            return
+        params = mark_geometry.regular_polygon_params(self._mk_points)
+        if params is None:
+            return
+        cx, cy, radius, rot = params
+        pts = mark_geometry.regular_polygon_points(cx, cy, radius, int(n), rot)
+        self._mk_points = [list(p) for p in pts]
+        self._emit_mark_change({"points": pts})
+        self.polygon_sides_changed.emit(int(n))
+
+    def _populate_mark_group(self, data: dict):
+        """Fill the mark editor from the first selected mark's dict."""
+        self.blockSignals(True)
+        self._mark_count = int(data.get("_count", 1) or 1)
+        kind = data.get("kind", "line")
+        open_shape = kind == "line" or (kind == "polygon"
+                                      and not data.get("closed", True))
+        arrowed = open_shape and (data.get("arrow_start", "none") != "none"
+                                  or data.get("arrow_end", "none") != "none")
+        display = "arrow" if arrowed else (
+            "polyline" if kind == "polygon" and not data.get("closed", True)
+            else kind)
+        text = next((tr(k) for k, v in self._mk_kind_options
+                     if v == display), display)
+        if self._mark_count > 1:
+            text += f" ×{self._mark_count}"
+        self.mk_kind_label.setText(text)
+
+        self.mk_stroke_enabled.setChecked(bool(data.get("stroke_enabled", True)))
+        self.mk_stroke_color.set_color(data.get("stroke_color", "#000000"))
+        self.mk_stroke_width.setValue(float(data.get("stroke_width_pt", 1.0)))
+        self.mk_stroke_style.setCurrentIndex(
+            next((i for i, (_k, v) in enumerate(self._mk_line_style_options)
+                  if v == data.get("stroke_style", "solid")), 0))
+        self.mk_fill_enabled.setChecked(bool(data.get("fill_enabled", False)))
+        self.mk_fill_color.set_color(data.get("fill_color", "#FFFFFF"))
+        self.mk_fill_opacity.setValue(round(float(data.get("fill_opacity", 1.0)) * 100))
+        self.mk_dot_diameter.setValue(float(data.get("dot_diameter_mm", 1.5)))
+        self.mk_closed.setChecked(bool(data.get("closed", True)))
+        # Sides is editable only for one selected, regular closed polygon.
+        pts = [list(p) for p in data.get("points", [])]
+        self._mk_points = pts
+        self._mk_is_regular = (
+            kind == "polygon" and bool(data.get("closed", True))
+            and self._mark_count == 1
+            and mark_geometry.regular_polygon_params(pts) is not None)
+        self.mk_sides.setValue(len(pts) if pts else 6)
+        self.mk_arrow_start.setCurrentIndex(
+            next((i for i, (_k, v) in enumerate(self._mk_arrow_options)
+                  if v == data.get("arrow_start", "none")), 0))
+        self.mk_arrow_start_len.setValue(float(data.get("arrow_start_length_mm", 2.0)))
+        self.mk_arrow_start_wid.setValue(float(data.get("arrow_start_width_mm", 1.6)))
+        self.mk_arrow_end.setCurrentIndex(
+            next((i for i, (_k, v) in enumerate(self._mk_arrow_options)
+                  if v == data.get("arrow_end", "none")), 0))
+        self.mk_arrow_end_len.setValue(float(data.get("arrow_end_length_mm", 2.0)))
+        self.mk_arrow_end_wid.setValue(float(data.get("arrow_end_width_mm", 1.6)))
+
+        # Per-kind visibility: open shapes have no fill and always stroke;
+        # arrowheads only apply to lines and open polylines.
+        stroke_rows = [(self._mk_stroke_enabled_lbl, self.mk_stroke_enabled)]
+        for lbl, w in stroke_rows:
+            lbl.setVisible(not open_shape)
+            w.setVisible(not open_shape)
+        for lbl, w in ((self._sec_mk_fill, self._sec_mk_fill),
+                       (self._mk_fill_enabled_lbl, self.mk_fill_enabled),
+                       (self._mk_fill_color_lbl, self.mk_fill_color),
+                       (self._mk_fill_opacity_lbl, self.mk_fill_opacity)):
+            lbl.setVisible(not open_shape)
+            w.setVisible(not open_shape)
+        for lbl, w in ((self._mk_dot_lbl, self.mk_dot_diameter),):
+            lbl.setVisible(kind == "dot")
+            w.setVisible(kind == "dot")
+        for lbl, w in ((self._mk_closed_lbl, self.mk_closed),):
+            lbl.setVisible(kind == "polygon")
+            w.setVisible(kind == "polygon")
+        for lbl, w in ((self._mk_sides_lbl, self.mk_sides),):
+            lbl.setVisible(self._mk_is_regular)
+            w.setVisible(self._mk_is_regular)
+        self._mk_open_shape = open_shape
+        self._update_mark_arrow_rows()
+
+        self.blockSignals(False)
+        self.mark_group.set_collapsed(False, animate=False)
+        self.mark_group.show()
+
+    def _update_mark_arrow_rows(self) -> None:
+        """Arrow rows only for open shapes; each L/W size row only while that
+        end actually has an arrowhead. The size spinboxes live inside an
+        "L … W …" container row, so hide that container, not just the spins."""
+        open_shape = getattr(self, '_mk_open_shape', False)
+        for lbl, w in ((self._sec_mk_arrows, self._sec_mk_arrows),
+                       (self._mk_arrow_start_lbl, self.mk_arrow_start),
+                       (self._mk_arrow_end_lbl, self.mk_arrow_end)):
+            lbl.setVisible(open_shape)
+            w.setVisible(open_shape)
+        for lbl, combo, spin in (
+                (self._mk_arrow_start_dim_lbl, self.mk_arrow_start,
+                 self.mk_arrow_start_len),
+                (self._mk_arrow_end_dim_lbl, self.mk_arrow_end,
+                 self.mk_arrow_end_len)):
+            show = open_shape and combo.currentIndex() > 0  # index 0 = none
+            lbl.setVisible(show)
+            spin.parentWidget().setVisible(show)
+
     def set_typography_mode(self, mode: str) -> None:
         if mode not in ('points', 'legacy'):
             return
@@ -2794,6 +3094,7 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.label_item_group.hide()
             self.group_label_group.hide()
+            self.mark_group.hide()
             self.row_group.hide()
             self.subcell_group.hide()
             self.pip_group.hide()
@@ -2836,6 +3137,7 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.label_item_group.hide()
             self.group_label_group.hide()
+            self.mark_group.hide()
             self.row_group.hide()
             self.subcell_group.hide()
             self.pip_group.hide()
@@ -2860,6 +3162,7 @@ class Inspector(QWidget):
             self.scale_bar_group.hide()
             self.svg_normalize_group.hide()
             self.group_label_group.hide()
+            self.mark_group.hide()
             self.label_cell_group.show()
 
             if data:
@@ -2913,6 +3216,7 @@ class Inspector(QWidget):
             self.text_group.hide()
             self.label_cell_group.hide()
             self.label_item_group.hide()
+            self.mark_group.hide()
             self.row_group.hide()
             self.subcell_group.hide()
             self.pip_group.hide()
@@ -2930,6 +3234,7 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.label_item_group.hide()
             self.group_label_group.hide()
+            self.mark_group.hide()
             self.cell_group.show()
             self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
 
@@ -3035,7 +3340,43 @@ class Inspector(QWidget):
             self._populate_reflow_card(data)
 
             self.blockSignals(False)
-            
+
+        elif item_type == 'draw_empty':
+            # Draw mode with nothing selected: only a hint label.
+            self.project_group.hide()
+            self.cell_group.hide()
+            self.pip_group.hide()
+            self.row_group.hide()
+            self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.subcell_group.hide()
+            self.text_group.hide()
+            self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()
+            self.group_label_group.hide()
+            self.mark_group.hide()
+            self.multi_label.hide()
+            self.no_selection_label.setText(tr("inspector_draw_mode_hint"))
+            self.no_selection_label.show()
+
+        elif item_type == 'mark':
+            self.no_selection_label.hide()
+            self.project_group.hide()
+            self.cell_group.hide()
+            self.pip_group.hide()
+            self.row_group.hide()
+            self.label_cell_group.hide()
+            self.label_item_group.hide()
+            self.subcell_group.hide()
+            self.text_group.hide()
+            self.scale_bar_group.hide()
+            self.svg_normalize_group.hide()
+            self.group_label_group.hide()
+            if data:
+                self._populate_mark_group(data)
+            else:
+                self.mark_group.hide()
+
         elif item_type == 'text':
             self.no_selection_label.hide()
             self.project_group.hide()
@@ -3047,6 +3388,7 @@ class Inspector(QWidget):
             self.scale_bar_group.hide()
             self.svg_normalize_group.hide()
             self.group_label_group.hide()
+            self.mark_group.hide()
             self.text_group.show()
             
             self.blockSignals(True)
@@ -3127,6 +3469,7 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.label_item_group.hide()
             self.group_label_group.hide()
+            self.mark_group.hide()
             self.svg_normalize_group.hide()
             self.pip_group.show()
 
@@ -3159,6 +3502,7 @@ class Inspector(QWidget):
             self.label_cell_group.hide()
             self.label_item_group.hide()
             self.group_label_group.hide()
+            self.mark_group.hide()
             self.pip_group.hide()
             self.scale_bar_group.hide()
             self.svg_normalize_group.hide()
@@ -3230,6 +3574,7 @@ class Inspector(QWidget):
                 self.blockSignals(False)
             else:
                 self.project_group.hide()
+                self.no_selection_label.setText(tr("no_selection"))
                 self.no_selection_label.show()
     def _populate_format_row(self, data: dict) -> None:
         """Describe the selected panel's source file type.

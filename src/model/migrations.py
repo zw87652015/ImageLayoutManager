@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
-PROJECT_SCHEMA_VERSION = 5
+PROJECT_SCHEMA_VERSION = 6
 
 
 class ProjectMigrationError(ValueError):
@@ -113,6 +113,71 @@ def validate_plot_alignment_group(data):
         raise ProjectMigrationError('Invalid plot alignment row_groups: assign every member to a row.')
 
 
+MARK_KINDS = ("dot", "line", "rect", "ellipse", "polygon")
+MARK_LINE_STYLES = ("solid", "dashed", "dotted", "dash_dot")
+MARK_ARROW_STYLES = ("none", "triangle", "open", "stealth", "circle", "bar")
+
+_MARK_COLOR_RE = re.compile(r'^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$')
+
+
+def _validate_mark_number(data, key, lo, hi, inclusive_lo=False):
+    value = data[key]
+    if (type(value) not in (int, float) or not math.isfinite(value)
+            or value < lo or (inclusive_lo is False and value == lo) or value > hi):
+        raise ProjectMigrationError(
+            f'Invalid mark {key}: expected a finite number in the allowed range.')
+
+
+def validate_mark(data):
+    if not isinstance(data, dict):
+        raise ProjectMigrationError('Invalid mark: expected an object.')
+    if 'id' in data and (not isinstance(data['id'], str) or not data['id']):
+        raise ProjectMigrationError('Invalid mark id: expected a nonempty string.')
+    kind = data.get('kind')
+    if kind not in MARK_KINDS:
+        raise ProjectMigrationError(
+            f'Invalid mark kind: expected one of {", ".join(MARK_KINDS)}.')
+    points = data.get('points')
+    if kind == 'polygon':
+        required = 3 if data.get('closed', True) else 2
+    else:
+        required = 1 if kind == 'dot' else 2
+    if (not isinstance(points, list)
+            or len(points) > 10000 or len(points) < required
+            or (kind != 'polygon' and len(points) != required)
+            or any(not isinstance(p, (list, tuple)) or len(p) != 2
+                   or any(type(v) not in (int, float) or not math.isfinite(v) for v in p)
+                   for p in points)):
+        raise ProjectMigrationError(
+            f'Invalid mark points: expected [x, y] pairs of finite numbers '
+            f'({required} required for this kind).')
+    for key in ('closed', 'stroke_enabled', 'fill_enabled'):
+        if key in data and type(data[key]) is not bool:
+            raise ProjectMigrationError(f'Invalid mark {key}: expected true or false.')
+    for key in ('stroke_color', 'fill_color'):
+        if key in data and (not isinstance(data[key], str)
+                            or not _MARK_COLOR_RE.match(data[key])):
+            raise ProjectMigrationError(
+                f'Invalid mark {key}: expected #RRGGBB or #RRGGBBAA.')
+    if 'stroke_width_pt' in data:
+        _validate_mark_number(data, 'stroke_width_pt', 0, 100)
+    if 'dot_diameter_mm' in data:
+        _validate_mark_number(data, 'dot_diameter_mm', 0, 1000)
+    if 'fill_opacity' in data:
+        _validate_mark_number(data, 'fill_opacity', 0, 1, inclusive_lo=True)
+    for key in ('arrow_start_length_mm', 'arrow_start_width_mm',
+                'arrow_end_length_mm', 'arrow_end_width_mm'):
+        if key in data:
+            _validate_mark_number(data, key, 0, 1000)
+    if 'stroke_style' in data and data['stroke_style'] not in MARK_LINE_STYLES:
+        raise ProjectMigrationError(
+            f'Invalid mark stroke_style: expected one of {", ".join(MARK_LINE_STYLES)}.')
+    for key in ('arrow_start', 'arrow_end'):
+        if key in data and data[key] not in MARK_ARROW_STYLES:
+            raise ProjectMigrationError(
+                f'Invalid mark {key}: expected one of {", ".join(MARK_ARROW_STYLES)}.')
+
+
 def _validate_point_sizes(record, keys):
     for key in keys:
         if key in record:
@@ -122,6 +187,8 @@ def _validate_point_sizes(record, keys):
 
 
 def _validate_structure(data):
+    for mark in _records(data, 'marks'):
+        validate_mark(mark)
     for group in _records(data, 'plot_alignment_groups'):
         validate_plot_alignment_group(group)
     for key in ('rows', 'size_groups', 'text_items', 'group_labels'):
@@ -253,8 +320,13 @@ def _migrate_schema_4_to_5(data):
     return data
 
 
+def _migrate_schema_5_to_6(data):
+    data.setdefault('marks', [])
+    return data
+
+
 SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2, 2: _migrate_schema_2_to_3,
-                     3: _migrate_schema_3_to_4, 4: _migrate_schema_4_to_5}
+                     3: _migrate_schema_3_to_4, 4: _migrate_schema_4_to_5, 5: _migrate_schema_5_to_6}
 
 
 def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -277,7 +349,7 @@ def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:
                 f'Please upgrade ILM (installed: {APP_VERSION}).')
     _validate_structure(data)
     if schema == PROJECT_SCHEMA_VERSION and 'typography_mode' not in data:
-        raise ProjectMigrationError('Invalid project: schema 4 requires typography_mode.')
+        raise ProjectMigrationError('Invalid project: typography_mode is required.')
     migrated = copy.deepcopy(data)
     while schema < PROJECT_SCHEMA_VERSION:
         upgrade = SCHEMA_MIGRATIONS.get(schema)

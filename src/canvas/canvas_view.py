@@ -124,6 +124,9 @@ class CanvasView(QGraphicsView):
         transform = QTransform(zoom, 0, 0, zoom,
                                offset.x() + scroll_x, offset.y() + scroll_y)
         self.setTransform(transform)
+        scene_obj = self.scene()
+        if scene_obj is not None and hasattr(scene_obj, 'set_view_scale'):
+            scene_obj.set_view_scale(self.transform().m11())
         self.horizontalScrollBar().setValue(scroll_x)
         self.verticalScrollBar().setValue(scroll_y)
         self._zoom_level = self.transform().m11()
@@ -208,6 +211,11 @@ class CanvasView(QGraphicsView):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
         elif event.button() == Qt.MouseButton.LeftButton:
+            if getattr(self.scene(), 'draw_tool', None):
+                # A draw tool owns left clicks: let Qt deliver to the scene
+                # (the custom rubber-band would swallow empty-space presses).
+                super().mousePressEvent(event)
+                return
             from PyQt6.QtWidgets import QGraphicsItem
             scene_pos = self.mapToScene(event.position().toPoint())
             # Deliver to the scene if there are selectable items OR interactive
@@ -336,6 +344,13 @@ class CanvasView(QGraphicsView):
                 return
             if key == Qt.Key.Key_Minus:
                 self._apply_zoom(1 / 1.2)
+                event.accept()
+                return
+
+        # Draw tool keys (Esc/Enter/Backspace) and navigation suppression
+        scene = self.scene()
+        if scene is not None and getattr(scene, 'draw_key_press', None):
+            if scene.draw_key_press(event):
                 event.accept()
                 return
 

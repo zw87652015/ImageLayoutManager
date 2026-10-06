@@ -13,8 +13,8 @@ from PyQt6.QtWidgets import (
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
     QSizePolicy, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QUndoStack, QPalette
+from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray
+from PyQt6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeySequence, QUndoStack, QPalette
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
 from src.app.i18n import tr, set_language, current_language
@@ -56,6 +56,8 @@ from src.app.commands import (
     CreateSizeGroupCommand, DeleteSizeGroupCommand, SizeGroupPropertyChangeCommand,
     SetExportRegionCommand, ClearExportRegionCommand,
     AddGroupLabelCommand, DeleteGroupLabelCommand, GroupLabelPropertyChangeCommand,
+    AddMarkCommand, AddMarksCommand, DeleteMarksCommand,
+    MarkPropertyChangeCommand, ReorderMarksCommand,
 )
 from src.model.data_model import PiPItem
 from src.utils.image_proxy import get_image_proxy, is_supported_image, collect_importable_images
@@ -68,6 +70,7 @@ from src.utils.clipboard_paste import (
     image_matches, read_clipboard, relocate_pasted_images,
     store_clipboard_image,
 )
+from src.utils import mark_clipboard
 from src.utils.presence_lock import PresenceLock, PresenceLockError
 from src.utils.crash_recovery import SnapshotStore
 
@@ -834,11 +837,78 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(add_text_action)
         self._act_add_text = add_text_action
 
+        # ── Draw submenu: Draw Mode toggle + vector mark tools ──
+        self._draw_menu = edit_menu.addMenu(tr("draw_menu"))
+        self._act_draw_mode = QAction(tr("action_draw_mode"), self)
+        self._act_draw_mode.setCheckable(True)
+        self._act_draw_mode.setToolTip(tr("tip_action_draw_mode"))
+        self._register_themed_action(self._act_draw_mode, "mark_polyline")
+        self._act_draw_mode.triggered.connect(
+            lambda checked=False: self._set_draw_mode(checked, tool=None))
+        self._draw_menu.addAction(self._act_draw_mode)
+        self._draw_menu.addSeparator()
+        self._mark_tool_group = QActionGroup(self)
+        self._mark_tool_group.setExclusive(True)
+        self._mark_tool_actions = {}  # tool name (or "select") -> QAction
+
+        select_act = QAction(tr("tool_select"), self)
+        select_act.setCheckable(True)
+        select_act.setChecked(True)
+        select_act.setToolTip(tr("tip_tool_select"))
+        self._register_themed_action(select_act, "mark_select")
+        select_act.triggered.connect(
+            lambda checked=False: self._activate_draw_tool(None))
+        self._mark_tool_group.addAction(select_act)
+        self._draw_menu.addAction(select_act)
+        self._mark_tool_actions["select"] = select_act
+        self._act_mark_select = select_act
+        self._draw_menu.addSeparator()
+
+        self._draw_tools = (
+            "dot", "line", "arrow", "rect", "ellipse", "polygon", "polyline")
+        for tool in self._draw_tools:
+            act = QAction(tr(f"tool_{tool}"), self)
+            act.setCheckable(True)
+            act.setToolTip(tr(f"tip_tool_{tool}"))
+            self._register_themed_action(act, f"mark_{tool}")
+            act.triggered.connect(
+                lambda checked=False, t=tool: self._activate_draw_tool(t))
+            self._mark_tool_group.addAction(act)
+            self._draw_menu.addAction(act)
+            self._mark_tool_actions[tool] = act
+        self._draw_menu.addSeparator()
+
+        keep_active = QAction(tr("keep_tool_active"), self)
+        keep_active.setCheckable(True)
+        keep_active.setChecked(
+            self._settings.value("marks/keep_tool_active", False, type=bool))
+        keep_active.toggled.connect(self._on_keep_tool_active_toggled)
+        self._draw_menu.addAction(keep_active)
+        self._act_keep_tool_active = keep_active
+        self._last_draw_tool = "arrow"
+
         paste_action = QAction(tr("action_paste_clipboard"), self)
         paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         paste_action.triggered.connect(self._on_paste_clipboard)
         edit_menu.addAction(paste_action)
         self._act_paste = paste_action
+
+        # Shape clipboard actions — enabled only while a mark is selected in
+        # Draw mode, so Ctrl+C/Ctrl+D never fight text editing elsewhere.
+        copy_shapes_action = QAction(tr("action_copy_shapes"), self)
+        copy_shapes_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_shapes_action.triggered.connect(self._on_copy_shapes)
+        copy_shapes_action.setEnabled(False)
+        edit_menu.addAction(copy_shapes_action)
+        self._act_copy_shapes = copy_shapes_action
+
+        dup_shapes_action = QAction(tr("action_duplicate_shapes"), self)
+        dup_shapes_action.setShortcut(QKeySequence("Ctrl+D"))
+        dup_shapes_action.triggered.connect(self._on_duplicate_shapes)
+        dup_shapes_action.setEnabled(False)
+        edit_menu.addAction(dup_shapes_action)
+        self._act_duplicate_shapes = dup_shapes_action
+        self._mark_paste_state = None  # (payload bytes, project id, count)
 
         delete_text_action = QAction(tr("action_delete_sel"), self)
         delete_text_action.setShortcut(QKeySequence.StandardKey.Delete)
@@ -948,7 +1018,6 @@ class MainWindow(QMainWindow):
         layout_menu.addSeparator()
 
         # ── Label Placement submenu ──
-        from PyQt6.QtGui import QActionGroup
         placement_menu = layout_menu.addMenu(tr("menu_label_placement"))
         self._placement_action_group = QActionGroup(self)
         self._placement_action_group.setExclusive(True)
@@ -1006,6 +1075,27 @@ class MainWindow(QMainWindow):
         self._auto_layout_menu.addAction(self._act_align_plots)
         self._auto_layout_button.setMenu(self._auto_layout_menu)
         self.toolbar.addWidget(self._auto_layout_button)
+
+        # Draw mode toggle button: main part toggles Draw mode; the menu
+        # mirrors the Draw submenu (mode, Select Shapes, tools, options).
+        self._draw_button = QToolButton(self)
+        self._draw_button.setDefaultAction(self._act_draw_mode)
+        self._draw_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self._draw_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._draw_button.setToolTip(tr("tip_draw_button"))
+        draw_btn_menu = QMenu(self._draw_button)
+        draw_btn_menu.addAction(self._act_draw_mode)
+        draw_btn_menu.addSeparator()
+        draw_btn_menu.addAction(self._mark_tool_actions["select"])
+        draw_btn_menu.addSeparator()
+        for tool in self._draw_tools:
+            draw_btn_menu.addAction(self._mark_tool_actions[tool])
+        draw_btn_menu.addSeparator()
+        draw_btn_menu.addAction(keep_active)
+        self._draw_button.setMenu(draw_btn_menu)
+        self.toolbar.addWidget(self._draw_button)
         self.toolbar.addSeparator()
 
         # ── Right-aligned toolbar group ─────────────────────────────────
@@ -1128,6 +1218,21 @@ class MainWindow(QMainWindow):
         self.update_available_label.setStyleSheet(
             "color: #4A90E2; font-size: 12px; padding: 0 8px;"
         )
+        # Draw-mode pill (left-most permanent widget; only visible while the
+        # mode is on). Clicking it leaves Draw mode.
+        self.draw_mode_label = QLabel("")
+        self.draw_mode_label.setTextFormat(Qt.TextFormat.RichText)
+        self.draw_mode_label.setOpenExternalLinks(False)
+        self.draw_mode_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.draw_mode_label.setStyleSheet(
+            "background-color: #4A90D9; color: #FFFFFF; font-weight: bold;"
+            "border-radius: 7px; padding: 1px 8px; margin: 2px 4px;"
+        )
+        self.draw_mode_label.linkActivated.connect(
+            lambda _link: self._set_draw_mode(False))
+        self.draw_mode_label.hide()
+        self.statusbar.addPermanentWidget(self.draw_mode_label)
+
         self.update_available_label.linkActivated.connect(self._on_update_banner_clicked)
         self.update_available_label.hide()
         self.statusbar.addPermanentWidget(self.update_available_label)
@@ -1165,6 +1270,10 @@ class MainWindow(QMainWindow):
         self.inspector.label_item_property_changed.connect(self._on_label_item_property_changed)
         self.inspector.group_label_property_changed.connect(self._on_group_label_property_changed)
         self.inspector.group_label_delete_requested.connect(self._on_group_label_delete)
+        self.inspector.mark_property_changed.connect(self._on_mark_property_changed)
+        self.inspector.mark_delete_requested.connect(self._on_mark_delete_requested)
+        self.inspector.polygon_sides_changed.connect(
+            self._on_polygon_sides_changed)
         self.layers_panel.items_selected.connect(self._select_cells_by_ids)
         self.layers_panel.context_menu_requested.connect(self._on_layers_context_menu)
         self.layers_panel.reorder_requested.connect(self._on_layers_reorder_requested)
@@ -1212,6 +1321,12 @@ class MainWindow(QMainWindow):
         tab.scene.pip_context_menu.connect(self._on_pip_context_menu)
         tab.scene.pip_removed.connect(self._on_pip_removed)
         tab.scene.cell_double_clicked.connect(self._on_cell_double_clicked)
+        tab.scene.mark_drawn.connect(self._on_mark_drawn)
+        tab.scene.marks_geometry_changed.connect(self._on_marks_geometry_changed)
+        tab.scene.mark_context_menu.connect(self._on_mark_context_menu)
+        tab.scene.draw_tool_changed.connect(self._on_draw_tool_changed)
+        tab.scene.draw_mode_changed.connect(self._on_draw_mode_changed)
+        tab.scene.polygon_sides = self._polygon_sides()
         tab.view.zoom_changed.connect(self._on_zoom_changed)
         tab.view.mouse_scene_pos_changed.connect(self._on_mouse_pos_changed)
         tab.view.navigate_cell.connect(self._on_navigate_cell)
@@ -1269,6 +1384,11 @@ class MainWindow(QMainWindow):
             tab.scene.pip_context_menu.disconnect(self._on_pip_context_menu)
             tab.scene.pip_removed.disconnect(self._on_pip_removed)
             tab.scene.cell_double_clicked.disconnect(self._on_cell_double_clicked)
+            tab.scene.mark_drawn.disconnect(self._on_mark_drawn)
+            tab.scene.marks_geometry_changed.disconnect(self._on_marks_geometry_changed)
+            tab.scene.mark_context_menu.disconnect(self._on_mark_context_menu)
+            tab.scene.draw_tool_changed.disconnect(self._on_draw_tool_changed)
+            tab.scene.draw_mode_changed.disconnect(self._on_draw_mode_changed)
             tab.view.zoom_changed.disconnect(self._on_zoom_changed)
             tab.view.mouse_scene_pos_changed.disconnect(self._on_mouse_pos_changed)
             tab.view.navigate_cell.disconnect(self._on_navigate_cell)
@@ -1321,7 +1441,12 @@ class MainWindow(QMainWindow):
 
         # Disconnect old tab signals
         if self._active_tab_idx >= 0 and self._active_tab_idx < len(self._tabs):
-            self._disconnect_tab_signals(self._tabs[self._active_tab_idx])
+            old_tab = self._tabs[self._active_tab_idx]
+            self._disconnect_tab_signals(old_tab)
+            if getattr(old_tab.scene, 'draw_mode', False):
+                old_tab.scene.set_draw_mode(False)
+            elif getattr(old_tab.scene, 'draw_tool', None):
+                old_tab.scene.set_draw_tool(None)
 
         self._active_tab_idx = idx
         tab = self._tabs[idx]
@@ -1340,6 +1465,9 @@ class MainWindow(QMainWindow):
             tab.scene.set_project(tab.project)
 
         self._connect_tab_signals(tab)
+        # Draw-mode/tool check states and hints belong to the newly active scene.
+        self._on_draw_mode_changed(bool(getattr(self.scene, 'draw_mode', False)))
+        self._on_draw_tool_changed(getattr(self.scene, 'draw_tool', None))
 
         # Update shared UI panels
         self.layers_panel.set_project(tab.project)
@@ -1610,6 +1738,10 @@ class MainWindow(QMainWindow):
 
     def _on_toggle_preview_mode(self, checked: bool):
         if self.scene:
+            if checked and getattr(self.scene, 'draw_mode', False):
+                self.scene.set_draw_mode(False)
+            elif checked and getattr(self.scene, 'draw_tool', None):
+                self.scene.set_draw_tool(None)
             self.scene.set_preview_mode(checked)
 
     def _on_history_settings(self):
@@ -1681,6 +1813,8 @@ class MainWindow(QMainWindow):
             self._act_export_svg.setText(tr("action_export_svg"))
         self._act_add_text.setText(tr("action_add_text"))
         self._act_paste.setText(tr("action_paste_clipboard"))
+        self._act_copy_shapes.setText(tr("action_copy_shapes"))
+        self._act_duplicate_shapes.setText(tr("action_duplicate_shapes"))
         self._act_delete_sel.setText(tr("action_delete_sel"))
         self._act_delete_img.setText(tr("action_delete_img"))
         self._act_auto_label_incell.setText(tr("action_auto_label_incell"))
@@ -1703,6 +1837,20 @@ class MainWindow(QMainWindow):
         self._act_grid_mode.setText(tr("action_grid_mode"))
         self._act_bring_front.setText(tr("action_bring_front"))
         self._act_send_back.setText(tr("action_send_back"))
+        if hasattr(self, '_draw_menu'):
+            self._draw_menu.setTitle(tr("draw_menu"))
+            self._act_draw_mode.setText(tr("action_draw_mode"))
+            self._act_draw_mode.setToolTip(tr("tip_action_draw_mode"))
+            for name, act in self._mark_tool_actions.items():
+                act.setText(tr(f"tool_{name}"))
+                act.setToolTip(tr(f"tip_tool_{name}"))
+            self._act_keep_tool_active.setText(tr("keep_tool_active"))
+            self._draw_button.setToolTip(tr("tip_draw_button"))
+            if self.scene is not None and getattr(self.scene, 'draw_mode', False):
+                tool = self.scene.draw_tool
+                self.statusbar.showMessage(
+                    tr(f"hint_draw_{tool}" if tool else "hint_draw_select"))
+            self._update_draw_mode_indicator()
         if hasattr(self, '_act_set_export_region'):
             self._act_set_export_region.setText(tr("action_set_export_region"))
         if hasattr(self, '_act_clear_export_region'):
@@ -1837,6 +1985,29 @@ class MainWindow(QMainWindow):
                         self._on_selection_changed()
                         self.view.centerOn(cell_item)
                     return
+
+        mark_ids = {m.id for m in getattr(self.project, 'marks', [])}
+        wanted_marks = [cid for cid in cell_ids if cid in mark_ids]
+        if wanted_marks:
+            # Marks are only interactive inside Draw mode — enter it
+            # (Select Shapes) so the rows can actually be selected.
+            if not getattr(self.scene, 'draw_mode', False):
+                self._set_draw_mode(True, None)
+            first_mark_item = None
+            with QSignalBlocker(self.scene):
+                self.scene.clearSelection()
+                for item in self.scene.cell_items.values():
+                    item.deselect_pip()
+                for mid in wanted_marks:
+                    m_item = self.scene.mark_items.get(mid)
+                    if m_item is not None:
+                        m_item.setSelected(True)
+                        if first_mark_item is None:
+                            first_mark_item = m_item
+            self._on_selection_changed()
+            if first_mark_item is not None:
+                self.view.centerOn(first_mark_item)
+            return
 
         first_item = None
         with QSignalBlocker(self.scene):
@@ -2642,9 +2813,14 @@ class MainWindow(QMainWindow):
             items = self.scene.selectedItems()
         except RuntimeError:
             return  # Scene was deleted
+        self._update_mark_clipboard_actions(items)
         if not items:
             self.selection_info_label.setText("")
-            self.inspector.set_selection(None, self.project.to_dict())
+            if getattr(self.scene, 'draw_mode', False):
+                self.inspector.set_selection('draw_empty',
+                                             self.project.to_dict())
+            else:
+                self.inspector.set_selection(None, self.project.to_dict())
             self.layers_panel.select_item(None)
             return
 
@@ -2668,6 +2844,22 @@ class MainWindow(QMainWindow):
                 self.selection_info_label.setText("")
         else:
             self.selection_info_label.setText("")
+
+        # Vector marks: all-marks selection → mark inspector; marks mixed
+        # with other item kinds → the generic 'mixed' branch. Runs before
+        # the multi-cell branch so marks+cells selections reach 'mixed'.
+        mark_items = [i for i in items if hasattr(i, 'mark_id')]
+        if mark_items:
+            if len(mark_items) == len(items):
+                first = self.project.find_mark(mark_items[0].mark_id)
+                if first is not None:
+                    data = first.to_dict()
+                    data["_count"] = len(mark_items)
+                    self.inspector.set_selection('mark', data)
+                    self.layers_panel.select_item(mark_items[0].mark_id)
+                    return
+            self.inspector.set_selection('mixed', {"count": len(items)})
+            return
 
         # Multi-cell selection
         if len(cell_items) > 1:
@@ -3597,6 +3789,11 @@ class MainWindow(QMainWindow):
         from src.canvas.cell_item import CellItem
 
         handled = False
+        mark_ids = [i.mark_id for i in items if hasattr(i, 'mark_id')]
+        if mark_ids:
+            self.undo_stack.push(DeleteMarksCommand(
+                self.project, mark_ids, self._refresh_and_update))
+            handled = True
         for item in items:
             if hasattr(item, 'group_label_id'):
                 cmd = DeleteGroupLabelCommand(
@@ -3696,8 +3893,17 @@ class MainWindow(QMainWindow):
         if not cell_ids:
             return
 
+        if (self.scene is not None
+                and getattr(self.scene, 'draw_mode', False)
+                and not any(self.project.find_mark(cid) for cid in cell_ids)):
+            return  # non-mark rows are inert while Draw mode is on
+
         if len(cell_ids) == 1:
             target_id = cell_ids[0]
+
+            if self.project.find_mark(target_id) is not None:
+                self._on_mark_context_menu(target_id, global_pos)
+                return
 
             # PiP items don't live in project.cells, so find_cell_by_id
             # returns None. Scan every leaf cell's pip_items to find the
@@ -3912,20 +4118,33 @@ class MainWindow(QMainWindow):
                 return self._clamp_to_page(*center)
         return self._clamp_to_page(*self._default_text_position())
 
-    def _on_paste_clipboard(self):
-        """Ctrl+V: image into selected cell(s), or text as floating text."""
-        if self._crop_active or self.project is None:
-            return
-        # Never steal paste from an in-canvas text item being edited.
+    def _canvas_text_editing(self) -> bool:
+        """True while an in-canvas text item is in editor mode."""
         try:
             focus = self.scene.focusItem() if self.scene is not None else None
         except RuntimeError:
             focus = None
         flags = getattr(focus, "textInteractionFlags", None)
-        if flags is not None and (
-                flags() & Qt.TextInteractionFlag.TextEditorInteraction):
+        return bool(flags is not None and (
+            flags() & Qt.TextInteractionFlag.TextEditorInteraction))
+
+    def _on_paste_clipboard(self):
+        """Ctrl+V: shapes in Draw mode; otherwise image into cells or text."""
+        if self._crop_active or self.project is None:
             return
-        content = read_clipboard(QApplication.clipboard().mimeData())
+        # Never steal paste from an in-canvas text item being edited.
+        if self._canvas_text_editing():
+            return
+        mime = QApplication.clipboard().mimeData()
+        if mime.hasFormat(mark_clipboard.MARKS_MIME):
+            self._paste_mark_payload(bytes(mime.data(mark_clipboard.MARKS_MIME)))
+            return
+        if getattr(self.scene, 'draw_mode', False):
+            # Images/text must not be pasted while Draw mode is on.
+            self.statusBar().showMessage(
+                tr("status_paste_draw_mode_shapes_only"), 4000)
+            return
+        content = read_clipboard(mime)
         if content.preferred is None:
             self.statusBar().showMessage(
                 tr("status_paste_web_image_link") if content.web_image_link
@@ -4930,6 +5149,8 @@ class MainWindow(QMainWindow):
             if self.scene:
                 self.scene.cancel_define_export_region()
             return
+        if self.scene and getattr(self.scene, 'draw_mode', False):
+            self.scene.set_draw_mode(False)
         # Auto-create a region spanning the full canvas.
         pw = float(self.project.page_width_mm)
         ph = float(self.project.page_height_mm)
@@ -4976,8 +5197,305 @@ class MainWindow(QMainWindow):
         cmd = ClearExportRegionCommand(self.project, self._refresh_and_update)
         self.undo_stack.push(cmd)
 
+    # ------------------------------------------------------------------
+    # Vector marks — draw tools, geometry edits, z-order, context menu
+    # ------------------------------------------------------------------
+
+    def _set_draw_mode(self, on: bool, tool=None):
+        """Enter/leave Draw mode on the active scene (mutually exclusive with
+        preview mode, export-region defining and crop mode)."""
+        if self.scene is None:
+            return
+        if on:
+            if (hasattr(self, '_act_set_export_region')
+                    and self._act_set_export_region.isChecked()):
+                self._act_set_export_region.blockSignals(True)
+                self._act_set_export_region.setChecked(False)
+                self._act_set_export_region.blockSignals(False)
+                self.scene.cancel_define_export_region()
+            if self.scene.preview_mode:
+                self._act_preview_mode.setChecked(False)
+                # setChecked() alone doesn't fire the triggered slot.
+                self._on_toggle_preview_mode(False)
+            crop = getattr(self.scene, '_active_crop_cell', None)
+            if crop is not None:
+                crop.exit_crop_mode(commit=True)
+            if tool is not None:
+                self._last_draw_tool = tool
+            sticky = bool(self._act_keep_tool_active.isChecked())
+            self.scene.set_draw_mode(True, tool=tool, sticky=sticky)
+        else:
+            self.scene.set_draw_mode(False)
+
+    def _activate_draw_tool(self, tool):
+        """Enter Draw mode armed with `tool`; None = Select Shapes."""
+        if self.scene is None:
+            return
+        if tool is None:
+            if getattr(self.scene, 'draw_mode', False):
+                self.scene.set_draw_tool(None)
+            else:
+                self._set_draw_mode(True, None)
+            return
+        self._set_draw_mode(True, tool=tool)
+
+    def _on_keep_tool_active_toggled(self, checked: bool):
+        self._settings.setValue("marks/keep_tool_active", checked)
+        if self.scene is not None and getattr(self.scene, 'draw_mode', False):
+            self.scene._draw_sticky = bool(checked)
+
+    def _polygon_sides(self) -> int:
+        """Last-used regular-polygon side count (3–24, default 6)."""
+        try:
+            return max(3, min(24, int(
+                self._settings.value("marks/polygon_sides", 6))))
+        except (TypeError, ValueError):
+            return 6
+
+    def _on_polygon_sides_changed(self, n: int):
+        n = max(3, min(24, int(n)))
+        self._settings.setValue("marks/polygon_sides", n)
+        for tab in getattr(self, '_tabs', []):
+            tab.scene.polygon_sides = n
+
+    def _apply_draw_mode_action_state(self, on: bool):
+        """Disable non-mark actions while Draw mode is on; restore on exit."""
+        targets = [
+            self._act_add_text, self._act_delete_img,
+            self._act_auto_label_incell, self._act_auto_label_outcell,
+            self._act_auto_layout, self._auto_layout_button,
+            self._act_align_plots, self._act_bake, self._act_grid_mode,
+            self._act_set_export_region, self._act_clear_export_region,
+            self._act_import,
+        ]
+        if hasattr(self, '_act_open_plot_editor'):
+            targets.append(self._act_open_plot_editor)
+        if hasattr(self, '_act_placement_menu'):
+            targets.append(self._act_placement_menu.menuAction())
+        if on:
+            if getattr(self, '_draw_saved_enabled', None):
+                return
+            self._draw_saved_enabled = [
+                (t, t.isEnabled()) for t in targets if t is not None]
+            for t, _was in self._draw_saved_enabled:
+                t.setEnabled(False)
+        else:
+            for t, was in getattr(self, '_draw_saved_enabled', []) or []:
+                t.setEnabled(was)
+            self._draw_saved_enabled = []
+
+    def _update_draw_mode_indicator(self):
+        if not hasattr(self, 'draw_mode_label'):
+            return
+        on = self.scene is not None and getattr(self.scene, 'draw_mode', False)
+        if not on:
+            self.draw_mode_label.hide()
+            return
+        tool = getattr(self.scene, 'draw_tool', None)
+        tool_name = tr(f"tool_{tool}") if tool else tr("tool_select")
+        text = tr("status_draw_mode").format(tool=tool_name)
+        self.draw_mode_label.setText(
+            f'<a href="leave" style="color:#FFFFFF; text-decoration:none;">'
+            f'{text}</a>')
+        self.draw_mode_label.setToolTip(tr("tip_status_draw_mode"))
+        self.draw_mode_label.show()
+
+    def _on_draw_mode_changed(self, on: bool):
+        """Mirror the scene's Draw-mode flag onto window-level UI."""
+        self._act_draw_mode.blockSignals(True)
+        self._act_draw_mode.setChecked(on)
+        self._act_draw_mode.blockSignals(False)
+        self._apply_draw_mode_action_state(on)
+        if hasattr(self, 'layers_panel'):
+            self.layers_panel.set_draw_mode(on)
+        if not on:
+            self.statusbar.clearMessage()
+        self._update_draw_mode_indicator()
+        self._on_selection_changed()
+
+    def _on_draw_tool_changed(self, tool):
+        for name, act in self._mark_tool_actions.items():
+            act.blockSignals(True)
+            act.setChecked(name == (tool or "select"))
+            act.blockSignals(False)
+        if tool in self._draw_tools:
+            self._last_draw_tool = tool
+        if (self.scene is not None
+                and getattr(self.scene, 'draw_mode', False)):
+            if tool:
+                self.statusbar.showMessage(tr(f"hint_draw_{tool}"))
+            else:
+                self.statusbar.showMessage(tr("hint_draw_select"))
+        else:
+            self.statusbar.clearMessage()
+        self._draw_button.setToolTip(tr("tip_draw_button"))
+        self._update_draw_mode_indicator()
+
+    def _selected_marks_zorder(self):
+        """Selected marks in project z-order (project.marks order)."""
+        ids = {i.mark_id for i in self.scene.selectedItems()
+               if hasattr(i, 'mark_id')}
+        return [m for m in self.project.marks if m.id in ids]
+
+    def _select_marks(self, marks):
+        from PyQt6.QtCore import QSignalBlocker
+        with QSignalBlocker(self.scene):
+            self.scene.clearSelection()
+            for m in marks:
+                item = self.scene.mark_items.get(m.id)
+                if item is not None:
+                    item.setSelected(True)
+        self._on_selection_changed()
+
+    def _update_mark_clipboard_actions(self, items=None):
+        """Copy/Duplicate Shapes are live only with marks selected in Draw mode."""
+        if not hasattr(self, '_act_copy_shapes'):
+            return
+        if items is None:
+            try:
+                items = self.scene.selectedItems()
+            except RuntimeError:
+                items = []
+        on = (self.scene is not None
+              and getattr(self.scene, 'draw_mode', False)
+              and any(hasattr(i, 'mark_id') for i in items))
+        self._act_copy_shapes.setEnabled(on)
+        self._act_duplicate_shapes.setEnabled(on)
+
+    def _on_copy_shapes(self):
+        """Ctrl+C: serialise the selected marks (project z-order)."""
+        if self._canvas_text_editing() or self.scene is None:
+            return
+        marks = self._selected_marks_zorder()
+        if not marks:
+            return
+        payload = mark_clipboard.marks_to_payload(marks)
+        md = QMimeData()
+        md.setData(mark_clipboard.MARKS_MIME, QByteArray(payload))
+        QApplication.clipboard().setMimeData(md)
+        self._mark_paste_state = None  # reset the paste cascade
+
+    def _on_duplicate_shapes(self):
+        """Ctrl+D: offset-copy the selected marks, one undo step."""
+        if self._canvas_text_editing() or self.scene is None:
+            return
+        marks = self._selected_marks_zorder()
+        if not marks:
+            return
+        new_marks = mark_clipboard.offset_marks(marks, 2.0, 2.0)
+        self.undo_stack.push(AddMarksCommand(
+            self.project, new_marks, self._refresh_and_update,
+            text="Duplicate Shapes"))
+        self._select_marks(new_marks)
+
+    def _paste_mark_payload(self, payload: bytes):
+        """Ctrl+V with a marks payload on the clipboard."""
+        try:
+            marks = mark_clipboard.marks_from_payload(payload)
+        except ValueError:
+            self.statusBar().showMessage(
+                tr("status_paste_shapes_invalid"), 4000)
+            return
+        if not getattr(self.scene, 'draw_mode', False):
+            self._set_draw_mode(True, None)
+        state = self._mark_paste_state
+        if (state is not None and state[0] == payload
+                and state[1] == id(self.project)):
+            count, base = state[2], state[3]
+        else:
+            # Base step is fixed on the first paste: 1 while the originals
+            # still sit at the payload geometry, else 0 (later pastes would
+            # otherwise match the first pasted copy and skip a step).
+            count = 0
+            base = mark_clipboard.paste_offset_steps(
+                marks, self.project.marks, 0)
+        k = base + count
+        new_marks = mark_clipboard.offset_marks(marks, 2.0 * k, 2.0 * k)
+        self._mark_paste_state = (payload, id(self.project), count + 1, base)
+        self.undo_stack.push(AddMarksCommand(
+            self.project, new_marks, self._refresh_and_update,
+            text="Paste Shapes"))
+        self._select_marks(new_marks)
+
+    def _on_mark_drawn(self, mark):
+        self.undo_stack.push(
+            AddMarkCommand(self.project, mark, self._refresh_and_update))
+        item = self.scene.mark_items.get(mark.id)
+        if item is not None:
+            from PyQt6.QtCore import QSignalBlocker
+            with QSignalBlocker(self.scene):
+                self.scene.clearSelection()
+                item.setSelected(True)
+            self._on_selection_changed()
+
+    def _on_marks_geometry_changed(self, changes):
+        """List of (mark_id, old_points, new_points) committed by a drag."""
+        if not changes:
+            return
+        desc = "Move Marks" if len(changes) > 1 else "Reshape Mark"
+        if len(changes) > 1:
+            self.undo_stack.beginMacro(desc)
+        for mark_id, _old, new in changes:
+            self.undo_stack.push(MarkPropertyChangeCommand(
+                self.project, [mark_id], {"points": new},
+                self._refresh_and_update, description=desc, merge=False))
+        if len(changes) > 1:
+            self.undo_stack.endMacro()
+
+    def _reorder_marks(self, mark_ids, front: bool):
+        order = [m.id for m in self.project.marks]
+        want = set(mark_ids)
+        sel = [mid for mid in order if mid in want]
+        if not sel:
+            return
+        rest = [mid for mid in order if mid not in want]
+        new_order = rest + sel if front else sel + rest
+        if new_order != order:
+            self.undo_stack.push(ReorderMarksCommand(
+                self.project, new_order, self._refresh_and_update,
+                description="Bring to Front" if front else "Send to Back"))
+
+    def _on_mark_context_menu(self, mark_id, screen_pos):
+        menu = QMenu(self)
+        menu.addAction(self._act_copy_shapes)
+        menu.addAction(self._act_duplicate_shapes)
+        menu.addSeparator()
+        act_front = menu.addAction(tr("action_bring_front"))
+        act_back = menu.addAction(tr("action_send_back"))
+        menu.addSeparator()
+        act_del = menu.addAction(tr("action_delete_sel"))
+        pos = screen_pos if hasattr(screen_pos, 'x') else QCursor.pos()
+        chosen = menu.exec(pos)
+        if chosen is act_front:
+            self._reorder_marks([mark_id], front=True)
+        elif chosen is act_back:
+            self._reorder_marks([mark_id], front=False)
+        elif chosen is act_del:
+            self.undo_stack.push(DeleteMarksCommand(
+                self.project, [mark_id], self._refresh_and_update))
+
+    def _on_mark_property_changed(self, changes):
+        ids = [i.mark_id for i in self.scene.selectedItems()
+               if hasattr(i, 'mark_id')]
+        if ids:
+            self.undo_stack.push(MarkPropertyChangeCommand(
+                self.project, ids, changes, self._refresh_and_update,
+                merge=True))
+
+    def _on_mark_delete_requested(self):
+        ids = [i.mark_id for i in self.scene.selectedItems()
+               if hasattr(i, 'mark_id')]
+        if ids:
+            self.undo_stack.push(DeleteMarksCommand(
+                self.project, ids, self._refresh_and_update))
+
     def _on_bring_to_front(self):
-        """Increment z_index of all selected cells (undoable)."""
+        """Bring selected marks to the front of their stack, else bump cell z."""
+        mark_ids = [i.mark_id for i in self.scene.selectedItems()
+                    if hasattr(i, 'mark_id')]
+        if mark_ids:
+            self._reorder_marks(mark_ids, front=True)
+            return
         cells = [self.project.find_cell_by_id(cid) for cid in self._get_selected_cell_ids()]
         cells = [c for c in cells if c is not None]
         if cells:
@@ -4985,7 +5503,12 @@ class MainWindow(QMainWindow):
             self.undo_stack.push(cmd)
 
     def _on_send_to_back(self):
-        """Decrement z_index of all selected cells (undoable)."""
+        """Send selected marks to the back of their stack, else bump cell z."""
+        mark_ids = [i.mark_id for i in self.scene.selectedItems()
+                    if hasattr(i, 'mark_id')]
+        if mark_ids:
+            self._reorder_marks(mark_ids, front=False)
+            return
         cells = [self.project.find_cell_by_id(cid) for cid in self._get_selected_cell_ids()]
         cells = [c for c in cells if c is not None]
         if cells:
@@ -5731,6 +6254,18 @@ class MainWindow(QMainWindow):
 
     def dragEnterEvent(self, event):
         md = event.mimeData()
+        if (self.scene is not None
+                and getattr(self.scene, 'draw_mode', False)):
+            # Draw mode: only project files may be dropped (they open in a
+            # new tab); image/folder drops into the layout are ignored.
+            if md.hasUrls() and any(
+                u.isLocalFile() and self._is_project_drop_path(u.toLocalFile())
+                for u in md.urls()
+            ):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
         if md.hasUrls() and any(
             self._is_supported_drop_path(u.toLocalFile())
             for u in md.urls() if u.isLocalFile()
@@ -5752,6 +6287,9 @@ class MainWindow(QMainWindow):
             u.toLocalFile() for u in md.urls()
             if u.isLocalFile() and self._is_supported_drop_path(u.toLocalFile())
         ]
+        if self.scene is not None and getattr(self.scene, 'draw_mode', False):
+            # In Draw mode only project-file drops stay allowed.
+            paths = [p for p in paths if self._is_project_drop_path(p)]
         if not paths:
             super().dropEvent(event)
             return

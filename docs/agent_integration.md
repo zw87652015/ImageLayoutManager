@@ -1,6 +1,6 @@
 # ImageLayoutManager — Agent Integration Design
 
-**Status**: implemented MCP/GUI bridge, 36-tool surface  
+**Status**: implemented MCP/GUI bridge, 43-tool surface  
 **Owner**: zw87652015  
 **Date**: 2026-05-29
 
@@ -219,6 +219,18 @@ from `src/agent/tool_specs.py`.
 |------|----------|
 | `export_region_set` | `x_mm, y_mm, w_mm, h_mm` |
 | `export_region_clear` | — |
+
+### 6.10 Vector marks
+
+| Tool | Key args |
+|------|----------|
+| `mark_add` | `kind, points, closed?, stroke_*?, fill_*?, arrow_*?` |
+| `mark_update` | `mark_id, same fields as mark_add (id/kind fixed)` |
+| `mark_remove` | `mark_id` |
+| `mark_reorder` | `mark_id, to: 'front'\|'back'` |
+
+Coordinates are absolute page mm; rect/ellipse `points` are two opposite
+corners, and arrowheads go on lines or open polygons (`closed=false`).
 
 ---
 

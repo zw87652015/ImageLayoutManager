@@ -1,13 +1,16 @@
 import copy
+import math
 import os
 from dataclasses import replace
 
-from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent, QGraphicsSimpleTextItem
+from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent, QGraphicsSimpleTextItem, QGraphicsItem
 from PyQt6.QtGui import QColor, QFont, QPen, QBrush, QPainter, QPainterPath
 from PyQt6.QtCore import Qt, QEasingCurve, QPointF, pyqtSignal, QRectF, QVariantAnimation
 
-from src.model.data_model import Project, Cell
+from src.model.data_model import Project, Cell, mark_for_tool
 from src.canvas.cell_item import CellItem
+from src.canvas.mark_item import MarkItem
+from src.utils import mark_geometry
 from src.canvas.text_graphics_item import TextGraphicsItem
 from src.model.layout_engine import LayoutEngine
 from src.canvas.drag_manager import DragManager
@@ -51,6 +54,11 @@ class CanvasScene(QGraphicsScene):
     group_label_side_dropped = pyqtSignal(str, str)  # group_label_id, new side
     group_label_level_dropped = pyqtSignal(str, int)  # group_label_id, new level
     label_placement_dropped = pyqtSignal(str, str)  # text_item_id, new placement
+    mark_drawn = pyqtSignal(object)               # Mark
+    marks_geometry_changed = pyqtSignal(list)     # [(mark_id, old_points, new_points)]
+    mark_context_menu = pyqtSignal(str, object)   # mark_id, screen_pos
+    draw_tool_changed = pyqtSignal(object)        # str tool name or None
+    draw_mode_changed = pyqtSignal(bool)          # True while Draw mode is on
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -59,6 +67,20 @@ class CanvasScene(QGraphicsScene):
         self.label_cell_items = {} # "label_{cell_id}" -> CellItem (label-only cells)
         self.group_label_items = {} # group_label_id -> GroupLabelItem
         self.text_items = {} # id -> TextGraphicsItem
+        self.mark_items = {} # mark_id -> MarkItem
+
+        # Draw-tool state: marks are sketched at scene level like the
+        # export-region rubber-band, then committed as model marks.
+        self.draw_mode = False         # Draw mode: only marks are interactive
+        self.draw_tool = None          # MARK_TOOLS name or None (= Select Shapes)
+        self.polygon_sides = 6         # regular polygon tool; set by MainWindow
+        self._draw_sticky = False      # keep the tool after completing a shape
+        self._draw_anchor = None       # QPointF press point for drag shapes
+        self._draw_poly = []           # in-progress polygon/polyline vertices
+        self._draw_preview_item = None # transient MarkItem ghost
+        self._suppress_draw_ctx = False # skip context menu after right-finish
+        self._draw_lock_state = {}     # item -> pre-lock interaction state
+        self._view_scale = 1.0         # px-per-mm, fed by CanvasView transform
         self._add_buttons = [] # list of AddButtonItem
         self._cell_data_cache = {}  # cell_id -> fingerprint tuple for change detection
 
@@ -98,6 +120,9 @@ class CanvasScene(QGraphicsScene):
         # Split-depth cue: dashed outline of a selected subcell's parent
         self._parent_hint = None
         self.selectionChanged.connect(self._update_parent_hint)
+        # Handle visibility on marks depends on the whole selection, so
+        # every selection change repaints them (selection markers/handles).
+        self.selectionChanged.connect(self._refresh_mark_item_decoration)
 
         # Export region: view/editable model proxy. The item is created on-demand
         # when project.export_region is set or when user enters "defining" mode.
@@ -199,6 +224,7 @@ class CanvasScene(QGraphicsScene):
         for item in (list(self.cell_items.values())
                      + list(self.label_cell_items.values())
                      + list(self.group_label_items.values())
+                     + list(self.mark_items.values())
                      + list(self.text_items.values())):
             item.update()
 
@@ -567,8 +593,96 @@ class CanvasScene(QGraphicsScene):
         # Sync export-region overlay
         self.refresh_export_region()
 
+        # Sync vector marks (fixed page mm, independent of the layout)
+        self._sync_mark_items()
+
         # Re-sync the split-depth cue (parent rect may have moved)
         self._update_parent_hint()
+
+        # Items (re)created/re-enabled by this refresh must stay locked.
+        self._apply_draw_lock()
+
+    def _apply_draw_lock(self):
+        """Strip mouse/hover/select/focus/cursor from every non-mark item."""
+        if not self.draw_mode:
+            return
+        for item in self.items():
+            self._lock_item(item)
+
+    _LOCKED_STATE = (Qt.MouseButton.NoButton, False, False, False, None)
+
+    def _lock_item(self, item):
+        if isinstance(item, MarkItem) or item is self._draw_preview_item:
+            return
+        flags = QGraphicsItem.GraphicsItemFlag
+        cur = (item.acceptedMouseButtons(), item.acceptHoverEvents(),
+               bool(item.flags() & flags.ItemIsSelectable),
+               bool(item.flags() & flags.ItemIsFocusable),
+               item.cursor() if item.hasCursor() else None)
+        # If a refresh re-enabled the item while locked, its current state
+        # becomes the new originals; otherwise keep the stored ones.
+        if item not in self._draw_lock_state or cur != self._LOCKED_STATE:
+            self._draw_lock_state[item] = cur
+        item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        item.setAcceptHoverEvents(False)
+        item.setFlag(flags.ItemIsSelectable, False)
+        item.setFlag(flags.ItemIsFocusable, False)
+        if item.hasCursor():
+            item.unsetCursor()
+
+    def _remove_draw_lock(self):
+        for item, rec in list(self._draw_lock_state.items()):
+            if item.scene() is not self:
+                continue
+            buttons, hover, selectable, focusable, cursor = rec
+            item.setAcceptedMouseButtons(buttons)
+            item.setAcceptHoverEvents(hover)
+            flags = QGraphicsItem.GraphicsItemFlag
+            item.setFlag(flags.ItemIsSelectable, selectable)
+            item.setFlag(flags.ItemIsFocusable, focusable)
+            if cursor is None:
+                item.unsetCursor()
+            else:
+                item.setCursor(cursor)
+        self._draw_lock_state.clear()
+
+    def _refresh_mark_item_decoration(self):
+        for item in self.mark_items.values():
+            item.update()
+
+    def _sync_mark_items(self):
+        """Mirror project.marks into MarkItems; list order is the z-stack."""
+        project_ids = set(m.id for m in self.project.marks)
+        for mid in set(self.mark_items) - project_ids:
+            self.removeItem(self.mark_items[mid])
+            del self.mark_items[mid]
+        for i, mark in enumerate(self.project.marks):
+            item = self.mark_items.get(mark.id)
+            if item is None:
+                item = MarkItem(mark)
+                self.addItem(item)
+                self.mark_items[mark.id] = item
+            item.set_interactive(self.draw_mode)
+            # z 90+i·0.001: above cells/group labels (5), below text (100)
+            item.set_model(mark, 90 + i * 0.001)
+
+    def set_view_scale(self, m11: float):
+        """Feed the view's px-per-mm factor so hit widths stay zoom-invariant."""
+        m11 = m11 or 1.0
+        if abs(m11 - self._view_scale) < 1e-9:
+            return
+        self._view_scale = m11
+        for item in self.mark_items.values():
+            item.prepareGeometryChange()
+            item.update()
+        # The export-region badge is device-pixel sized, so its bounds in mm
+        # change with zoom too.
+        if self._export_region_item is not None:
+            self._export_region_item.prepareGeometryChange()
+            self._export_region_item.update()
+
+    def px_to_mm(self, px: float) -> float:
+        return px / self._view_scale
 
     def get_snap_lines(self, ignore_cell_id: str = None, include_page_edges: bool = False):
         """Return lists of vertical (x) and horizontal (y) coordinates for snapping."""
@@ -674,6 +788,9 @@ class CanvasScene(QGraphicsScene):
             t_item.cell_bounds = (ex, ey, ew, eh)
 
     def dragEnterEvent(self, event: QGraphicsSceneDragDropEvent):
+        if self.draw_mode:
+            event.ignore()
+            return
         if event.mimeData().hasUrls():
             self._drag_target_cell = None
             event.accept()
@@ -681,6 +798,9 @@ class CanvasScene(QGraphicsScene):
             event.ignore()
 
     def dragMoveEvent(self, event: QGraphicsSceneDragDropEvent):
+        if self.draw_mode:
+            event.ignore()
+            return
         if not event.mimeData().hasUrls():
             event.ignore()
             return
@@ -718,6 +838,9 @@ class CanvasScene(QGraphicsScene):
 
     def dropEvent(self, event: QGraphicsSceneDragDropEvent):
         # Handle File Drop (External only — internal cell swap is handled by DragManager)
+        if self.draw_mode:
+            event.ignore()
+            return
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if not urls:
@@ -1151,6 +1274,7 @@ class CanvasScene(QGraphicsScene):
                 self.removeItem(self._export_region_item)
             self._export_region_item = None
             self._hide_preview_region_veil()
+            self._apply_draw_lock()
             return
         if self._export_region_item is None:
             self._export_region_item = ExportRegionItem(er.x_mm, er.y_mm, er.w_mm, er.h_mm)
@@ -1162,6 +1286,7 @@ class CanvasScene(QGraphicsScene):
         # Keep veil in sync when region changes during preview mode
         if self.preview_mode:
             self._show_preview_region_veil()
+        self._apply_draw_lock()
 
     def begin_define_export_region(self):
         """Enter rubber-band mode — next left-press on empty page area starts the drag."""
@@ -1691,8 +1816,261 @@ class CanvasScene(QGraphicsScene):
         if was_active and _emit:
             self.crop_mode_active.emit(False)
 
+    # ── vector-mark draw tool ─────────────────────────────────────────
+
+    _DRAW_DRAG_TOOLS = ("line", "arrow", "rect", "ellipse", "polygon")
+    _DRAW_POLY_TOOLS = ("polyline",)
+
+    def set_draw_mode(self, on: bool, tool=None, sticky: bool = False):
+        """Enter/leave Draw mode: only marks accept interaction while on.
+        `tool` (a MARK_TOOLS name or None for Select Shapes) is armed on
+        entry; inside the mode the tool can change freely."""
+        if on == self.draw_mode:
+            if tool != self.draw_tool or bool(sticky) != self._draw_sticky:
+                self.set_draw_tool(tool, sticky)
+            return
+        if on:
+            self.cancel_drawing()
+            self.clearSelection()
+            self.clearFocus()
+            if self.focusItem() is not None:
+                self.focusItem().clearFocus()
+            self.draw_mode = True
+            self._apply_draw_lock()
+            for item in self.mark_items.values():
+                item.set_interactive(True)
+            self.draw_mode_changed.emit(True)
+            if tool is not None:
+                self.set_draw_tool(tool, sticky)
+        else:
+            self.cancel_drawing()
+            self.draw_mode = False
+            if self.draw_tool is not None:
+                self.draw_tool = None
+                self._draw_sticky = False
+                self._refresh_mark_item_decoration()
+                self.draw_tool_changed.emit(None)
+            self.clearSelection()
+            self._remove_draw_lock()
+            for item in self.mark_items.values():
+                item.set_interactive(False)
+            for view in self.views():
+                view.viewport().unsetCursor()
+            self.draw_mode_changed.emit(False)
+
+    def set_draw_tool(self, tool, sticky: bool = False):
+        """Arm a mark draw tool (MARK_TOOLS name) or None for Select Shapes."""
+        if tool is not None and not self.draw_mode:
+            self.set_draw_mode(True, tool, sticky)
+            return
+        if self.draw_tool == tool:
+            self._draw_sticky = bool(sticky)
+            return
+        self.cancel_drawing()
+        self.draw_tool = tool
+        self._draw_sticky = bool(sticky)
+        if tool is not None:
+            self.clearSelection()
+            for view in self.views():
+                view.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            for view in self.views():
+                view.viewport().unsetCursor()
+        # Handle visibility is gated on draw_tool — repaint all marks.
+        self._refresh_mark_item_decoration()
+        self.draw_tool_changed.emit(tool)
+
+    def cancel_drawing(self):
+        """Drop any in-progress shape and its ghost (tool stays armed)."""
+        self._draw_anchor = None
+        self._draw_poly = []
+        if self._draw_preview_item is not None:
+            if self._draw_preview_item.scene() is not None:
+                self.removeItem(self._draw_preview_item)
+            self._draw_preview_item = None
+
+    def _refresh_draw_preview_modifiers(self, modifiers):
+        """Re-run the ghost with new modifiers so Shift/Ctrl apply at once."""
+        pos = getattr(self, '_draw_last_pos', None)
+        if (self.draw_tool and pos is not None
+                and (self._draw_anchor is not None or self._draw_poly)):
+            self._update_draw_preview(pos, modifiers)
+
+    def keyReleaseEvent(self, event):
+        if (self.draw_mode
+                and event.key() in (Qt.Key.Key_Shift, Qt.Key.Key_Control)):
+            self._refresh_draw_preview_modifiers(event.modifiers())
+        super().keyReleaseEvent(event)
+
+    def draw_key_press(self, event) -> bool:
+        """Offer a key to Draw mode / the armed draw tool; True when consumed."""
+        if not self.draw_mode:
+            return False
+        key = event.key()
+        in_progress = self._draw_anchor is not None or self._draw_poly
+        if key in (Qt.Key.Key_Shift, Qt.Key.Key_Control):
+            self._refresh_draw_preview_modifiers(event.modifiers())
+            return bool(in_progress)
+        if key == Qt.Key.Key_Escape:
+            if in_progress:
+                self.cancel_drawing()
+            else:
+                self.set_draw_mode(False)
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._draw_poly:
+                self._finish_poly_shape()
+            return True
+        if key == Qt.Key.Key_Backspace:
+            if self._draw_poly:
+                self._draw_poly.pop()
+                self._update_draw_preview(self._draw_poly[-1]
+                                          if self._draw_poly else QPointF(),
+                                          event.modifiers())
+                if not self._draw_poly:
+                    self.cancel_drawing()
+            return True
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_Left,
+                   Qt.Key.Key_Right, Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+            return True  # no cell navigation while in Draw mode
+        return in_progress  # swallow other keys only while sketching
+
+    def _draw_preview(self, mark):
+        if self._draw_preview_item is None:
+            self._draw_preview_item = MarkItem(mark, preview=True)
+            self.addItem(self._draw_preview_item)
+        else:
+            self._draw_preview_item.set_model(mark, 95)
+
+    def _emit_mark(self, mark):
+        self.mark_drawn.emit(mark)
+        if not self._draw_sticky:
+            self.set_draw_tool(None)
+
+    def _draw_press(self, scene_pos: QPointF, modifiers):
+        tool = self.draw_tool
+        x, y = scene_pos.x(), scene_pos.y()
+        if tool == "dot":
+            self._emit_mark(mark_for_tool("dot", [[x, y]]))
+            return
+        if tool in self._DRAW_DRAG_TOOLS:
+            self._draw_anchor = QPointF(scene_pos)
+            self._update_draw_preview(scene_pos, modifiers)
+            return
+        if tool in self._DRAW_POLY_TOOLS:
+            first_ok = len(self._draw_poly) >= 2  # polyline minimum
+            if self._draw_poly and first_ok:
+                fx, fy = self._draw_poly[0].x(), self._draw_poly[0].y()
+                if (fx - x) ** 2 + (fy - y) ** 2 <= self.px_to_mm(8) ** 2:
+                    self._finish_poly_shape()
+                    return
+            px, py = x, y
+            if self._draw_poly and modifiers & Qt.KeyboardModifier.ShiftModifier:
+                last = self._draw_poly[-1]
+                px, py = mark_geometry.snap_angle([last.x(), last.y()], [x, y])
+            if self._draw_poly:
+                lx, ly = self._draw_poly[-1].x(), self._draw_poly[-1].y()
+                if (lx - px) ** 2 + (ly - py) ** 2 <= self.px_to_mm(4) ** 2:
+                    return  # ignore presses duplicating the last vertex
+            self._draw_poly.append(QPointF(px, py))
+            self._update_draw_preview(scene_pos, modifiers)
+
+    def _update_draw_preview(self, scene_pos: QPointF, modifiers):
+        tool = self.draw_tool
+        if tool is None:
+            return
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        p = [scene_pos.x(), scene_pos.y()]
+        if tool == "polygon" and self._draw_anchor is not None:
+            # Regular polygon: press = centre, drag = radius + rotation
+            # (the cursor sits on vertex 0). Shift snaps rotation to 15°.
+            a = [self._draw_anchor.x(), self._draw_anchor.y()]
+            dx, dy = p[0] - a[0], p[1] - a[1]
+            radius = math.hypot(dx, dy)
+            rot = math.atan2(dy, dx)
+            if shift:
+                rot = mark_geometry.snap_rotation(rot)
+            self._draw_preview(mark_for_tool(
+                "polygon",
+                mark_geometry.regular_polygon_points(
+                    a[0], a[1], radius, self.polygon_sides, rot)))
+        elif tool in ("line", "arrow") and self._draw_anchor is not None:
+            a = [self._draw_anchor.x(), self._draw_anchor.y()]
+            end = mark_geometry.snap_angle(a, p) if shift else p
+            self._draw_preview(mark_for_tool(tool, [a, end]))
+        elif tool in ("rect", "ellipse") and self._draw_anchor is not None:
+            a = [self._draw_anchor.x(), self._draw_anchor.y()]
+            box = mark_geometry.constrain_box(a, p, square=shift,
+                                            from_center=ctrl)
+            self._draw_preview(mark_for_tool(tool, box))
+        elif tool in self._DRAW_POLY_TOOLS and self._draw_poly:
+            last = self._draw_poly[-1]
+            nxt = (mark_geometry.snap_angle([last.x(), last.y()], p)
+                   if shift else p)
+            pts = [[q.x(), q.y()] for q in self._draw_poly] + [nxt]
+            self._draw_preview(mark_for_tool(tool, pts))
+
+    def _draw_drag_release(self, scene_pos: QPointF, modifiers):
+        tool = self.draw_tool
+        anchor = self._draw_anchor
+        self._draw_anchor = None
+        if tool not in self._DRAW_DRAG_TOOLS or anchor is None:
+            self.cancel_drawing()
+            return
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        a = [anchor.x(), anchor.y()]
+        p = [scene_pos.x(), scene_pos.y()]
+        if tool == "polygon":
+            dx, dy = p[0] - a[0], p[1] - a[1]
+            radius = math.hypot(dx, dy)
+            rot = math.atan2(dy, dx)
+            if shift:
+                rot = mark_geometry.snap_rotation(rot)
+            points = mark_geometry.regular_polygon_points(
+                a[0], a[1], radius, self.polygon_sides, rot)
+        elif tool in ("line", "arrow"):
+            end = mark_geometry.snap_angle(a, p) if shift else p
+            points = [a, end]
+        else:
+            points = mark_geometry.constrain_box(a, p, square=shift,
+                                                 from_center=ctrl)
+        mark = mark_for_tool(tool, points)
+        self.cancel_drawing()
+        if mark_geometry.is_degenerate(mark.kind, mark.points, mark.closed):
+            return  # discard and stay in the tool
+        self._emit_mark(mark)
+
+    def _finish_poly_shape(self):
+        tool = self.draw_tool
+        pts = [[q.x(), q.y()] for q in self._draw_poly]
+        self._draw_poly = []
+        if self._draw_preview_item is not None:
+            if self._draw_preview_item.scene() is not None:
+                self.removeItem(self._draw_preview_item)
+            self._draw_preview_item = None
+        if tool not in self._DRAW_POLY_TOOLS:
+            return
+        mark = mark_for_tool(tool, pts)
+        if mark_geometry.is_degenerate(mark.kind, mark.points, mark.closed):
+            return  # discard and stay in the tool
+        self._emit_mark(mark)
+
     def mousePressEvent(self, event):
         """Intercept clicks outside the active crop cell to commit and exit crop mode."""
+        # Draw tool owns left presses entirely; right-click finishes a polyline.
+        if self.draw_tool and event.button() == Qt.MouseButton.LeftButton:
+            self._draw_press(event.scenePos(), event.modifiers())
+            event.accept()
+            return
+        if (self.draw_tool and event.button() == Qt.MouseButton.RightButton
+                and self._draw_poly):
+            self._finish_poly_shape()
+            self._suppress_draw_ctx = True
+            event.accept()
+            return
+
         # Export-region defining mode — left-click starts the rubber-band.
         if self._defining_export_region and event.button() == Qt.MouseButton.LeftButton:
             self._defining_start_pos = event.scenePos()
@@ -1738,6 +2116,11 @@ class CanvasScene(QGraphicsScene):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self.draw_tool:
+            self._draw_last_pos = QPointF(event.scenePos())
+            self._update_draw_preview(event.scenePos(), event.modifiers())
+            event.accept()
+            return
         # Update rubber-band preview while defining an export region.
         if (self._defining_export_region
                 and self._defining_start_pos is not None
@@ -1751,6 +2134,11 @@ class CanvasScene(QGraphicsScene):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if (self.draw_tool and self._draw_anchor is not None
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._draw_drag_release(event.scenePos(), event.modifiers())
+            event.accept()
+            return
         # Commit the rubber-band export-region selection.
         if (self._defining_export_region
                 and self._defining_start_pos is not None
@@ -1802,8 +2190,25 @@ class CanvasScene(QGraphicsScene):
         from PyQt6.QtCore import QPointF
         return QPointF(new_x, new_y)
 
+    def mouseDoubleClickEvent(self, event):
+        if (self.draw_tool in self._DRAW_POLY_TOOLS and self._draw_poly
+                and event.button() == Qt.MouseButton.LeftButton):
+            self._finish_poly_shape()
+            event.accept()
+            return
+        if (self.draw_tool and event.button() == Qt.MouseButton.LeftButton):
+            # A fast second click would otherwise be swallowed — treat it as
+            # a press so sticky tools keep working (dot clicks, drag anchors).
+            self._draw_press(event.scenePos(), event.modifiers())
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def keyPressEvent(self, event):
         """Enter/Return commits crop; Escape cancels crop or dismisses PiP handles."""
+        if self.draw_key_press(event):
+            event.accept()
+            return
         # Escape during define-mode cancels the rubber-band without emitting.
         if self._defining_export_region and event.key() == Qt.Key.Key_Escape:
             self.cancel_define_export_region()
@@ -1838,6 +2243,31 @@ class CanvasScene(QGraphicsScene):
         """Right-click on empty scene area (not on a CellItem or TextGraphicsItem).
         Qt only calls this on the scene when no item accepts the event, so reaching
         here means the click was on blank workspace, the page background, or margins."""
+        if (self._suppress_draw_ctx or self._draw_poly
+                or self._draw_anchor is not None):
+            self._suppress_draw_ctx = False
+            event.accept()
+            return
+        if self.draw_mode:
+            # Qt dispatches context menus to items regardless of accepted
+            # buttons, so locked cells could still pop their menus — route
+            # right-clicks to marks ourselves and swallow everything else.
+            scene_pos = event.scenePos()
+            for item in sorted(self.mark_items.values(),
+                               key=lambda i: -i.zValue()):
+                if (item.isVisible() and item.scene() is self
+                        and item.shape().contains(
+                            item.mapFromScene(scene_pos))):
+                    if not item.isSelected():
+                        if not event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                            self.clearSelection()
+                        item.setSelected(True)
+                    event.accept()
+                    self.mark_context_menu.emit(item.mark_id,
+                                                event.screenPos())
+                    return
+            event.accept()
+            return
         super().contextMenuEvent(event)
         if event.isAccepted():
             return  # an item handled it after all

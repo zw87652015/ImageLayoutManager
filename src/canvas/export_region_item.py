@@ -60,6 +60,26 @@ class ExportRegionItem(QGraphicsRectItem):
     # Paint
     # ------------------------------------------------------------------
 
+    # Device-pixel extents of the badge painted above the top-left corner
+    # (generous width so any font fits) and of the cosmetic border.
+    _BADGE_H_PX = 16
+    _BADGE_W_PX = 140
+    _PEN_PAD_PX = 2
+
+    def boundingRect(self) -> QRectF:
+        # paint() draws outside rect(): handles straddle the edges, the
+        # cosmetic border bleeds half its width, and the badge sits above the
+        # top edge in device pixels. Without covering them, moving the item
+        # leaves stale trails along the drag path.
+        r = self.rect()
+        scene = self.scene()
+        px = scene.px_to_mm if scene is not None and hasattr(scene, 'px_to_mm') else (lambda v: v * 0.5)
+        pad = _HANDLE + px(self._PEN_PAD_PX)
+        top = max(pad, px(self._BADGE_H_PX + self._PEN_PAD_PX))
+        right = max(r.right() + pad, r.left() + px(self._BADGE_W_PX))
+        return QRectF(r.left() - pad, r.top() - top,
+                      right - (r.left() - pad), r.height() + top + pad)
+
     def paint(self, painter: QPainter, option, widget=None):
         # Suppress in preview/export
         scene = self.scene()

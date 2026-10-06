@@ -17,6 +17,7 @@ envelope dict, then register it in ``_REGISTRY`` at the bottom.
 from __future__ import annotations
 
 import base64
+import math
 import os
 import tempfile
 import traceback
@@ -243,6 +244,7 @@ def project_describe(ctx: ToolContext) -> Dict[str, Any]:
         "group_labels": [
             g.to_dict() for g in getattr(p, "group_labels", [])
         ],
+        "marks": [m.to_dict() for m in getattr(p, "marks", [])],
         "size_groups": [
             {"id": g.id, "name": g.name,
              "pinned_width_mm": g.pinned_width_mm,
@@ -1684,6 +1686,175 @@ def project_set_label_style(ctx: ToolContext, **changes: Any) -> Dict[str, Any]:
     return _ok({"applied": dict(changes), "title_tier": title_tier})
 
 
+# ── vector marks ────────────────────────────────────────────────────────
+
+_MARK_FIELDS = {
+    "points", "closed", "dot_diameter_mm",
+    "stroke_enabled", "stroke_color", "stroke_width_pt", "stroke_style",
+    "fill_enabled", "fill_color", "fill_opacity",
+    "arrow_start", "arrow_end",
+    "arrow_start_length_mm", "arrow_start_width_mm",
+    "arrow_end_length_mm", "arrow_end_width_mm",
+}
+
+
+def _find_mark(ctx: ToolContext, mark_id: str):
+    mark = ctx.project.find_mark(mark_id)
+    if mark is None:
+        raise ToolError(
+            "mark_not_found",
+            f"no mark with id={mark_id}",
+            hint="call project_describe to list mark ids",
+        )
+    return mark
+
+
+def _validate_mark_dict(data: Dict[str, Any]):
+    """Run the project-schema mark validator, mapping errors to ToolError."""
+    from src.model.migrations import validate_mark, ProjectMigrationError
+    try:
+        validate_mark(data)
+    except ProjectMigrationError as e:
+        raise ToolError("invalid_value", str(e))
+
+
+def mark_add(ctx: ToolContext, kind: str, points: List[List[float]] = None,
+             sides: int = None, center: List[float] = None,
+             radius_mm: float = None, rotation_deg: float = None,
+             **fields: Any) -> Dict[str, Any]:
+    """Add a vector mark fixed on the page.
+
+    *kind* is dot/line/rect/ellipse/polygon. *points* are page-mm scene
+    coordinates: dot takes one centre point, line two endpoints,
+    rect/ellipse two opposite corners, polygon its vertices (add
+    ``closed=false`` for an open polyline). For kind="polygon" a regular
+    polygon can instead be generated from ``sides`` (3–24), ``center``
+    [x, y] mm and ``radius_mm`` (>0), optional ``rotation_deg`` (default
+    −90 = vertex up); pass either *points* or the sides form, not both.
+    Style keys: closed, dot_diameter_mm, stroke_enabled, stroke_color,
+    stroke_width_pt, stroke_style (solid/dashed/dotted/dash_dot),
+    fill_enabled, fill_color, fill_opacity, arrow_start/arrow_end
+    (none/triangle/open/stealth/circle/bar — lines and open polygons only),
+    arrow_*_length_mm, arrow_*_width_mm.
+    """
+    bad = set(fields) - _MARK_FIELDS
+    if bad:
+        raise ToolError("invalid_params",
+                        f"unknown fields: {sorted(bad)}",
+                        hint=f"allowed: {sorted(_MARK_FIELDS)}")
+    spec = {"sides": sides, "center": center,
+            "radius_mm": radius_mm, "rotation_deg": rotation_deg}
+    if any(v is not None for v in spec.values()):
+        if kind != "polygon":
+            raise ToolError(
+                "invalid_params",
+                "sides/center/radius_mm/rotation_deg apply only to "
+                "kind='polygon'")
+        if points is not None:
+            raise ToolError("invalid_params",
+                            "pass either points or sides/center/radius_mm, "
+                            "not both")
+        for k in ("sides", "center", "radius_mm"):
+            if spec[k] is None:
+                raise ToolError("invalid_params",
+                                f"{k} is required for the regular-polygon "
+                                "form", field=k)
+        if not isinstance(sides, int) or isinstance(sides, bool) \
+                or not 3 <= sides <= 24:
+            raise ToolError("invalid_value",
+                            "sides must be an int in 3..24", field="sides")
+        try:
+            cx, cy = float(center[0]), float(center[1])
+        except (TypeError, ValueError, IndexError):
+            raise ToolError("invalid_value",
+                            "center must be [x, y] in mm", field="center")
+        try:
+            r = float(radius_mm)
+        except (TypeError, ValueError):
+            raise ToolError("invalid_value",
+                            "radius_mm must be a number", field="radius_mm")
+        try:
+            rot = float(rotation_deg) if rotation_deg is not None else -90.0
+        except (TypeError, ValueError):
+            raise ToolError("invalid_value",
+                            "rotation_deg must be a number",
+                            field="rotation_deg")
+        if not (math.isfinite(cx) and math.isfinite(cy)
+                and math.isfinite(r) and math.isfinite(rot)):
+            raise ToolError("invalid_value",
+                            "center/radius_mm/rotation_deg must be finite")
+        if r <= 0:
+            raise ToolError("invalid_value",
+                            "radius_mm must be > 0", field="radius_mm")
+        from src.utils import mark_geometry
+        points = mark_geometry.regular_polygon_points(
+            cx, cy, r, sides, math.radians(rot))
+        fields.setdefault("closed", True)
+    if points is None:
+        raise ToolError("invalid_params",
+                        "points is required (or use sides/center/radius_mm "
+                        "for a regular polygon)", field="points")
+    # Validate the raw payload first so malformed points raise a clean
+    # invalid_value envelope instead of a conversion traceback.
+    _validate_mark_dict({"kind": kind, "points": points, **fields})
+    from src.model.data_model import Mark
+    mark = Mark(kind=kind, points=[[float(x), float(y)] for x, y in points])
+    for key, value in fields.items():
+        setattr(mark, key, value)
+    _validate_mark_dict(mark.to_dict())
+    from src.app.commands import AddMarkCommand
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    _apply(ctx, AddMarkCommand(ctx.project, mark, update_callback=cb))
+    return _ok({"mark_id": mark.id})
+
+
+def mark_update(ctx: ToolContext, mark_id: str,
+                **changes: Any) -> Dict[str, Any]:
+    """Update fields of one mark (same keys as mark_add; id/kind fixed)."""
+    mark = _find_mark(ctx, mark_id)
+    bad = set(changes) - _MARK_FIELDS
+    if bad:
+        raise ToolError("invalid_params",
+                        f"unknown fields: {sorted(bad)}",
+                        hint=f"allowed: {sorted(_MARK_FIELDS)}")
+    merged = mark.to_dict()
+    merged.update(changes)
+    _validate_mark_dict(merged)
+    if "points" in changes:
+        changes["points"] = [[float(x), float(y)] for x, y in changes["points"]]
+    from src.app.commands import MarkPropertyChangeCommand
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    _apply(ctx, MarkPropertyChangeCommand(
+        ctx.project, [mark_id], dict(changes), update_callback=cb))
+    return _ok({"mark_id": mark_id, "applied": dict(changes)})
+
+
+def mark_remove(ctx: ToolContext, mark_id: str) -> Dict[str, Any]:
+    """Delete a mark."""
+    _find_mark(ctx, mark_id)
+    from src.app.commands import DeleteMarksCommand
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    _apply(ctx, DeleteMarksCommand(ctx.project, [mark_id], update_callback=cb))
+    return _ok({"mark_id": mark_id})
+
+
+def mark_reorder(ctx: ToolContext, mark_id: str, to: str) -> Dict[str, Any]:
+    """Move a mark to 'front' or 'back' of the mark z-stack."""
+    _find_mark(ctx, mark_id)
+    if to not in ("front", "back"):
+        raise ToolError("invalid_value",
+                        "to must be 'front' or 'back'", field="to")
+    order = [m.id for m in ctx.project.marks if m.id != mark_id]
+    if to == "front":
+        order.append(mark_id)
+    else:
+        order.insert(0, mark_id)
+    from src.app.commands import ReorderMarksCommand
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    _apply(ctx, ReorderMarksCommand(ctx.project, order, update_callback=cb))
+    return _ok({"mark_id": mark_id, "to": to})
+
+
 # ── dispatch ────────────────────────────────────────────────────────────
 
 
@@ -1725,6 +1896,11 @@ _REGISTRY: Dict[str, Callable[..., Dict[str, Any]]] = {
     "group_label_add":   group_label_add,
     "group_label_remove": group_label_remove,
     "group_label_set":   group_label_set,
+    # Vector marks (dots, lines, arrows, shapes)
+    "mark_add":          mark_add,
+    "mark_update":       mark_update,
+    "mark_remove":       mark_remove,
+    "mark_reorder":      mark_reorder,
     # Size groups
     "size_group_create": size_group_create,
     "size_group_delete": size_group_delete,

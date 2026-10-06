@@ -265,6 +265,11 @@ class ImageExporter:
             # 1c. Draw Group Label bands (spans, column headers, row titles)
             ImageExporter._draw_group_labels(painter, project, layout_result, scale)
 
+            # 1d. Draw vector marks (fixed page mm; above labels, below text)
+            from src.utils import mark_render
+            for mark in getattr(project, 'marks', []):
+                mark_render.draw(painter, mark, scale)
+
             # 2. Draw Text Items
             for text_item in project.text_items:
                 # Skip numbering labels rendered by label cells
@@ -338,6 +343,10 @@ class ImageExporter:
 
         ImageExporter._draw_label_cells(painter, project, layout_result, scale)
         ImageExporter._draw_group_labels(painter, project, layout_result, scale)
+
+        from src.utils import mark_render
+        for mark in getattr(project, 'marks', []):
+            mark_render.draw(painter, mark, scale)
 
         for text_item in project.text_items:
             if (

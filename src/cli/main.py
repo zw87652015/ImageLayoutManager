@@ -283,6 +283,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
                 "rows": len(project.rows),
                 "cells_total": len(project.get_all_leaf_cells()),
                 "text_items": len(project.text_items),
+                "marks": len(getattr(project, "marks", []) or []),
                 "group_labels": [g.to_dict() for g in group_labels],
                 "label_scheme": project.label_scheme,
                 "label_scheme_sub": getattr(project, "label_scheme_sub", ""),
@@ -304,6 +305,9 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
             print(f"rows        : {len(project.rows)}")
             print(f"cells       : {len(leaves)} ({with_image} with image)")
             print(f"text items  : {len(project.text_items)}")
+            marks = getattr(project, "marks", []) or []
+            if marks:
+                print(f"marks       : {len(marks)}")
             print(f"labels      : scheme {project.label_scheme} / "
                   f"{getattr(project, 'label_scheme_sub', '') or 'flat'} "
                   f"@ {project.label_placement}")

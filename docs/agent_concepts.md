@@ -370,6 +370,7 @@ view_screenshot()
 | Make all labels smaller/styled    | `labels_set_style(font_size_pt=…, …)`                 |
 | Style one label/text item         | `text_set_style(text_id, …)`                          |
 | Add free text annotation          | `text_add(text=…, x=…, y=…)`                          |
+| Draw a vector mark (arrow, box…)  | `mark_add(kind, points)` — fixed page mm              |
 | Rotate/crop/pad/align image       | `cell_set_properties(cell_id, …)`                     |
 | Add or edit a scale bar           | `cell_set_scale_bar(cell_id, …)`                      |
 | Add a PiP inset                   | `pip_add` then `pip_set_properties`                   |
