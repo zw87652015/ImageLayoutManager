@@ -32,7 +32,7 @@ FORMAT_NAME = 'ilm-plot'
 # ``requires`` whenever the field is emitted.
 CAPABILITIES = frozenset({'bands', 'error_band', 'spans', 'box_plot',
                           'column_points', 'histogram',
-                          'horizontal_bars'})
+                          'horizontal_bars', 'sample_counts'})
 
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_SERIES = 100
@@ -61,6 +61,10 @@ _BANDWIDTHS = ('scott', 'silverman')
 _BODIES = ('violin', 'none', 'bar')
 _BAR_ERRORS = ('sd', 'sem', 'none')
 _HIST_STYLES = ('bars', 'step')
+_N_POSITIONS = ('tick', 'top', 'bottom')
+MAX_N_FORMAT = 40
+_N_OPTION_KEYS = ('show_n', 'n_position', 'n_format', 'n_size_pt',
+                  'n_color')
 MAX_ANNOTATIONS = 20
 MAX_BRACKETS = 20
 MAX_BANDS = 20
@@ -211,8 +215,15 @@ def required_capabilities(document) -> list:
         if d.get('body') == 'bar' or 'bar_width' in d \
                 or 'bar_error' in d:
             req.append('column_points')
+        if any(k in d for k in _N_OPTION_KEYS):
+            req.append('sample_counts')
     if getattr(document, 'kind', None) == 'histogram':
         req.append('histogram')
+    h = getattr(document, 'histogram', None)
+    if h is not None:
+        d = h.to_dict()
+        if any(k in d for k in _N_OPTION_KEYS):
+            req.append('sample_counts')
     st = getattr(document, 'stacked', None)
     if st is not None and getattr(st, 'horizontal', False):
         req.append('horizontal_bars')
@@ -311,6 +322,20 @@ def _style_choice(data: dict, key: str, ctx: str, choices):
     if v is not None and v not in choices:
         raise _err(f"{ctx}.{key}: unsupported {v!r}; one of {choices}")
     return v
+
+
+def _check_n_format(value, ctx: str) -> str:
+    """Validate an ``{n}`` sample-count template (1..MAX_N_FORMAT)."""
+    if not isinstance(value, str) or not value \
+            or len(value) > MAX_N_FORMAT:
+        raise _err(f"{ctx}: expected a template containing {{n}}")
+    try:
+        if '{n}' not in value:
+            raise ValueError
+        value.format(n=1)
+    except (KeyError, IndexError, ValueError):
+        raise _err(f"{ctx}: expected a template containing {{n}}")
+    return value
 
 
 def _unknown_style_keys(data: dict, allowed: set, ctx: str):
@@ -637,13 +662,19 @@ class ViolinOptions:
     show_outliers: bool = True     # 'none' body: outlier markers
     bar_width: float = 0.6         # 'bar' body column width
     bar_error: str = 'sd'          # 'sd' | 'sem' | 'none'
+    show_n: bool = False           # per-group sample-size marks
+    n_position: str = 'tick'       # 'tick' | 'top' | 'bottom'
+    n_format: str = 'n = {n}'
+    n_size_pt: 'float | None' = None   # None → document.font_size_pt
+    n_color: 'str | None' = None       # None → '#333333'
 
     _KEYS = ('show_box', 'show_points', 'points_beside', 'bandwidth',
              'fill_alpha', 'edge_color', 'edge_width_pt',
              'point_size_pt', 'point_alpha', 'point_edge_color',
              'point_edge_width_pt', 'enhance_contrast',
              'body', 'box_width', 'show_outliers', 'bar_width',
-             'bar_error')
+             'bar_error', 'show_n', 'n_position', 'n_format',
+             'n_size_pt', 'n_color')
 
     def to_dict(self) -> dict:
         d = {}
@@ -681,6 +712,16 @@ class ViolinOptions:
             d['bar_width'] = self.bar_width
         if self.bar_error != 'sd':
             d['bar_error'] = self.bar_error
+        if self.show_n:
+            d['show_n'] = True
+        if self.n_position != 'tick':
+            d['n_position'] = self.n_position
+        if self.n_format != 'n = {n}':
+            d['n_format'] = self.n_format
+        if self.n_size_pt is not None:
+            d['n_size_pt'] = self.n_size_pt
+        if self.n_color is not None:
+            d['n_color'] = self.n_color
         return d
 
     @classmethod
@@ -689,7 +730,7 @@ class ViolinOptions:
         _unknown_style_keys(data, set(cls._KEYS), ctx)
         o = cls()
         for key in ('show_box', 'show_points', 'points_beside',
-                    'enhance_contrast', 'show_outliers'):
+                    'enhance_contrast', 'show_outliers', 'show_n'):
             v = data.get(key)
             if v is not None:
                 if not isinstance(v, bool):
@@ -740,6 +781,17 @@ class ViolinOptions:
         v = _style_choice(data, 'bar_error', ctx, _BAR_ERRORS)
         if v is not None:
             o.bar_error = v
+        v = _style_choice(data, 'n_position', ctx, _N_POSITIONS)
+        if v is not None:
+            o.n_position = v
+        if data.get('n_format') is not None:
+            o.n_format = _check_n_format(data['n_format'],
+                                         f"{ctx}.n_format")
+        o.n_size_pt = _style_num(data, 'n_size_pt', ctx, lo=0, hi=72,
+                                 lo_exclusive=True)
+        if data.get('n_color') is not None:
+            o.n_color = _check_color(data['n_color'],
+                                     f"{ctx}.n_color")
         return o
 
 
@@ -899,9 +951,12 @@ class HistOptions:
     edge_width_pt: float = 0.0     # 0 → no border
     kde: bool = False              # overlay a KDE curve
     bandwidth: object = 'scott'    # 'scott' | 'silverman' | float > 0
+    show_n: bool = False           # sample size in the legend label
+    n_format: str = 'n = {n}'
 
     _KEYS = ('bins', 'bin_width', 'density', 'style', 'fill_alpha',
-             'edge_color', 'edge_width_pt', 'kde', 'bandwidth')
+             'edge_color', 'edge_width_pt', 'kde', 'bandwidth',
+             'show_n', 'n_format')
 
     def to_dict(self) -> dict:
         d = {}
@@ -923,6 +978,10 @@ class HistOptions:
             d['kde'] = True
         if self.bandwidth != 'scott':
             d['bandwidth'] = self.bandwidth
+        if self.show_n:
+            d['show_n'] = True
+        if self.n_format != 'n = {n}':
+            d['n_format'] = self.n_format
         return d
 
     @classmethod
@@ -941,7 +1000,7 @@ class HistOptions:
                                  lo_exclusive=True)
         if o.bins is not None and o.bin_width is not None:
             raise _err(f"{ctx}: bins and bin_width are exclusive")
-        for key in ('density', 'kde'):
+        for key in ('density', 'kde', 'show_n'):
             v = data.get(key)
             if v is not None:
                 if not isinstance(v, bool):
@@ -971,6 +1030,9 @@ class HistOptions:
             else:
                 raise _err(f"{ctx}.bandwidth: expected scott/silverman "
                            f"or a positive finite number, got {bw!r}")
+        if data.get('n_format') is not None:
+            o.n_format = _check_n_format(data['n_format'],
+                                         f"{ctx}.n_format")
         return o
 
 

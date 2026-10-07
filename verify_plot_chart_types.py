@@ -229,6 +229,37 @@ class WorksheetTests(unittest.TestCase):
         ws, chart, cols, _o = plot_file.worksheet_from_dict(d)
         self.assertEqual(chart, 'violin')
 
+    def test_sample_counts_stamp(self):
+        for key in ('row_show_n', 'row_n_position', 'n_pos_tick',
+                    'n_pos_top', 'n_pos_bottom', 'row_n_format',
+                    'tip_n_format', 'row_n_size', 'row_n_colour',
+                    'hint_n_tick_size'):
+            entry = _STRINGS[key]
+            self.assertTrue(entry['en'] and entry['zh'], key)
+        o = PlotOverrides()
+        o.violin = ViolinOptions(show_n=True)
+        d = plot_file.worksheet_to_dict(self._ws(), 'violin', (1, 2),
+                                        overrides=o)
+        self.assertIn('sample_counts', d['requires'])
+        o2 = PlotOverrides()
+        o2.histogram = HistOptions(show_n=True)
+        d = plot_file.worksheet_to_dict(self._ws(), 'violin', (1, 2),
+                                        overrides=o2)
+        self.assertIn('sample_counts', d['requires'])
+        o3 = PlotOverrides()
+        o3.violin = ViolinOptions(n_format='count {n}')
+        d = plot_file.worksheet_to_dict(self._ws(), 'violin', (1, 2),
+                                        overrides=o3)
+        self.assertIn('sample_counts', d['requires'])
+        o4 = PlotOverrides()
+        o4.violin = ViolinOptions(n_size_pt=8)
+        d = plot_file.worksheet_to_dict(self._ws(), 'violin', (1, 2),
+                                        overrides=o4)
+        self.assertIn('sample_counts', d['requires'])
+        plain = plot_file.worksheet_to_dict(self._ws(), 'violin',
+                                            (1, 2))
+        self.assertNotIn('sample_counts', plain.get('requires', ()))
+
     def test_worksheet_from_histogram_document(self):
         doc = document_from_plot(_groups(), 'histogram')
         ws = plot_file.worksheet_from_document(doc)

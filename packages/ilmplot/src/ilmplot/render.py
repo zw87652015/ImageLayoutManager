@@ -688,6 +688,10 @@ def _clip_needed(document):
     return document.xlim is not None or document.ylim is not None
 
 
+def _n_text(opt, group):
+    return safe_text(opt.n_format.format(n=len(group.values)))
+
+
 def _draw_violin(document, ax, s):
     """Violin bodies + inner box + jittered points (NCPlot port).
 
@@ -742,7 +746,9 @@ def _draw_violin(document, ax, s):
     ax.set_xlim(xlim)
     ax.set_ylim(ylim)
     gid = 'ilmplot-violin-'
+    tops = []
     for i, (g, pos) in enumerate(zip(groups, range(1, n + 1))):
+        g_top = max(g.values) if g.values else 0.0
         edge = g.color
         fill_alpha = opt.fill_alpha
         edge_w = opt.edge_width_pt
@@ -765,6 +771,7 @@ def _draw_violin(document, ax, s):
             shape = stats.violin_shape(g.values, opt.bandwidth)
             if shape is not None:
                 pts, half = shape
+                g_top = float(pts[-1])
                 xs = [pos + h for h in half] + \
                     [pos - h for h in half[::-1]]
                 ys = list(pts) + list(pts[::-1])
@@ -784,6 +791,8 @@ def _draw_violin(document, ax, s):
                     ax.add_patch(patch)
         elif body == 'bar':
             mean, err = bar_stats[i]
+            if err is not None and err > 0:
+                g_top = max(g_top, mean + err)
             hw = opt.bar_width / 2.0
             base = min(ylim) if ylog else 0.0
             rx = [pos - hw, pos + hw, pos + hw, pos - hw]
@@ -902,6 +911,24 @@ def _draw_violin(document, ax, s):
                 linewidths=0.0 if dot_lw == 0 else dot_lw * s,
                 zorder=6)
             coll.set_gid(gid + g.id)
+        tops.append(g_top)
+    if opt.show_n and opt.n_position in ('top', 'bottom'):
+        y_rng = max(ylim) - min(ylim)
+        for g, pos, g_top in zip(groups, range(1, n + 1), tops):
+            if opt.n_position == 'top':
+                y = g_top + 0.02 * y_rng
+            else:
+                y = min(ylim) + 0.02 * y_rng
+            if clip and not (min(xlim) <= pos <= max(xlim)
+                             and min(ylim) <= y <= max(ylim)):
+                continue
+            t = ax.text(pos, y, _n_text(opt, g), ha='center',
+                        va='bottom',
+                        fontsize=(opt.n_size_pt if opt.n_size_pt
+                                  is not None else
+                                  document.font_size_pt) * s,
+                        color=opt.n_color or '#333333', zorder=7)
+            t.set_gid(gid + g.id)
 
 
 def _draw_ridgeline(document, ax, s, lines):
@@ -1283,6 +1310,13 @@ def _hist_bins(document):
     return list(edges), counts
 
 
+def _hist_label(opt, g):
+    label = safe_text(g.label)
+    if opt.show_n:
+        label = f"{label} ({safe_text(opt.n_format.format(n=len(g.values)))})"
+    return label
+
+
 def _draw_histogram(document, ax, s):
     """Overlaid group histograms (bars outline or step) + optional KDE."""
     import numpy as np
@@ -1321,7 +1355,7 @@ def _draw_histogram(document, ax, s):
                 xs_c, ys_c = xs, ys
             line, = ax.plot(xs_c, ys_c, color=g.color,
                             linewidth=1.5 * s, zorder=2,
-                            label=safe_text(g.label))
+                            label=_hist_label(opt, g))
             line.set_gid(gid)
         else:
             px, py = xs, ys
@@ -1335,7 +1369,7 @@ def _draw_histogram(document, ax, s):
                     edgecolor='none' if opt.edge_width_pt == 0
                     else (opt.edge_color or g.color),
                     linewidth=opt.edge_width_pt * s, zorder=2,
-                    label=safe_text(g.label))
+                    label=_hist_label(opt, g))
                 patch.set_gid(gid)
                 ax.add_patch(patch)
         if opt.kde and len(g.values) >= 2:
@@ -1389,8 +1423,16 @@ def _data_y_range(document):
                 else:
                     err = 0.0
                 top = max(top, mean + err)
-            return top, (top - min(0.0, min(vals))) or 1.0
-        return max(vals), (max(vals) - min(vals)) or 1.0
+            rng = (top - min(0.0, min(vals))) or 1.0
+            if v_opt.show_n and v_opt.n_position == 'top':
+                top += 0.08 * rng
+            return top, rng
+        rng = (max(vals) - min(vals)) or 1.0
+        top = max(vals)
+        if v_opt is not None and v_opt.show_n \
+                and v_opt.n_position == 'top':
+            top += 0.08 * rng
+        return top, rng
     if document.kind == 'histogram':
         _edges, counts = _hist_bins(document)
         top = max((float(c.max()) for c in counts if len(c)),
@@ -1579,8 +1621,13 @@ def _build_figure(document: PlotDocument, s: float,
                     _draw_series_yerr(document, ax, s_, s,
                                       f'ilmplot-series-{s_.id}')
     if kind == 'violin':
+        v_opt = document.violin
+        tick_n = v_opt is not None and v_opt.show_n \
+            and v_opt.n_position == 'tick'
         ax.set_xticks(list(range(1, len(document.groups) + 1)),
-                      [safe_text(g.label) for g in document.groups])
+                      [safe_text(g.label) + '\n' + _n_text(v_opt, g)
+                       if tick_n else safe_text(g.label)
+                       for g in document.groups])
     elif kind == 'stacked_column':
         n_bars = len(document.categories[0].values)
         if document.x_tick_labels:
@@ -1850,18 +1897,24 @@ def _build_figure(document: PlotDocument, s: float,
             patch_handles = True
         elif kind == 'histogram':
             h_opt = document.histogram
+            if h_opt is not None and h_opt.show_n:
+                h_labels = [_hist_label(h_opt, g)
+                            for g in document.groups]
+            else:
+                h_labels = [safe_text(g.label)
+                            for g in document.groups]
             if h_opt is not None and h_opt.style == 'step':
                 from matplotlib.lines import Line2D
                 handles = [Line2D([], [], color=g.color, linewidth=1.5,
-                                  label=safe_text(g.label) or '_nolegend_')
-                           for g in document.groups]
+                                  label=l or '_nolegend_')
+                           for g, l in zip(document.groups, h_labels)]
             else:
                 from matplotlib.colors import to_rgba
                 alpha = h_opt.fill_alpha if h_opt is not None else 0.5
                 handles = [
                     Patch(facecolor=to_rgba(g.color, alpha),
-                          label=safe_text(g.label) or '_nolegend_')
-                    for g in document.groups]
+                          label=l or '_nolegend_')
+                    for g, l in zip(document.groups, h_labels)]
             patch_handles = True
         else:
             patch_handles = False
@@ -2154,9 +2207,104 @@ def _needs_fit(document) -> bool:
             or bool(document.brackets))
 
 
+_MATH_TOKEN = re.compile(r'\$[^$]*\$|\S+')
+
+
+def _text_length_px(artist, renderer, text):
+    """Unrotated length of *text* drawn with *artist*'s font (px)."""
+    if not text:
+        return 0.0
+    prev = artist.get_text()
+    try:
+        artist.set_text(text)
+        bb = artist.get_window_extent(renderer)
+    finally:
+        artist.set_text(prev)
+    rot = artist.get_rotation() % 180.0
+    return bb.height if abs(rot - 90.0) < 1.0 else bb.width
+
+
+def _wrap_text(artist, renderer, limit_px):
+    """Greedy word-wrap *artist* to *limit_px*; True when text changed.
+
+    The unwrapped source is cached on ``artist._ilm_unwrapped`` so
+    repeated passes re-wrap from the original.  Existing newlines are
+    hard breaks; ``$...$`` math segments stay atomic and a single token
+    longer than the limit keeps its own line (never split mid-word).
+    """
+    if limit_px <= 0:
+        return False
+    text = getattr(artist, '_ilm_unwrapped', None)
+    if text is None:
+        text = artist.get_text()
+        artist._ilm_unwrapped = text
+    if not text:
+        return False
+    lines = []
+    for para in text.split('\n'):
+        tokens = _MATH_TOKEN.findall(para)
+        if not tokens:
+            lines.append('')
+            continue
+        cur = ''
+        for tok in tokens:
+            cand = tok if not cur else cur + ' ' + tok
+            if not cur \
+                    or _text_length_px(artist, renderer, cand) \
+                    <= limit_px:
+                cur = cand
+            else:
+                lines.append(cur)
+                cur = tok
+        lines.append(cur)
+    new = '\n'.join(lines)
+    if new == artist.get_text():
+        return False
+    artist.set_text(new)
+    return True
+
+
+def _title_limits(fig, ax, renderer):
+    """(horizontal limit, vertical limit) in px for title wrapping."""
+    W = fig.get_figwidth() * fig.dpi
+    H = fig.get_figheight() * fig.dpi
+    pos = ax.get_window_extent(renderer)
+    return (max(pos.width, 0.5 * W), max(pos.height, 0.5 * H))
+
+
+def _wrap_axis_titles(fig, ax, renderer):
+    """Wrap title(s) and axis labels to their axis extent; True if any
+    text changed."""
+    lim_x, lim_y = _title_limits(fig, ax, renderer)
+    changed = False
+    for artist in (ax.title, ax._left_title, ax._right_title,
+                   ax.xaxis.label):
+        changed = _wrap_text(artist, renderer, lim_x) or changed
+    changed = _wrap_text(ax.yaxis.label, renderer, lim_y) or changed
+    return changed
+
+
+def _titles_overflow(fig, ax) -> bool:
+    """True when any title/axis label's unwrapped length exceeds its
+    wrap limit.  No text is modified."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    FigureCanvasAgg(fig)
+    renderer = fig.canvas.get_renderer()
+    lim_x, lim_y = _title_limits(fig, ax, renderer)
+    for artist in (ax.title, ax._left_title, ax._right_title,
+                   ax.xaxis.label, ax.yaxis.label):
+        limit = lim_y if artist is ax.yaxis.label else lim_x
+        text = getattr(artist, '_ilm_unwrapped', None)
+        if text is None:
+            text = artist.get_text()
+        if _text_length_px(artist, renderer, text) > limit:
+            return True
+    return False
+
+
 def _fit_figure(document, fig, ax) -> None:
     """Fit the axes rectangle when the document needs it."""
-    if _needs_fit(document):
+    if _needs_fit(document) or _titles_overflow(fig, ax):
         _fit_axes(fig, ax, FIT_PAD_MM / 25.4 * fig.dpi)
 
 
@@ -2178,7 +2326,8 @@ def _fit_axes(fig, ax, pad_px: float, fixed_y=None) -> None:
     renderer = fig.canvas.get_renderer()
     W = fig.get_figwidth() * fig.dpi
     H = fig.get_figheight() * fig.dpi
-    for _ in range(4):
+    for _ in range(6):
+        wrapped = _wrap_axis_titles(fig, ax, renderer)
         pos = ax.get_window_extent(renderer)
         # Measure the out-of-axes extras first: only the artists that can
         # legitimately stick out (legend, brackets, annotations).  Other
@@ -2206,6 +2355,20 @@ def _fit_axes(fig, ax, pad_px: float, fixed_y=None) -> None:
                     and math.isfinite(bb.x1) and math.isfinite(bb.y1) \
                     and (bb.width > 0 or bb.height > 0):
                 extras.append(bb)
+        # Wrapped titles/labels can exceed what get_tightbbox reports;
+        # feed their measured extents so the margins account for them.
+        for artist in (ax.title, ax._left_title, ax._right_title,
+                       ax.xaxis.label, ax.yaxis.label):
+            if getattr(artist, '_ilm_unwrapped', None) is None \
+                    or artist.get_text() == artist._ilm_unwrapped:
+                continue
+            try:
+                bb = artist.get_window_extent(renderer)
+            except Exception:
+                continue
+            if math.isfinite(bb.x0) and math.isfinite(bb.y0) \
+                    and math.isfinite(bb.x1) and math.isfinite(bb.y1):
+                extras.append(bb)
         tight = ax.get_tightbbox(renderer)
         if extras:
             union = Bbox.union(extras)
@@ -2230,8 +2393,9 @@ def _fit_axes(fig, ax, pad_px: float, fixed_y=None) -> None:
                 denom = bottom + pad_px + top + pad_px
                 y0 = spare * ((bottom + pad_px) / denom) if denom > 0 else spare * 0.5
                 y1 = y0 + MIN_AXES_FRACTION * H
-        if max(abs(x0 - pos.x0), abs(x1 - pos.x1),
-               abs(y0 - pos.y0), abs(y1 - pos.y1)) < 0.05:
+        if not wrapped and max(abs(x0 - pos.x0), abs(x1 - pos.x1),
+                               abs(y0 - pos.y0), abs(y1 - pos.y1)) \
+                < 0.05:
             break
         ax.set_position([x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H])
 

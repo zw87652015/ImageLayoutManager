@@ -14,14 +14,16 @@ from __future__ import annotations
 import copy
 import math
 
-from PyQt6.QtCore import QEvent, QObject, QPoint, QSize, Qt
+from PyQt6.QtCore import QEvent, QObject, QPoint, QSize, Qt, \
+    pyqtSignal
 from PyQt6.QtGui import QColor, QDoubleValidator, QGuiApplication, \
     QIntValidator, QPalette
 from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog,
                              QComboBox, QCompleter, QDoubleSpinBox,
                              QFormLayout, QFrame, QHBoxLayout, QLabel,
-                             QLineEdit, QPushButton, QSpinBox,
-                             QToolButton, QVBoxLayout, QWidget)
+                             QLineEdit, QPlainTextEdit, QPushButton,
+                             QSpinBox, QToolButton, QVBoxLayout,
+                             QWidget)
 
 from src.app import theme as app_theme
 
@@ -38,6 +40,7 @@ from . import palettes
 from .palettes import THEMES, theme_display_key
 from .overrides import (SeriesOverride, parse_axis_limits,
                         reset_element, static_bands)
+from .note_text import MAX_NOTE_TEXT, expand_newline_escapes
 
 _PANEL_WIDTH = 300
 
@@ -74,6 +77,34 @@ _TITLES = {'title': 'panel_title', 'xlabel': 'panel_xlabel',
            'frame': 'panel_frame'}
 _ANCHOR_KEYS = {a: 'anchor_' + a.replace(' ', '_')
                 for a in ANNOTATION_ANCHORS}
+
+
+class _NoteTextEdit(QPlainTextEdit):
+    """3-line note editor; Ctrl+Enter / focus-out commits."""
+
+    committed = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.setTabChangesFocus(True)
+        self.setLineWrapMode(
+            QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setFixedHeight(
+            self.fontMetrics().lineSpacing() * 3
+            + 2 * self.frameWidth() + 6)
+        self.setToolTip(tr('tip_note_text'))
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) \
+                and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.committed.emit()
+            self.clearFocus()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event):
+        self.committed.emit()
+        super().focusOutEvent(event)
 
 
 class _Swatch(QPushButton):
@@ -754,7 +785,7 @@ class ElementPanel(QFrame):
         doc = self._doc()
         editor = self._text_editor(
             form, 'title', TitleStyle, text_row=True,
-            text_get=lambda: None,
+            text_get=lambda: tab.plot_title,
             text_set=lambda o, t: None,
             eff=lambda: doc.style.title)
         # Title text is not an override — commit straight to the title
@@ -1602,6 +1633,33 @@ class ElementPanel(QFrame):
                   reset=lambda xo: setattr(get(xo), 'bandwidth',
                                            'scott'))
 
+    def _n_format_row(self, target, get, eff, stored):
+        edit = QLineEdit(eff().n_format)
+        edit.setToolTip(tr('tip_n_format'))
+
+        def commit():
+            t = edit.text()
+            ok = 1 <= len(t) <= 40 and '{n}' in t
+            if ok:
+                try:
+                    t.format(n=1)
+                except (KeyError, IndexError, ValueError):
+                    ok = False
+            if not ok:
+                self._set_invalid(edit, True)
+                return
+            self._set_invalid(edit, False)
+            self._apply_now(
+                lambda xo: setattr(get(xo), 'n_format', t))
+
+        edit.editingFinished.connect(commit)
+        self._row(target, tr('row_n_format'), edit,
+                  is_set=lambda: stored() is not None
+                  and stored().n_format != 'n = {n}',
+                  reset=lambda xo: setattr(get(xo), 'n_format',
+                                           'n = {n}'),
+                  sync=lambda: edit.setText(eff().n_format))
+
     def _build_violin_item(self, form, iid):
         o = self._tab.overrides
         res = self._item_label_color(form, 'groups', iid)
@@ -1700,6 +1758,50 @@ class ElementPanel(QFrame):
             opt_row(self._spin(eff().fill_alpha, 0.0, 1.0, step=0.05),
                     tr('row_fill_opacity'), 'fill_alpha', 0.3, target)
 
+        def n_rows():
+            cb = self._checkbox(
+                tr('row_show_n'), eff().show_n,
+                lambda xo, v: setattr(get(xo), 'show_n', v))
+            sync_cb(cb, 'show_n')
+            form.addRow(cb)
+            _w, sub = self._subform(form, lambda: eff().show_n)
+            self._row(sub, tr('row_n_position'),
+                      self._combo([tr('n_pos_tick'), tr('n_pos_top'),
+                                   tr('n_pos_bottom')],
+                                  ['tick', 'top', 'bottom'],
+                                  eff().n_position,
+                                  lambda xo, v: setattr(
+                                      get(xo), 'n_position', v)))
+            _w, sized = self._subform(
+                sub, lambda: eff().n_position != 'tick')
+            doc = self._doc()
+            default_size = (doc.font_size_pt if doc is not None
+                            else 10.0)
+            spin = self._spin(eff().n_size_pt or default_size, 1, 72,
+                              step=0.5, decimals=1)
+            spin.valueChanged.connect(lambda v: self._apply_now(
+                lambda xo: setattr(get(xo), 'n_size_pt', v)))
+            self._row(sized, tr('row_n_size'), spin,
+                      is_set=lambda: stored() is not None
+                      and stored().n_size_pt is not None,
+                      reset=lambda xo: setattr(get(xo), 'n_size_pt',
+                                               None),
+                      sync=lambda: self._respin(
+                          spin, eff().n_size_pt or default_size))
+            sw = self._color_row(
+                tr('row_n_colour'), eff().n_color or '#333333',
+                lambda xo, c: setattr(get(xo), 'n_color', c), None,
+                is_set=lambda: stored() is not None
+                and stored().n_color is not None, form=sized)
+            self._syncs.append(lambda: sw.set_color(
+                eff().n_color or '#333333'))
+            _w, ticked = self._subform(
+                sub, lambda: eff().n_position == 'tick')
+            hint = QLabel(tr('hint_n_tick_size'))
+            hint.setWordWrap(True)
+            ticked.addRow(hint)
+            self._n_format_row(sub, get, eff, stored)
+
         body = eff().body
         self._section(tr(violin_panel_keys(body)[1]))
 
@@ -1731,6 +1833,7 @@ class ElementPanel(QFrame):
             form.addRow(cb_box)
             _w, sub = self._subform(form, lambda: eff().show_box)
             box_width_row(sub)
+            n_rows()
             form.addRow(self._checkbox(
                 tr('row_enhance_contrast'), eff().enhance_contrast,
                 lambda xo, v: setattr(get(xo), 'enhance_contrast', v)))
@@ -1752,6 +1855,7 @@ class ElementPanel(QFrame):
                 lambda xo, v: setattr(get(xo), 'show_outliers', v)))
             _w, sub = self._subform(form, lambda: eff().show_points)
             point_rows(sub)
+            n_rows()
         else:
             form.addRow(self._checkbox(
                 tr('row_show_box'), eff().show_box,
@@ -1767,6 +1871,7 @@ class ElementPanel(QFrame):
             fill_row(form)
             edge_rows(form)
             point_rows(form, beside=False)
+            n_rows()
             form.addRow(self._checkbox(
                 tr('row_enhance_contrast'), eff().enhance_contrast,
                 lambda xo, v: setattr(get(xo), 'enhance_contrast',
@@ -1873,6 +1978,16 @@ class ElementPanel(QFrame):
             tr('row_show_kde'), eff().kde,
             lambda xo, v: setattr(get(xo), 'kde', v)))
         self._bandwidth_row(form, get, eff, stored)
+        cb_n = self._checkbox(
+            tr('row_show_n'), eff().show_n,
+            lambda xo, v: setattr(get(xo), 'show_n', v))
+        self._syncs.append(lambda: (
+            cb_n.blockSignals(True),
+            cb_n.setChecked(bool(eff().show_n)),
+            cb_n.blockSignals(False)))
+        form.addRow(cb_n)
+        _w, sub = self._subform(form, lambda: eff().show_n)
+        self._n_format_row(sub, get, eff, stored)
 
     def _build_stack_item(self, form, iid):
         o = self._tab.overrides
@@ -1983,10 +2098,33 @@ class ElementPanel(QFrame):
             items = self._lift_content(xo, 'annotations')
             return next(x for x in items if x.id == aid)
 
-        e = QLineEdit(ann.text)
-        e.editingFinished.connect(lambda: self._apply_now(
-            lambda o: setattr(get(o), 'text', e.text() or ann.text)))
-        form.addRow(tr('row_text'), e)
+        edit = _NoteTextEdit()
+        edit.setPlainText(ann.text)
+
+        def commit():
+            current = (self._content_item('annotations', aid)
+                       or ann).text
+            raw = edit.toPlainText()
+            text = expand_newline_escapes(raw).rstrip('\n')
+            if not text.strip():
+                edit.setPlainText(current)
+                return
+            if len(text) > MAX_NOTE_TEXT:
+                self._set_invalid(edit, True)
+                return
+            self._set_invalid(edit, False)
+            if text == current:
+                return
+            self._apply_now(
+                lambda o: setattr(get(o), 'text', text))
+            edit.setPlainText(text)
+
+        edit.committed.connect(commit)
+        form.addRow(tr('row_text'), edit)
+        self._syncs.append(lambda: (
+            None if edit.hasFocus() else edit.setPlainText(
+                (self._content_item('annotations', aid)
+                 or ann).text)))
 
         anchors = list(ANNOTATION_ANCHORS)
         pos_labels = [tr(_ANCHOR_KEYS[a]) for a in anchors]

@@ -33,7 +33,8 @@ WORKSHEET_SCHEMA_VERSION = 2
 # baseline; writers stamp theirs into the payload's ``requires``.
 WORKSHEET_CAPABILITIES = frozenset(
     {'bands', 'error_band', 'spans', 'fills', 'box_plot',
-     'column_points', 'histogram', 'horizontal_bars'})
+     'column_points', 'histogram', 'horizontal_bars',
+     'sample_counts'})
 
 _CHART_KEYS = {c.key for g in CHART_GROUPS for c in g.charts}
 _COLUMN_KEYS = ('designation', 'long_name', 'units', 'comments', 'values')
@@ -119,6 +120,13 @@ def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None,
         req.append('column_points')
     if chart_key in HORIZONTAL_CHARTS:
         req.append('horizontal_bars')
+    hd_ = {}
+    if overrides is not None and overrides.histogram is not None:
+        hd_ = overrides.histogram.to_dict()
+    if any(k in vd or k in hd_ for k in
+           ('show_n', 'n_position', 'n_format', 'n_size_pt',
+            'n_color')):
+        req.append('sample_counts')
     if req:
         d['requires'] = sorted(set(req))
     return d

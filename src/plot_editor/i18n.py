@@ -393,6 +393,24 @@ _STRINGS = {
     'err_sd':           {'en': 'SD',           'zh': '标准差'},
     'err_sem':          {'en': 'SEM',          'zh': '标准误'},
     'err_none':         {'en': 'None',         'zh': '无'},
+    'row_show_n':       {'en': 'Show sample size (n)',
+                         'zh': '显示样本量 (n)'},
+    'row_n_position':   {'en': 'n position',   'zh': 'n 位置'},
+    'n_pos_tick':       {'en': 'Under tick label',
+                         'zh': '刻度标签下'},
+    'n_pos_top':        {'en': 'Above group',  'zh': '组上方'},
+    'n_pos_bottom':     {'en': 'Axis bottom',  'zh': '坐标轴底部'},
+    'row_n_format':     {'en': 'n format',     'zh': 'n 格式'},
+    'row_n_size':       {'en': 'n size (pt)',  'zh': 'n 字号 (pt)'},
+    'row_n_colour':     {'en': 'n colour',     'zh': 'n 颜色'},
+    'hint_n_tick_size': {'en': 'Under the tick label the mark uses '
+                               'the tick-label size and colour '
+                               '(X ticks panel).',
+                         'zh': '位于刻度标签下时，样本量沿用刻度标签的'
+                               '字号和颜色（X 刻度面板）。'},
+    'tip_n_format':     {'en': 'Template for the sample-size text; '
+                               '{n} is replaced by the count',
+                         'zh': '样本量文字模板；{n} 会替换为计数'},
     'row_bins':         {'en': 'Bins',         'zh': '分箱数'},
     'bins_auto':        {'en': 'Auto',         'zh': '自动'},
     'row_bin_width':    {'en': 'Bin width',    'zh': '分箱宽度'},
@@ -499,6 +517,11 @@ _STRINGS = {
     'tip_underline':    {'en': 'Underline', 'zh': '下划线'},
     'tip_choose_colour': {'en': 'Choose colour', 'zh': '选择颜色'},
     'tip_reset_default': {'en': 'Reset to default', 'zh': '重置为默认值'},
+    'tip_note_text': {'en': 'Enter starts a new line; Ctrl+Enter or '
+                            'clicking elsewhere applies. A typed \\n '
+                            'outside $…$ also breaks the line.',
+                      'zh': '回车换行；Ctrl+回车或点击其他位置应用。'
+                            '$…$ 之外输入的 \\n 也会换行。'},
     'tip_align_left':    {'en': 'Align left',    'zh': '左对齐'},
     'tip_align_center':  {'en': 'Align center',  'zh': '居中对齐'},
     'tip_align_right':   {'en': 'Align right',   'zh': '右对齐'},
