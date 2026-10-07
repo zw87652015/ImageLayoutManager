@@ -12,6 +12,7 @@ inherited/default value.
 from __future__ import annotations
 
 import copy
+import math
 
 from PyQt6.QtCore import QEvent, QObject, QPoint, QSize, Qt
 from PyQt6.QtGui import QColor, QDoubleValidator, QGuiApplication, \
@@ -24,19 +25,19 @@ from PyQt6.QtWidgets import (QApplication, QCheckBox, QColorDialog,
 
 from src.app import theme as app_theme
 
-from . import render
+import ilmplot.render as render
 from .chrome import element_panel_stylesheet, themed_icon
 from .i18n import tr
 from .style_icons import palette_strip, style_icon
-from .document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
+from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
                        ANNOTATION_ANCHORS, AxisStyle, FrameStyle,
-                       GridStyle, LegendStyle, RidgeOptions,
-                       StackOptions, TextStyle, TitleStyle,
-                       ViolinOptions)
+                       GridStyle, HistOptions, LegendStyle,
+                       RidgeOptions, StackOptions, TextStyle,
+                       TitleStyle, ViolinOptions)
 from . import palettes
 from .palettes import THEMES, theme_display_key
 from .overrides import (SeriesOverride, parse_axis_limits,
-                        reset_element)
+                        reset_element, static_bands)
 
 _PANEL_WIDTH = 300
 
@@ -57,6 +58,15 @@ _GRID_AXIS_KEYS = {'both': 'grid_axis_both', 'x': 'grid_axis_x',
 _GRID_WHICH_KEYS = {'major': 'grid_which_major',
                     'both': 'grid_which_both'}
 _GRID_LINESTYLES = [k for k in LINESTYLES if k]
+
+_VIOLIN_BODY_KEYS = {'none': ('panel_box', 'sec_box'),
+                     'bar': ('panel_column_points', 'sec_column_points')}
+
+
+def violin_panel_keys(body):
+    """(title key, section key) for a violin element by body mode."""
+    return _VIOLIN_BODY_KEYS.get(
+        body, ('panel_violin', 'sec_violin'))
 
 _TITLES = {'title': 'panel_title', 'xlabel': 'panel_xlabel',
            'ylabel': 'panel_ylabel', 'xticks': 'panel_xticks',
@@ -373,6 +383,37 @@ class ElementPanel(QFrame):
         self.setStyleSheet(element_panel_stylesheet(theme, scale))
         self.setFixedWidth(round(_PANEL_WIDTH * scale))
         self._refresh()
+        # Undo/redo of overrides lands on the same object — re-sync
+        # from it; a removed element (undo of Add Note/Fill/…) closes
+        # the panel.
+        tab.changed.connect(self._on_tab_changed)
+
+    def _element_exists(self):
+        """False when undo/redo removed the element this panel edits."""
+        tab = self._tab
+        if tab.plot is None:
+            return False
+        key = self._key
+        doc = tab.effective_document()
+        for prefix, attr in (('series:', 'series'), ('violin:', 'groups'),
+                             ('hist:', 'groups'),
+                             ('stack:', 'categories'),
+                             ('annotation:', 'annotations'),
+                             ('bracket:', 'brackets'),
+                             ('span:', 'spans'), ('band:', 'bands')):
+            if key.startswith(prefix):
+                coll = getattr(doc, attr, None) if doc is not None \
+                    else None
+                iid = key[len(prefix):]
+                return any(getattr(it, 'id', None) == iid
+                           for it in (coll or ()))
+        return True
+
+    def _on_tab_changed(self):
+        if not self._element_exists():
+            self.close()
+            return
+        self._refresh()
 
     # ── entry point / lifecycle ───────────────────────────────────────
 
@@ -427,7 +468,8 @@ class ElementPanel(QFrame):
                         break
             return tr('panel_series', name=label or sid)
         for prefix, coll_name, title_key in (
-                ('violin:', 'groups', 'panel_violin'),
+                ('violin:', 'groups', None),
+                ('hist:', 'groups', 'panel_hist'),
                 ('stack:', 'categories', 'panel_stack')):
             if self._key.startswith(prefix):
                 iid = self._key[len(prefix):]
@@ -438,11 +480,26 @@ class ElementPanel(QFrame):
                         if item.id == iid:
                             label = item.label
                             break
+                if title_key is None:
+                    body = doc.violin.body if doc is not None \
+                        and doc.violin is not None else None
+                    title_key = violin_panel_keys(body)[0]
                 return tr(title_key, name=label or iid)
         if self._key.startswith('annotation:'):
             return tr('panel_annotation')
         if self._key.startswith('bracket:'):
             return tr('panel_bracket')
+        if self._key.startswith('span:'):
+            iid = self._key[len('span:'):]
+            sp = self._content_item('spans', iid)
+            axis = getattr(sp, 'axis', 'x')
+            return tr('panel_span_x' if axis == 'x' else 'panel_span_y')
+        if self._key.startswith('band:'):
+            iid = self._key[len('band:'):]
+            fills = getattr(self._tab.overrides, 'fills', None) or ()
+            if any(f.id == iid for f in fills):
+                return tr('panel_fill')
+            return tr('panel_band')
         key = _TITLES.get(self._key)
         return tr(key) if key is not None else self._key
 
@@ -482,6 +539,7 @@ class ElementPanel(QFrame):
     def _reset_element(self):
         y_col = None
         for prefix, coll in (('series:', 'series'), ('violin:', 'groups'),
+                             ('hist:', 'groups'),
                              ('stack:', 'categories')):
             if self._key.startswith(prefix):
                 y_col = self._item_y_column(
@@ -562,12 +620,13 @@ class ElementPanel(QFrame):
         s.setValue(value)
         return s
 
-    def _section(self, text):
+    def _section(self, text, form=None):
         head = QLabel(text)
         head.setObjectName('plotElementPanelSection')
-        self._body.addRow(head)
+        (form or self._body).addRow(head)
 
-    def _color_row(self, label, color, set_fn, reset_color, is_set=None):
+    def _color_row(self, label, color, set_fn, reset_color, is_set=None,
+                   form=None):
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
@@ -587,8 +646,29 @@ class ElementPanel(QFrame):
             if is_set is not None:
                 self._reset_buttons.append((is_set, rst))
         h.addStretch(1)
-        self._body.addRow(label, row)
+        (form or self._body).addRow(label, row)
         return swatch
+
+    def _subform(self, form, visible_fn):
+        """Sub-form whose rows show/hide as a block on refresh."""
+        widget = QWidget()
+        sub = QFormLayout(widget)
+        sub.setContentsMargins(0, 0, 0, 0)
+        sub.setHorizontalSpacing(8)
+        sub.setVerticalSpacing(6)
+        form.addRow(widget)
+
+        def sync():
+            visible = bool(visible_fn())
+            if widget.isVisibleTo(self) != visible:
+                widget.setVisible(visible)
+                # The floating panel only grows on its own; shrink it
+                # back when a block folds away.
+                if self.isVisible():
+                    self.adjustSize()
+        self._syncs.append(sync)
+        sync()
+        return widget, sub
 
     # ── style accessors (run inside update_overrides fns) ─────────────
 
@@ -644,7 +724,7 @@ class ElementPanel(QFrame):
                                  and doc is not None
                                  and doc.x_tick_labels))
             if key == 'xticks' and doc is not None:
-                if doc.groups:
+                if doc.kind == 'violin':
                     self._build_group_labels(form, doc)
                 elif doc.categories:
                     self._build_bar_labels(form, doc)
@@ -656,12 +736,18 @@ class ElementPanel(QFrame):
             self._build_series(form, key[7:])
         elif key.startswith('violin:'):
             self._build_violin_item(form, key[len('violin:'):])
+        elif key.startswith('hist:'):
+            self._build_hist_item(form, key[len('hist:'):])
         elif key.startswith('stack:'):
             self._build_stack_item(form, key[len('stack:'):])
         elif key.startswith('annotation:'):
             self._build_annotation(form, key[len('annotation:'):])
         elif key.startswith('bracket:'):
             self._build_bracket(form, key[len('bracket:'):])
+        elif key.startswith('span:'):
+            self._build_span(form, key[len('span:'):])
+        elif key.startswith('band:'):
+            self._build_band(form, key[len('band:'):])
 
     def _build_title(self, form):
         tab = self._tab
@@ -993,6 +1079,52 @@ class ElementPanel(QFrame):
                       ms, (so().markersize_pt if so() and
                            so().markersize_pt is not None
                            else (ds.markersize_pt if ds else 6.0))))
+
+        if ds is not None and doc is not None and doc.kind == 'line' \
+                and (ds.yerr is not None
+                     or ds.yerr_minus is not None):
+            cur_es = (so().error_style
+                      if so() and so().error_style is not None
+                      else ds.error_style)
+            es_combo = self._combo(
+                [tr('err_display_bars'), tr('err_display_band')],
+                ['bars', 'band'], cur_es,
+                lambda o, v: setattr(get(o), 'error_style', v))
+            form.addRow(tr('row_error_display'), es_combo)
+
+            ap = self._spin(
+                (so().error_alpha
+                 if so() and so().error_alpha is not None
+                 else ds.error_alpha),
+                0.05, 1.0, step=0.05, decimals=2)
+            ap.valueChanged.connect(lambda v: self._apply_now(
+                lambda o: setattr(get(o), 'error_alpha', v)))
+            self._row(form, tr('row_band_opacity'), ap,
+                      is_set=lambda: so() is not None
+                      and so().error_alpha is not None,
+                      reset=lambda o: setattr(get(o), 'error_alpha',
+                                              None),
+                      sync=lambda: self._respin(
+                          ap, (so().error_alpha if so() and
+                               so().error_alpha is not None
+                               else ds.error_alpha)))
+            last = form.rowCount() - 1
+            ap_widgets = []
+            for role in (QFormLayout.ItemRole.LabelRole,
+                         QFormLayout.ItemRole.FieldRole):
+                it = form.itemAt(last, role)
+                if it is not None and it.widget() is not None:
+                    ap_widgets.append(it.widget())
+
+            def _err_vis():
+                eff_es = (so().error_style
+                          if so() and so().error_style is not None
+                          else ds.error_style)
+                for w in ap_widgets:
+                    w.setVisible(eff_es == 'band')
+
+            _err_vis()
+            self._syncs.append(_err_vis)
 
         if doc is not None and doc.kind == 'ridgeline':
             self._build_ridgeline_section(form)
@@ -1400,45 +1532,8 @@ class ElementPanel(QFrame):
              else (item.color if item else '#000000'))))
         return get, so, item
 
-    def _build_violin_item(self, form, iid):
-        o = self._tab.overrides
-        res = self._item_label_color(form, 'groups', iid)
-        if res is None:
-            return
-        item = res[2]
-        stored = lambda: o.violin
-
-        def get(xo):
-            if xo.violin is None:
-                xo.violin = ViolinOptions()
-            return xo.violin
-
-        def eff():
-            doc = self._doc()
-            return (doc.violin if doc is not None
-                    and doc.violin is not None else ViolinOptions())
-
-        def opt_row(spin, label, field, default):
-            spin.valueChanged.connect(lambda v: self._apply_now(
-                lambda xo: setattr(get(xo), field, v)))
-            self._row(form, label, spin,
-                      is_set=lambda: stored() is not None
-                      and getattr(stored(), field) != default,
-                      reset=lambda xo: setattr(get(xo), field, default),
-                      sync=lambda: self._respin(
-                          spin, getattr(eff(), field)))
-
-        self._section(tr('sec_violin'))
-        form.addRow(self._checkbox(
-            tr('row_show_box'), eff().show_box,
-            lambda xo, v: setattr(get(xo), 'show_box', v)))
-        form.addRow(self._checkbox(
-            tr('row_show_points'), eff().show_points,
-            lambda xo, v: setattr(get(xo), 'show_points', v)))
-        form.addRow(self._checkbox(
-            tr('row_points_beside'), eff().points_beside,
-            lambda xo, v: setattr(get(xo), 'points_beside', v)))
-
+    def _bandwidth_row(self, form, get, eff, stored):
+        """Bandwidth combo + custom-factor edit (violin/histogram)."""
         bw_row = QWidget()
         bh = QHBoxLayout(bw_row)
         bh.setContentsMargins(0, 0, 0, 0)
@@ -1507,10 +1602,264 @@ class ElementPanel(QFrame):
                   reset=lambda xo: setattr(get(xo), 'bandwidth',
                                            'scott'))
 
+    def _build_violin_item(self, form, iid):
+        o = self._tab.overrides
+        res = self._item_label_color(form, 'groups', iid)
+        if res is None:
+            return
+        item = res[2]
+        stored = lambda: o.violin
+
+        def get(xo):
+            if xo.violin is None:
+                # Seed from the effective options so body/box defaults
+                # of box/column_points charts survive the first edit.
+                xo.violin = copy.deepcopy(eff())
+            return xo.violin
+
+        def eff():
+            doc = self._doc()
+            return (doc.violin if doc is not None
+                    and doc.violin is not None else ViolinOptions())
+
+        def opt_row(spin, label, field, default, target=None):
+            spin.valueChanged.connect(lambda v: self._apply_now(
+                lambda xo: setattr(get(xo), field, v)))
+            self._row(target or form, label, spin,
+                      is_set=lambda: stored() is not None
+                      and getattr(stored(), field) != default,
+                      reset=lambda xo: setattr(get(xo), field, default),
+                      sync=lambda: self._respin(
+                          spin, getattr(eff(), field)))
+
+        def sync_cb(cb, field):
+            self._syncs.append(lambda: (
+                cb.blockSignals(True),
+                cb.setChecked(bool(getattr(eff(), field))),
+                cb.blockSignals(False)))
+
+        def eff_box_width():
+            v = eff().box_width
+            if v is not None:
+                return v
+            return 0.5 if eff().body == 'none' else 0.16
+
+        def box_width_row(target):
+            boxw = self._spin(eff_box_width(), 0.05, 1.0, step=0.05,
+                              decimals=2)
+            boxw.valueChanged.connect(lambda v: self._apply_now(
+                lambda xo: setattr(get(xo), 'box_width', v)))
+            self._row(target, tr('row_box_width'), boxw,
+                      is_set=lambda: stored() is not None
+                      and stored().box_width is not None,
+                      reset=lambda xo: setattr(get(xo), 'box_width',
+                                               None),
+                      sync=lambda: self._respin(boxw, eff_box_width()))
+
+        def edge_rows(target):
+            opt_row(self._spin(eff().edge_width_pt, 0, 10, step=0.1),
+                    tr('row_edge_width_none'), 'edge_width_pt', 1.0,
+                    target)
+            edge_fb = item.color if item is not None else '#000000'
+            swe = self._color_row(
+                tr('row_edge_colour'),
+                eff().edge_color or edge_fb,
+                lambda xo, c: setattr(get(xo), 'edge_color', c), None,
+                is_set=lambda: stored() is not None
+                and stored().edge_color is not None, form=target)
+            self._syncs.append(lambda: swe.set_color(
+                eff().edge_color or edge_fb))
+
+        def point_rows(target, beside=True):
+            if beside:
+                target.addRow(self._checkbox(
+                    tr('row_points_beside'), eff().points_beside,
+                    lambda xo, v: setattr(get(xo), 'points_beside',
+                                           v)))
+            opt_row(self._spin(eff().point_size_pt, 0, 20, step=0.5),
+                    tr('row_point_size'), 'point_size_pt', 6.0, target)
+            opt_row(self._spin(eff().point_alpha, 0.0, 1.0, step=0.05),
+                    tr('row_point_opacity'), 'point_alpha', 1.0, target)
+            pedge_fb = item.color if item is not None else '#000000'
+            spe = self._color_row(
+                tr('row_point_edge_colour'),
+                eff().point_edge_color or pedge_fb,
+                lambda xo, c: setattr(get(xo), 'point_edge_color', c),
+                None,
+                is_set=lambda: stored() is not None
+                and stored().point_edge_color is not None,
+                form=target)
+            self._syncs.append(lambda: spe.set_color(
+                eff().point_edge_color or pedge_fb))
+            opt_row(self._spin(eff().point_edge_width_pt, 0, 10,
+                               step=0.1),
+                    tr('row_point_edge_width'), 'point_edge_width_pt',
+                    1.0, target)
+
+        def fill_row(target):
+            opt_row(self._spin(eff().fill_alpha, 0.0, 1.0, step=0.05),
+                    tr('row_fill_opacity'), 'fill_alpha', 0.3, target)
+
+        body = eff().body
+        self._section(tr(violin_panel_keys(body)[1]))
+
+        if body == 'bar':
+            opt_row(self._spin(eff().bar_width, 0.05, 1.0, step=0.05,
+                               decimals=2),
+                    tr('row_bar_width'), 'bar_width', 0.6)
+            self._row(form, tr('row_bar_error'),
+                      self._combo(
+                          [tr('err_sd'), tr('err_sem'),
+                           tr('err_none')],
+                          ['sd', 'sem', 'none'], eff().bar_error,
+                          lambda xo, v: setattr(get(xo),
+                                                'bar_error', v)))
+            fill_row(form)
+            edge_rows(form)
+            cb_points = self._checkbox(
+                tr('row_show_points'), eff().show_points,
+                lambda xo, v: setattr(get(xo), 'show_points', v))
+            sync_cb(cb_points, 'show_points')
+            form.addRow(cb_points)
+            _w, sub = self._subform(
+                form, lambda: eff().show_points)
+            point_rows(sub)
+            cb_box = self._checkbox(
+                tr('row_show_box'), eff().show_box,
+                lambda xo, v: setattr(get(xo), 'show_box', v))
+            sync_cb(cb_box, 'show_box')
+            form.addRow(cb_box)
+            _w, sub = self._subform(form, lambda: eff().show_box)
+            box_width_row(sub)
+            form.addRow(self._checkbox(
+                tr('row_enhance_contrast'), eff().enhance_contrast,
+                lambda xo, v: setattr(get(xo), 'enhance_contrast', v)))
+        elif body == 'none':
+            form.addRow(self._checkbox(
+                tr('row_show_box'), eff().show_box,
+                lambda xo, v: setattr(get(xo), 'show_box', v)))
+            box_width_row(form)
+            fill_row(form)
+            cb_points = self._checkbox(
+                tr('row_show_points'), eff().show_points,
+                lambda xo, v: setattr(get(xo), 'show_points', v))
+            sync_cb(cb_points, 'show_points')
+            form.addRow(cb_points)
+            _w, sub = self._subform(
+                form, lambda: not eff().show_points)
+            sub.addRow(self._checkbox(
+                tr('row_show_outliers'), eff().show_outliers,
+                lambda xo, v: setattr(get(xo), 'show_outliers', v)))
+            _w, sub = self._subform(form, lambda: eff().show_points)
+            point_rows(sub)
+        else:
+            form.addRow(self._checkbox(
+                tr('row_show_box'), eff().show_box,
+                lambda xo, v: setattr(get(xo), 'show_box', v)))
+            form.addRow(self._checkbox(
+                tr('row_show_points'), eff().show_points,
+                lambda xo, v: setattr(get(xo), 'show_points', v)))
+            form.addRow(self._checkbox(
+                tr('row_points_beside'), eff().points_beside,
+                lambda xo, v: setattr(get(xo), 'points_beside', v)))
+            box_width_row(form)
+            self._bandwidth_row(form, get, eff, stored)
+            fill_row(form)
+            edge_rows(form)
+            point_rows(form, beside=False)
+            form.addRow(self._checkbox(
+                tr('row_enhance_contrast'), eff().enhance_contrast,
+                lambda xo, v: setattr(get(xo), 'enhance_contrast',
+                                       v)))
+
+    def _build_hist_item(self, form, iid):
+        o = self._tab.overrides
+        res = self._item_label_color(form, 'groups', iid)
+        if res is None:
+            return
+        item = res[2]
+        stored = lambda: o.histogram
+
+        def get(xo):
+            if xo.histogram is None:
+                xo.histogram = copy.deepcopy(eff())
+            return xo.histogram
+
+        def eff():
+            doc = self._doc()
+            return (doc.histogram if doc is not None
+                    and doc.histogram is not None else HistOptions())
+
+        def opt_row(spin, label, field, default):
+            spin.valueChanged.connect(lambda v: self._apply_now(
+                lambda xo: setattr(get(xo), field, v)))
+            self._row(form, label, spin,
+                      is_set=lambda: stored() is not None
+                      and getattr(stored(), field) != default,
+                      reset=lambda xo: setattr(get(xo), field, default),
+                      sync=lambda: self._respin(
+                          spin, getattr(eff(), field)))
+
+        self._section(tr('sec_histogram'))
+        # Bins/bin_width are exclusive: setting one clears the other.
+        bins = QSpinBox()
+        bins.setRange(0, 1000)
+        bins.setSpecialValueText(tr('bins_auto'))
+        bins.setKeyboardTracking(False)
+        bins.setValue(eff().bins or 0)
+        bins.valueChanged.connect(lambda v: self._apply_now(
+            lambda xo: (setattr(get(xo), 'bins', int(v) or None),
+                        setattr(get(xo), 'bin_width', None))))
+        self._row(form, tr('row_bins'), bins,
+                  is_set=lambda: stored() is not None
+                  and stored().bins is not None,
+                  reset=lambda xo: setattr(get(xo), 'bins', None),
+                  sync=lambda: self._respin(bins, eff().bins or 0))
+        binw = QLineEdit()
+        binw.setValidator(QDoubleValidator(1e-9, 1e18, 9))
+        binw.setText('' if eff().bin_width is None
+                     else '%g' % eff().bin_width)
+
+        def binw_commit():
+            t = binw.text().strip()
+            if not t:
+                self._set_invalid(binw, False)
+                self._apply_now(
+                    lambda xo: setattr(get(xo), 'bin_width', None))
+                return
+            try:
+                v = float(t)
+            except ValueError:
+                self._set_invalid(binw, True)
+                return
+            if not (0 < v and math.isfinite(v)):
+                self._set_invalid(binw, True)
+                return
+            self._set_invalid(binw, False)
+            self._apply_now(
+                lambda xo: (setattr(get(xo), 'bin_width', v),
+                            setattr(get(xo), 'bins', None)))
+
+        binw.editingFinished.connect(binw_commit)
+        self._row(form, tr('row_bin_width'), binw,
+                  is_set=lambda: stored() is not None
+                  and stored().bin_width is not None,
+                  reset=lambda xo: setattr(get(xo), 'bin_width', None),
+                  sync=lambda: binw.setText(
+                      '' if eff().bin_width is None
+                      else '%g' % eff().bin_width))
+        form.addRow(self._checkbox(
+            tr('row_density'), eff().density,
+            lambda xo, v: setattr(get(xo), 'density', v)))
+        self._row(form, tr('row_hist_style'),
+                  self._combo([tr('hist_bars'), tr('hist_step')],
+                              ['bars', 'step'], eff().style,
+                              lambda xo, v: setattr(get(xo),
+                                                    'style', v)))
         opt_row(self._spin(eff().fill_alpha, 0.0, 1.0, step=0.05),
-                tr('row_fill_opacity'), 'fill_alpha', 0.3)
+                tr('row_fill_opacity'), 'fill_alpha', 0.5)
         opt_row(self._spin(eff().edge_width_pt, 0, 10, step=0.1),
-                tr('row_edge_width_none'), 'edge_width_pt', 1.0)
+                tr('row_edge_width_none'), 'edge_width_pt', 0.0)
         edge_fb = item.color if item is not None else '#000000'
         swe = self._color_row(
             tr('row_edge_colour'),
@@ -1520,25 +1869,10 @@ class ElementPanel(QFrame):
             and stored().edge_color is not None)
         self._syncs.append(lambda: swe.set_color(
             eff().edge_color or edge_fb))
-        opt_row(self._spin(eff().point_size_pt, 0, 20, step=0.5),
-                tr('row_point_size'), 'point_size_pt', 6.0)
-        opt_row(self._spin(eff().point_alpha, 0.0, 1.0, step=0.05),
-                tr('row_point_opacity'), 'point_alpha', 1.0)
-        pedge_fb = item.color if item is not None else '#000000'
-        spe = self._color_row(
-            tr('row_point_edge_colour'),
-            eff().point_edge_color or pedge_fb,
-            lambda xo, c: setattr(get(xo), 'point_edge_color', c),
-            None,
-            is_set=lambda: stored() is not None
-            and stored().point_edge_color is not None)
-        self._syncs.append(lambda: spe.set_color(
-            eff().point_edge_color or pedge_fb))
-        opt_row(self._spin(eff().point_edge_width_pt, 0, 10, step=0.1),
-                tr('row_point_edge_width'), 'point_edge_width_pt', 1.0)
         form.addRow(self._checkbox(
-            tr('row_enhance_contrast'), eff().enhance_contrast,
-            lambda xo, v: setattr(get(xo), 'enhance_contrast', v)))
+            tr('row_show_kde'), eff().kde,
+            lambda xo, v: setattr(get(xo), 'kde', v)))
+        self._bandwidth_row(form, get, eff, stored)
 
     def _build_stack_item(self, form, iid):
         o = self._tab.overrides
@@ -1629,13 +1963,14 @@ class ElementPanel(QFrame):
         items = getattr(o, name)
         if items is None:
             doc = self._doc()
-            items = [copy.copy(a) for a in getattr(doc, name) or ()]
+            items = [copy.copy(a)
+                     for a in getattr(doc, name, None) or ()]
             setattr(o, name, items)
         return items
 
     def _content_item(self, name, iid):
         items = getattr(self._tab.overrides, name) \
-            or getattr(self._doc(), name) or ()
+            or getattr(self._doc(), name, None) or ()
         return next((x for x in items if x.id == iid), None)
 
     def _build_annotation(self, form, aid):
@@ -1759,3 +2094,207 @@ class ElementPanel(QFrame):
                 if b.id != bid] or None),
             after=self.close))
         form.addRow(delete)
+
+    # ── spans / fills (shaded areas) ──────────────────────────────────
+
+    @staticmethod
+    def _split_alpha(hex_color):
+        """'#rrggbbaa' → ('#rrggbb', alpha 0..1); opaque otherwise."""
+        if isinstance(hex_color, str) and len(hex_color) == 9:
+            return hex_color[:7], int(hex_color[7:9], 16) / 255.0
+        return hex_color or '#7f7f7f', 1.0
+
+    @staticmethod
+    def _join_alpha(rgb, alpha):
+        return (rgb or '#7f7f7f') + '%02x' % max(
+            0, min(255, int(round(alpha * 255))))
+
+    def _area_rows(self, form, get, item, coll_name, iid):
+        """Colour/Opacity/Label/Delete rows shared by spans and bands."""
+        rgb, alpha = self._split_alpha(item.color)
+
+        def set_color(o, c):
+            # Read the live alpha so a colour pick never reverts a
+            # later Opacity change.
+            get(o).color = self._join_alpha(
+                c, self._split_alpha(get(o).color)[1])
+
+        self._color_row(tr('row_colour'), rgb, set_color, None)
+        op = self._spin(alpha, 0.05, 1.0, step=0.05, decimals=2)
+        op.valueChanged.connect(lambda v: self._apply_now(
+            lambda o: setattr(get(o), 'color', self._join_alpha(
+                self._split_alpha(get(o).color)[0], v))))
+        form.addRow(tr('row_opacity'), op)
+
+        e = QLineEdit(item.label)
+        e.setPlaceholderText(tr('auto_placeholder'))
+        e.editingFinished.connect(lambda: self._apply_now(
+            lambda o: setattr(get(o), 'label', e.text())))
+        form.addRow(tr('row_label'), e)
+
+        delete = QPushButton(tr('btn_delete'))
+        delete.setObjectName('plotElementPanelDelete')
+
+        def do_delete(o):
+            if coll_name == 'fills':
+                o.fills = [f for f in (o.fills or ())
+                           if f.id != iid] or None
+            else:
+                items = self._lift_bands(o) if coll_name == 'bands' \
+                    else self._lift_content(o, coll_name)
+                setattr(o, coll_name, [
+                    x for x in items if x.id != iid] or None)
+        delete.clicked.connect(
+            lambda: self._apply_now(do_delete, after=self.close))
+        form.addRow(delete)
+
+    def _num_field(self, form, label, value, apply_fn,
+                   placeholder=None):
+        """An optional numeric QLineEdit committing on editingFinished;
+        ``apply_fn`` gets the parsed value (``None`` when blank)."""
+        e = QLineEdit('' if value is None else '%g' % value)
+        e.setPlaceholderText(placeholder or tr('auto_placeholder'))
+        e.setMaximumWidth(90)
+
+        def commit():
+            t = e.text().strip()
+            if not t:
+                self._set_invalid(e, False)
+                apply_fn(None)
+                return
+            try:
+                v = float(t)
+            except ValueError:
+                self._set_invalid(e, True)
+                return
+            if not math.isfinite(v):
+                self._set_invalid(e, True)
+                return
+            self._set_invalid(e, False)
+            apply_fn(v)
+        e.editingFinished.connect(commit)
+        form.addRow(label, e)
+        return e
+
+    def _lift_bands(self, o):
+        """``o.bands`` mirroring only the document's *static* bands —
+        bands computed from ``o.fills`` are never lifted (they would
+        duplicate on the next ``effective_document``)."""
+        items = o.bands
+        if items is None:
+            items = [copy.copy(b)
+                     for b in static_bands(self._doc(), o)]
+            o.bands = items
+        return items
+
+    def _build_span(self, form, sid):
+        sp = self._content_item('spans', sid)
+        if sp is None:
+            form.addRow(QLabel(tr('panel_series_detached')))
+            return
+
+        def get(o):
+            items = self._lift_content(o, 'spans')
+            return next(x for x in items if x.id == sid)
+
+        lo = self._spin(sp.lo, -1e9, 1e9, decimals=6)
+        hi = self._spin(sp.hi, -1e9, 1e9, decimals=6)
+
+        def commit_span(o):
+            # An inverted range is normalised (sorted) instead of
+            # writing an invalid span.
+            get(o).lo, get(o).hi = sorted(
+                (lo.value(), hi.value()))
+        for w in (lo, hi):
+            w.valueChanged.connect(lambda _v: self._apply_now(
+                commit_span, after=self._respan))
+        form.addRow(tr('row_from'), lo)
+        form.addRow(tr('row_to'), hi)
+        self._span_widgets = (sid, lo, hi)
+        self._area_rows(form, get, sp, 'spans', sid)
+
+    def _respan(self):
+        sid, lo, hi = self._span_widgets
+        cur = self._content_item('spans', sid)
+        if cur is not None:
+            self._respin(lo, cur.lo)
+            self._respin(hi, cur.hi)
+
+    def _build_band(self, form, bid):
+        tab = self._tab
+        fill = next((f for f in (tab.overrides.fills or ())
+                     if f.id == bid), None)
+        if fill is not None:
+            self._build_fill(form, fill)
+            return
+        band = self._content_item('bands', bid)
+        if band is None:
+            form.addRow(QLabel(tr('panel_series_detached')))
+            return
+
+        def get(o):
+            items = self._lift_bands(o)
+            return next(x for x in items if x.id == bid)
+
+        self._area_rows(form, get, band, 'bands', bid)
+
+    def _build_fill(self, form, fill):
+        fid = fill.id
+
+        def get(o):
+            items = self._lift_content(o, 'fills')
+            return next(x for x in items if x.id == fid)
+
+        def set_field(field, value, widget=None):
+            # Never apply an invalid fill: validate the candidate with
+            # the strict parser first (covers Series A == B, x_min >=
+            # x_max, a 'between' fill losing its second series).
+            from .fills import CurveFill
+            cur = self._content_item('fills', fid)
+            cand = copy.copy(cur)
+            setattr(cand, field, value)
+            try:
+                CurveFill.from_dict(cand.to_dict())
+            except Exception:
+                if widget is not None:
+                    self._set_invalid(widget, True)
+                return
+            if widget is not None:
+                self._set_invalid(widget, False)
+            self._apply_now(
+                lambda o: setattr(get(o), field, value))
+
+        def series_combo(label, field, current):
+            tab = self._tab
+            items = tab.plot.series if tab.plot is not None else []
+            pairs = [(s.label or s.y_label or str(i),
+                      getattr(s, 'y_column', None))
+                     for i, s in enumerate(items)]
+            pairs = [(l, v) for l, v in pairs if v is not None]
+            if not pairs:
+                return
+            combo = QComboBox()
+            for l, v in pairs:
+                combo.addItem(l, v)
+            if current in [v for _l, v in pairs]:
+                combo.setCurrentIndex(
+                    [v for _l, v in pairs].index(current))
+            combo.currentIndexChanged.connect(
+                lambda idx, c=combo, f=field:
+                set_field(f, c.itemData(idx), c))
+            form.addRow(label, combo)
+
+        series_combo(tr('row_series_a'), 'a', fill.a)
+        if fill.kind == 'between':
+            series_combo(tr('row_series_b'), 'b', fill.b)
+        if fill.kind == 'under':
+            self._num_field(form, tr('row_baseline'), fill.baseline,
+                            lambda v: self._apply_now(
+                                lambda o: setattr(
+                                    get(o), 'baseline',
+                                    0.0 if v is None else v)))
+        e_lo = self._num_field(form, tr('row_x_from'), fill.x_min,
+                               lambda v: set_field('x_min', v, e_lo))
+        e_hi = self._num_field(form, tr('row_x_to'), fill.x_max,
+                               lambda v: set_field('x_max', v, e_hi))
+        self._area_rows(form, get, fill, 'fills', fid)

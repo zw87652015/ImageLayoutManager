@@ -12,8 +12,8 @@ import shutil
 import tempfile
 import uuid
 
-from .document import PlotDocument
-from .render import save_document
+from ilmplot.document import PlotDocument
+from ilmplot.render import save_document
 
 _TEMP_SUBDIR = 'ilm-plot-editor'
 

@@ -21,7 +21,8 @@ import sys
 
 from PyQt6.QtCore import QProcess, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QKeySequence
-from PyQt6.QtWidgets import (QDialog, QFileDialog, QMainWindow, QMenu,
+from PyQt6.QtWidgets import (QApplication, QDialog, QFileDialog,
+                             QMainWindow, QMenu,
                              QMessageBox,
                              QSizePolicy, QTabWidget, QToolBar,
                              QToolButton, QWidget)
@@ -33,7 +34,7 @@ from .about_dialog import PlotEditorAboutDialog
 from .actions import (ACTIONS, CHART_GROUPS, DEFAULT_CHART, EDIT_MENU,
                       EXPORT_MENU, FILE_MENU, HELP_MENU,
                       NATIVE_PLOT_FILTER, NATIVE_PLOT_SUFFIX)
-from .document import PlotDocument, PlotDocumentError
+from ilmplot.document import PlotDocument, PlotDocumentError
 from .export import EXPORT_FORMATS, export_plot, with_suffix
 from .i18n import history_label, tr
 from .ilm_bridge import (_is_default_document, copy_ilm_source,
@@ -196,6 +197,9 @@ class PlotEditorWindow(QMainWindow):
                 bracket_ok = doc is not None and len(
                     doc.groups or doc.categories) >= 2
         self.editor_actions['add_bracket'].setEnabled(bracket_ok)
+        self.editor_actions['add_fill'].setEnabled(
+            ready and CHART_KIND.get(tab.plot.chart_key,
+                                     ('line', None))[0] == 'line')
         self._export_button.setEnabled(ready)
         self._export_button.setIcon(chrome.themed_icon(
             'export', self._theme, 'on_accent' if ready else 'text_tert'))
@@ -221,16 +225,30 @@ class PlotEditorWindow(QMainWindow):
             view.undo()
         elif key == 'redo':
             view.redo()
-        elif key == 'cut':
-            view.cut()
-        elif key == 'copy':
-            view.copy()
-        elif key == 'paste':
-            view.paste()
-        elif key == 'delete':
-            view.clear_selection_contents()
-        elif key == 'select_all':
-            view.select_all()
+        elif key in ('cut', 'copy', 'paste', 'delete', 'select_all'):
+            # Worksheet edit actions only apply while the worksheet
+            # (its frozen-label overlay or a child such as an open cell
+            # editor) has focus — a window shortcut would otherwise
+            # delete cell data while the user works on the plot.
+            def _within(widget):
+                fw = QApplication.focusWidget()
+                return widget is not None and fw is not None \
+                    and (fw is widget or widget.isAncestorOf(fw))
+            ws_focus = _within(view) \
+                or _within(getattr(view, '_labels', None))
+            if ws_focus:
+                if key == 'cut':
+                    view.cut()
+                elif key == 'copy':
+                    view.copy()
+                elif key == 'paste':
+                    view.paste()
+                elif key == 'delete':
+                    view.clear_selection_contents()
+                else:
+                    view.select_all()
+            elif key == 'delete' and _within(tab.plot_canvas):
+                tab.plot_canvas.delete_selected()
         elif key == 'style':
             self._open_style_manager()
         elif key == 'figure_size':
@@ -243,6 +261,8 @@ class PlotEditorWindow(QMainWindow):
             tab.add_text()
         elif key == 'add_bracket':
             tab.add_bracket()
+        elif key == 'add_fill':
+            tab.add_fill()
         elif key == 'plot':
             self.plot_requested.emit(*self.current_chart)
             self._plot(*self.current_chart)
@@ -584,6 +604,7 @@ class PlotEditorWindow(QMainWindow):
         plot_menu.addSeparator()
         plot_menu.addAction(self.editor_actions['add_note'])
         plot_menu.addAction(self.editor_actions['add_bracket'])
+        plot_menu.addAction(self.editor_actions['add_fill'])
         plot_menu.addSeparator()
         self._theme_menu = plot_menu.addMenu(tr('menu_colour_theme'))
         self._theme_menu.aboutToShow.connect(

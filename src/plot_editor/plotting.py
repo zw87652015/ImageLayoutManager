@@ -5,7 +5,7 @@ import io
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_svg import FigureCanvasSVG
 
-from .mathtext import safe_text
+from ilmplot.mathtext import safe_text
 from .plot_data import tick_label_map
 
 _CHART_KEYS = {'pure_line', 'pure_scatters', 'line_scatters',

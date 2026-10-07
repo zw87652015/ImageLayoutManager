@@ -22,7 +22,7 @@ from src.app.motion import start_animation
 from src.app.theme import get_tokens, token_color
 
 from .i18n import tr
-from .mathtext import has_math
+from ilmplot.mathtext import has_math
 from .worksheet import (DESIGNATION_TEXT, META_LABELS, META_ROWS,
                         WorksheetLimitError, parse_tsv, to_tsv)
 

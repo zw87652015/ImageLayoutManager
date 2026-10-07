@@ -459,7 +459,7 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     # Cheap cached metadata probe BEFORE reading the file — ordinary SVGs
     # with no overrides/normalization must not re-read bytes per layout.
     try:
-        from src.plot_editor.document import has_plot_metadata
+        from ilmplot.document import has_plot_metadata
         native = has_plot_metadata(path)
     except Exception:
         native = False
@@ -480,7 +480,7 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     native_doc = None
     if native:
         try:
-            from src.plot_editor.render import load_rendered_document
+            from ilmplot.render import load_rendered_document
             native_doc = load_rendered_document(path)
         except Exception:
             native_doc = None
@@ -515,7 +515,7 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
                 handled = True
                 try:
                     from src.model.layout_engine import LayoutEngine
-                    from src.plot_editor.render import render_document_fitted
+                    from ilmplot.render import render_document_fitted
                     from src.utils.editable_plot import resolve_plot_row_frames
                     if layout_result is None:
                         layout_result = LayoutEngine.calculate_layout(project)
@@ -540,7 +540,7 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
             # re-render either. Placement then scales it like a picture.
             if mm_per_unit > 0 and getattr(cell, 'plot_reflow', False):
                 try:
-                    from src.plot_editor.render import render_document
+                    from ilmplot.render import render_document
                     base_bytes = render_document(
                         native_doc,
                         style_scale=(25.4 / 72.0) / mm_per_unit).svg

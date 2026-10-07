@@ -238,6 +238,7 @@ def main(argv=None) -> int:
     print(f"License staging: {legal_dir}")
 
     src_path = str(project_root / "src")
+    ilmplot_path = str(project_root / "packages" / "ilmplot" / "src")
     assets_dir = project_root / "assets"
     icon_path = assets_dir / "icon.ico"
 
@@ -354,6 +355,7 @@ def main(argv=None) -> int:
         "--windowed",
         "--name=ImageLayoutManager",
         f"--paths={src_path}",
+        f"--paths={ilmplot_path}",
         "--noupx",
         *isolated_args,
     ]
@@ -482,6 +484,7 @@ def main(argv=None) -> int:
             "--console",            # CLI needs stdout/stderr
             "--name=imagelayout-cli",
             f"--paths={src_path}",
+            f"--paths={ilmplot_path}",
             "--noupx",
             f"--version-file={cli_version_file}",
             *isolated_args,

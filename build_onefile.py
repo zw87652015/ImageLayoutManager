@@ -57,6 +57,7 @@ def main() -> int:
         return 1
 
     src_path = str(project_root / "src")
+    ilmplot_path = str(project_root / "packages" / "ilmplot" / "src")
     assets_dir = project_root / "assets"
     icon_path = assets_dir / "icon.ico"
 
@@ -135,7 +136,7 @@ def main() -> int:
         datas_list = [(str(assets_dir), 'assets')] + datas_list
     datas_arg = f"    datas={datas_list!r},"
     entry_arg = f"    [{str(entry)!r}],"
-    pathex_arg = f"    pathex=[{src_path!r}],"
+    pathex_arg = f"    pathex=[{src_path!r}, {ilmplot_path!r}],"
     excludes_arg = f"    excludes={unused_qt_modules!r},"
 
     spec_lines = [

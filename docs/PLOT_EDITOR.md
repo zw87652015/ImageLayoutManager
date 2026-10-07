@@ -58,32 +58,39 @@ row), imported from file or pasted into the data editor.
 ## Generating plots from code · 用代码生成图表
 
 AI agents and scripts can produce editable plots directly — no `.py`
-scripts are ever executed by the GUI:
+scripts are ever executed by the GUI. The matplotlib bridge lives in the
+`ilmplot` package (`packages/ilmplot`; the in-repo copy is always used,
+`pip install packages/ilmplot` also works):
 
 ```python
 import matplotlib.pyplot as plt
-from src.plot_editor.matplotlib_bridge import export_figure
+import ilmplot
 
 fig, ax = plt.subplots()
 ax.plot([0, 1, 2], [0, 1, .5], label='Control')
 ax.set(xlabel='Time (s)', ylabel='Response')
 ax.legend()
-export_figure(fig, 'response.ilmplot.svg')
+ilmplot.savefig(fig, 'response.ilmplot.svg')
 ```
 
-The bridge is plain source — run it with this repository on
-``PYTHONPATH`` (or from the repo root). There is no pip-installable
-package.
-
-`export_figure` performs a *supported-data/style* import: it captures data,
-colors, styles, labels and linear limits exactly, but normalizes margins,
+`ilmplot.savefig` performs a *supported-data/style* import: it captures
+data, colors, styles, labels, limits, error bars, uniform scatter,
+`fill_between`/`stackplot` shaded bands and `axvspan`/`axhspan`
+full-height/width spans (drawn under the series, clipped
+to pinned limits; both are content — preserved through editor saves
+like annotations and brackets, never captured by style presets),
+grouped/stacked bars and text notes exactly, but normalizes margins,
 tick formatting and legend chrome — it is **not** a pixel-identical
-reconstruction. Figures using unsupported features (scatter/errorbar
-artists, images, annotations, extra axes, categorical/date/unit data,
-custom transforms or dash patterns) raise `UnsupportedFigureError` before
-anything is written; export those as ordinary SVG for display instead.
-`from src.plot_editor.matplotlib_bridge import document_from_figure` gives
-the document without writing.
+reconstruction. When the figure uses unsupported features (extra axes,
+colormapped scatter, `barh`, `ax.hist`-style touching numeric bars,
+`fill_betweenx`, partial-height/width spans, date/unit axes,
+annotations with arrows,
+…), `savefig` emits a `FallbackWarning` and writes a *plain* SVG to the
+same path instead; `savefig(fig, path, strict=True)` raises
+`UnsupportedFigureError` and touches nothing. `ilmplot.convert(fig)`
+returns a `ConversionResult` (`.document`, `.reasons`, `.notes`) for
+inspecting what would happen without writing. The strict legacy API
+`ilmplot.bridge.document_from_figure` / `export_figure` is kept.
 
 ## Editing workflow · 编辑流程
 
@@ -94,3 +101,22 @@ the document without writing.
 - **Standalone:** `plot_editor_main.py` / the Start Menu shortcut opens an
   independent window with New/Open/Save/Save As, undo/redo, live SVG
   preview, English/中文 and light/dark controls.
+- **Errors as a shaded band:** give a series a `yErr` column (or
+  `yErrPlus`/`yErrMinus` for asymmetric errors), plot it, then in the
+  series element panel set **Error display → Band** (and optionally
+  **Band opacity**). The series' y±err is filled in the series colour
+  instead of drawing capless bars; the same settings come back when the
+  file is reopened.
+- **Filled areas (Add Fill…):** on a line plot, Plot → *Add Fill…* (or
+  the canvas right-click menu) offers four fill types — a *Vertical
+  span* X=a→b across the full plot height, a *Horizontal span* Y=a→b
+  across the full width, *Under a curve* (baseline → one series, with an
+  optional X range) and *Between two curves* (optional X range). All get
+  a colour, opacity and an optional legend label; the dialog's From/To
+  fields are prefilled with the middle third of the view. Clicking a
+  filled area selects it (bands before spans, series still win inside a
+  fill), and its element panel edits the range/series/baseline, colour,
+  opacity and label, or deletes it — Delete/Backspace works too. Spans
+  and curve fills are content like notes and bands: they survive Reset
+  formatting and are never captured by style presets; curve fills stay
+  bound to their Y columns (column inserts/removes remap or drop them).

@@ -523,7 +523,7 @@ def make_samples():
     plots_root = root / 'plots'
     plots_root.mkdir(parents=True, exist_ok=True)
     from src.utils.editable_plot import store_plot_document
-    from src.plot_editor.document import LineSeries, PlotDocument
+    from ilmplot.document import LineSeries, PlotDocument
     plot_doc = PlotDocument(title='Practice signals', xlabel='Time (s)',
                             ylabel='Signal (mV)')
     xs = [0., 1., 2., 3., 4., 5.]

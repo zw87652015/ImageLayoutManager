@@ -13,18 +13,18 @@ from PyQt6.QtWidgets import (QInputDialog, QMenu, QMessageBox,
 
 from . import presets
 from .i18n import tr
-from .overrides import (PlotOverrides, apply_update,
-                        effective_document,
-                        overrides_from_document, remap_series_keys)
+from .overrides import (PlotOverrides, effective_document,
+                        overrides_from_document, remap_series_keys,
+                        record_overrides_edit, static_bands)
 from .plot_canvas import PlotCanvas
 from .export import CHART_KIND
 from .plot_data import (PlotSelectionError, build_categories,
                         build_groups, build_series)
 from .plot_file import (PlotFileError, chart_from_document,
                         items_from_document, save_plot_file)
-from .document import PlotDocumentError
+from ilmplot.document import PlotDocumentError
 from .figure_size import FigureSize
-from .render import element_regions, render_document
+from ilmplot.render import element_regions, render_document
 from .chrome import reset_all_stylesheet, themed_icon
 from .title_field import PlotTitleField
 from .worksheet import Worksheet
@@ -36,7 +36,7 @@ _SUFFIX = '.ilmplot.svg'
 def _build_items(worksheet, columns, chart_key):
     """Series/Group/Category items for ``chart_key`` from the sheet."""
     kind = CHART_KIND.get(chart_key, ('line', None))[0]
-    if kind == 'violin':
+    if kind in ('violin', 'histogram'):
         return build_groups(worksheet, columns)
     if kind == 'stacked_column':
         return build_categories(worksheet, columns)
@@ -175,17 +175,26 @@ class PlotTab(QSplitter):
         self.worksheet.add_listener(self._on_worksheet_event)
 
     def _on_title_changed(self, text):
-        self.plot_title = text
-        self._render_preview()
-        self.dirty = True
-        self.changed.emit()
+        self.set_plot_title(text)
 
     def set_plot_title(self, text):
-        """Update the title (from the field or the element panel)."""
-        self.plot_title = text
-        if self.title_field.title() != text:
-            self.title_field.set_title(text)
-        self._render_preview()
+        """Update the title (from the field or the element panel).
+
+        Undoable like worksheet edits: one 'Edit Title' history entry
+        per commit; unchanged text records nothing.
+        """
+        if text == self.plot_title:
+            return
+        old = self.plot_title
+
+        def _set(title):
+            self.plot_title = title
+            if self.title_field.title() != title:
+                self.title_field.set_title(title)
+            self._render_preview()
+        self.worksheet.record_external_edit(
+            'Edit Title',
+            apply=lambda: _set(text), revert=lambda: _set(old))
         self.dirty = True
         self.changed.emit()
 
@@ -204,14 +213,18 @@ class PlotTab(QSplitter):
                                   figure_size=self.figure_size)
 
     def update_overrides(self, fn):
-        """Apply ``fn(self.overrides)`` then re-render + mark dirty.
+        """Apply ``fn(self.overrides)``, undoably, then mark dirty.
 
         The single entry point for in-place style edits (the element
-        panels). Crash-safe: on any failure the pre-edit overrides are
-        restored and re-rendered, and the traceback goes to stderr — a
-        slot exception must never reach Qt (PyQt6 aborts on those).
+        panels). Each successful non-no-op edit lands in the
+        worksheet's undo history as 'Edit Plot', chronological with
+        cell edits. Crash-safe: on any failure the pre-edit overrides
+        are restored and re-rendered, and the traceback goes to stderr
+        — a slot exception must never reach Qt (PyQt6 aborts on those).
         """
-        if not apply_update(self.overrides, fn, self._render_preview):
+        if not record_overrides_edit(
+                self.worksheet, self.overrides, fn,
+                self._render_preview, label='Edit Plot'):
             return
         self.dirty = True
         self.changed.emit()
@@ -349,7 +362,15 @@ class PlotTab(QSplitter):
             tr('reset_all_confirm'))
         if box == QMessageBox.StandardButton.Yes:
             fresh = PlotOverrides()
-            self.update_overrides(lambda o: self._copy_overrides(o, fresh))
+
+            def _reset(o):
+                # Fills, spans and bands are data, not formatting —
+                # carry them over (annotations/brackets unchanged).
+                fresh.bands = o.bands
+                fresh.spans = o.spans
+                fresh.fills = o.fills
+                self._copy_overrides(o, fresh)
+            self.update_overrides(_reset)
 
     # ── annotations / brackets ────────────────────────────────────────
 
@@ -366,7 +387,7 @@ class PlotTab(QSplitter):
         anchors to the upper-right corner."""
         if self.plot is None:
             return
-        from .document import Annotation
+        from ilmplot.document import Annotation
         hold = {}
         def fn(o):
             if o.annotations is None:
@@ -445,6 +466,30 @@ class PlotTab(QSplitter):
                                   for b in doc.brackets or ()]
                 o.brackets = [b for b in o.brackets
                               if b.id != bid] or None
+        elif key.startswith('span:'):
+            sid = key[len('span:'):]
+            def fn(o):
+                if o.spans is None:
+                    doc = self.effective_document()
+                    o.spans = [copy.copy(s)
+                               for s in getattr(doc, 'spans', None)
+                               or ()]
+                o.spans = [s for s in o.spans
+                           if s.id != sid] or None
+        elif key.startswith('band:'):
+            bid = key[len('band:'):]
+            def fn(o):
+                # A curve fill (editor-created) or a static document band.
+                if o.fills and any(f.id == bid for f in o.fills):
+                    o.fills = [f for f in o.fills
+                               if f.id != bid] or None
+                    return
+                if o.bands is None:
+                    doc = self.effective_document()
+                    o.bands = [copy.copy(b)
+                               for b in static_bands(doc, o)]
+                o.bands = [b for b in o.bands
+                           if b.id != bid] or None
         else:
             return
         self.update_overrides(fn)
@@ -460,6 +505,9 @@ class PlotTab(QSplitter):
                        lambda: self._add_text_at(frac, global_pos))
         if self.brackets_allowed():
             menu.addAction(tr('act_add_bracket'), self.add_bracket)
+        if self.plot is not None and CHART_KIND.get(
+                self.plot.chart_key, ('line', None))[0] == 'line':
+            menu.addAction(tr('act_add_fill'), self.add_fill)
         menu.addSeparator()
         theme_menu = menu.addMenu(tr('menu_colour_theme'))
         self.fill_theme_menu(theme_menu)
@@ -468,8 +516,8 @@ class PlotTab(QSplitter):
             menu.addAction(
                 tr('ctx_edit'),
                 lambda: self._open_element_panel(key, global_pos))
-            if key.startswith('annotation:') \
-                    or key.startswith('bracket:'):
+            if key.startswith(('annotation:', 'bracket:', 'span:',
+                               'band:')):
                 menu.addAction(tr('btn_delete'),
                                lambda: self._delete_element(key))
             menu.addSeparator()
@@ -546,7 +594,7 @@ class PlotTab(QSplitter):
         n = len(doc.groups or doc.categories)
         if n < 2:
             return
-        from .document import Bracket
+        from ilmplot.document import Bracket
         hold = {}
         def fn(o):
             if o.brackets is None:
@@ -554,6 +602,66 @@ class PlotTab(QSplitter):
             bid = self._new_item_id('bracket', o.brackets)
             o.brackets.append(Bracket(id=bid, a=0, b=1, text='*'))
             hold['key'] = 'bracket:' + bid
+        self.update_overrides(fn)
+        self._open_at_center(hold.get('key'))
+
+    def add_fill(self):
+        """"Add Fill…" menu action: a span or a curve fill dialog."""
+        if self.plot is None:
+            return
+        doc = self.effective_document()
+        if doc is None or doc.kind != 'line':
+            return
+        from .fill_dialog import AddFillDialog
+        dialog = AddFillDialog(self.plot.series, doc, parent=self)
+        if dialog.exec() != AddFillDialog.DialogCode.Accepted:
+            return
+        result = dialog.result_item()
+
+        from ilmplot.document import MAX_BANDS, MAX_SPANS
+        n_spans = len(self.overrides.spans
+                      if self.overrides.spans is not None
+                      else doc.spans)
+        n_bands = len(self.overrides.bands
+                      if self.overrides.bands is not None
+                      else doc.bands) \
+            + len(self.overrides.fills or ())
+        if result['type'] in ('xspan', 'yspan') \
+                and n_spans + 1 > MAX_SPANS \
+                or result['type'] in ('under', 'between') \
+                and n_bands + 1 > MAX_BANDS:
+            QMessageBox.warning(
+                self, tr('act_add_fill'),
+                tr('fill_limit', n=max(MAX_SPANS, MAX_BANDS)))
+            return
+
+        hold = {}
+        def fn(o):
+            if result['type'] in ('xspan', 'yspan'):
+                from ilmplot.document import Span
+                if o.spans is None:
+                    o.spans = [copy.copy(s) for s in doc.spans]
+                sid = self._new_item_id('span', o.spans)
+                o.spans.append(Span(
+                    id=sid,
+                    axis='x' if result['type'] == 'xspan' else 'y',
+                    lo=result['lo'], hi=result['hi'],
+                    color=result['color'], label=result['label']))
+                hold['key'] = 'span:' + sid
+            else:
+                from .fills import CurveFill
+                if o.fills is None:
+                    o.fills = []
+                fid = self._new_item_id(
+                    'fill', list(o.fills)
+                    + list(o.bands if o.bands is not None else doc.bands))
+                o.fills.append(CurveFill(
+                    id=fid, kind=result['type'],
+                    a=result['a'], b=result.get('b'),
+                    baseline=result.get('baseline', 0.0),
+                    x_min=result.get('x_min'), x_max=result.get('x_max'),
+                    color=result['color'], label=result['label']))
+                hold['key'] = 'band:' + fid
         self.update_overrides(fn)
         self._open_at_center(hold.get('key'))
 
@@ -580,8 +688,10 @@ class PlotTab(QSplitter):
         target.violin = source.violin
         target.ridgeline = source.ridgeline
         target.stacked = source.stacked
+        target.histogram = source.histogram
         target.annotations = source.annotations
         target.brackets = source.brackets
+        target.bands = source.bands
         target.bar_labels = source.bar_labels
 
     def _on_worksheet_event(self, event):
@@ -665,7 +775,7 @@ class PlotTab(QSplitter):
         # Node v2 carries the overrides; older/ILM files seed them from
         # the document (style cloned; only fields differing from defaults).
         self.overrides = pf.overrides if pf.overrides is not None \
-            else overrides_from_document(pf.document)
+            else overrides_from_document(pf.document, series, chart)
         self.regions = None
         self._set_path(path)
         self.plot_title = pf.document.title or ''

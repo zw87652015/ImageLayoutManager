@@ -3,8 +3,8 @@
 import os
 import tempfile
 
-from .document import (LineSeries, PlotDocument, StackCategory,
-                       StackOptions, ViolinGroup)
+from ilmplot.document import (LineSeries, PlotDocument, StackCategory,
+                       StackOptions, ViolinGroup, ViolinOptions)
 from .i18n import tr
 from .plot_data import tick_label_map
 from .plotting import stack_offsets
@@ -44,10 +44,38 @@ CHART_KIND = {
     'stacked_line': ('line', None),
     'ridgeline': ('ridgeline', None),
     'violin': ('violin', None),
+    'box': ('violin', None),
+    'column_points': ('violin', None),
+    'histogram': ('histogram', None),
     'column': ('stacked_column', None),
     'stacked_column_pct': ('stacked_column', True),
     'stacked_column': ('stacked_column', False),
+    'bar': ('stacked_column', None),
+    'stacked_bar_pct': ('stacked_column', True),
+    'stacked_bar': ('stacked_column', False),
 }
+
+HORIZONTAL_CHARTS = frozenset({'bar', 'stacked_bar', 'stacked_bar_pct'})
+GROUPED_CHARTS = frozenset({'column', 'bar'})
+VIOLIN_BODY = {'violin': 'violin', 'box': 'none',
+               'column_points': 'bar'}
+
+
+def default_axis_titles(items, chart_key, density=False):
+    """Default ``(xlabel, ylabel)`` for a chart (overrides still win).
+
+    Horizontal charts swap the axes: the value title goes on x.
+    Histograms plot the value distribution on x against counts.
+    """
+    kind, percent = CHART_KIND.get(chart_key, (None, None))
+    if kind == 'histogram':
+        return items[0].y_label, 'Density' if density else 'Count'
+    if chart_key in HORIZONTAL_CHARTS:
+        return ('Percentage (%)' if percent else items[0].y_label,
+                items[0].x_label)
+    if percent:
+        return items[0].x_label, 'Percentage (%)'
+    return items[0].x_label, items[0].y_label
 
 
 def with_suffix(path, key):
@@ -80,22 +108,38 @@ def document_from_plot(items, chart_key, title='', *,
     if kind == 'violin':
         doc.kind = 'violin'
         doc.series = []
-        doc.xlabel = items[0].x_label
-        doc.ylabel = items[0].y_label
+        doc.xlabel, doc.ylabel = default_axis_titles(items, chart_key)
         doc.legend = False
         doc.groups = [ViolinGroup(id='g%d' % i, label=g.label,
                                   values=list(g.values),
                                   color=colors[i])
                       for i, g in enumerate(items)]
+        if chart_key != 'violin':
+            doc.violin = ViolinOptions(
+                body=VIOLIN_BODY[chart_key],
+                show_points=(chart_key != 'box'),
+                show_box=(chart_key != 'column_points'))
+        return doc.validate()
+    if kind == 'histogram':
+        doc.kind = 'histogram'
+        doc.series = []
+        doc.xlabel, doc.ylabel = default_axis_titles(items, chart_key)
+        doc.legend = len(items) > 1
+        doc.groups = [ViolinGroup(id='g%d' % i, label=g.label,
+                                  values=list(g.values),
+                                  color=colors[i])
+                      for i, g in enumerate(items)]
+        doc.histogram = None
         return doc.validate()
     if kind == 'stacked_column':
         doc.kind = 'stacked_column'
         doc.series = []
-        doc.xlabel = items[0].x_label
-        doc.ylabel = 'Percentage (%)' if percent else items[0].y_label
+        doc.xlabel, doc.ylabel = default_axis_titles(items, chart_key)
         doc.legend = True
-        doc.stacked = StackOptions(percent=bool(percent),
-                                   grouped=chart_key == 'column')
+        doc.stacked = StackOptions(
+            percent=bool(percent),
+            grouped=chart_key in GROUPED_CHARTS,
+            horizontal=chart_key in HORIZONTAL_CHARTS)
         doc.categories = [StackCategory(
             id='c%d' % i, label=c.label,
             values=list(c.values), color=colors[i],
@@ -112,8 +156,7 @@ def document_from_plot(items, chart_key, title='', *,
         return doc.validate()
     linestyle, marker = _STYLE.get(chart_key, ('-', ''))
     offsets = stack_offsets(items)
-    doc.xlabel = items[0].x_label
-    doc.ylabel = items[0].y_label
+    doc.xlabel, doc.ylabel = default_axis_titles(items, chart_key)
     ticks = tick_label_map(items)
     doc.x_tick_labels = [[p, ticks[p]] for p in sorted(ticks)] or None
     if kind == 'ridgeline':

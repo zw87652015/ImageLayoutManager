@@ -19,9 +19,9 @@ import tempfile
 from dataclasses import dataclass, field
 
 from .actions import CHART_GROUPS
-from .document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
-                       AxisStyle, PlotStyle, RidgeOptions, StackOptions,
-                       ViolinOptions, _check_color)
+from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
+                       AxisStyle, HistOptions, PlotStyle, RidgeOptions,
+                       StackOptions, ViolinOptions, _check_color)
 from .overrides import PlotOverrides, SeriesOverride
 
 FORMAT = 'ilm-plot-style'
@@ -154,6 +154,7 @@ class StylePreset:
     violin: 'ViolinOptions | None' = None
     ridgeline: 'RidgeOptions | None' = None
     stacked: 'StackOptions | None' = None
+    histogram: 'HistOptions | None' = None
     builtin: bool = False
     filename: 'str | None' = None     # basename when loaded from disk
 
@@ -174,7 +175,7 @@ class StylePreset:
             d['palette'] = self.palette
         if self.palette_reverse is not None:
             d['palette_reverse'] = self.palette_reverse
-        for k in ('violin', 'ridgeline', 'stacked'):
+        for k in ('violin', 'ridgeline', 'stacked', 'histogram'):
             opt = getattr(self, k)
             if opt is not None:
                 od = opt.to_dict()
@@ -189,7 +190,7 @@ class StylePreset:
         allowed = {'format', 'schema_version', 'type', 'name', 'style',
                    'legend', 'legend_location', 'grid', 'series',
                    'palette', 'palette_reverse', 'violin', 'ridgeline',
-                   'stacked'}
+                   'stacked', 'histogram'}
         for k in data:
             if k not in allowed:
                 raise PresetError(f'unknown key {k!r}')
@@ -238,7 +239,8 @@ class StylePreset:
             preset.palette_reverse = pr
         for name, typ in (('violin', ViolinOptions),
                           ('ridgeline', RidgeOptions),
-                          ('stacked', StackOptions)):
+                          ('stacked', StackOptions),
+                          ('histogram', HistOptions)):
             if data.get(name) is not None:
                 try:
                     setattr(preset, name, typ.from_dict(
@@ -457,7 +459,8 @@ def capture(overrides, plot_type):
                        palette_reverse=overrides.palette_reverse,
                        violin=copy.deepcopy(overrides.violin),
                        ridgeline=copy.deepcopy(overrides.ridgeline),
-                       stacked=copy.deepcopy(overrides.stacked))
+                       stacked=copy.deepcopy(overrides.stacked),
+                       histogram=copy.deepcopy(overrides.histogram))
 
 
 def _merge_axis_data(old, new):
@@ -486,13 +489,14 @@ def apply(preset, overrides, series_list, chart_key):
         for key, so in list(overrides.series.items()):
             so.color = so.linewidth_pt = so.linestyle = None
             so.marker = so.markersize_pt = None
-            if so.label is None:
+            if so.is_empty():
                 del overrides.series[key]
         overrides.palette = None
         overrides.palette_reverse = None
         overrides.violin = None
         overrides.ridgeline = None
         overrides.stacked = None
+        overrides.histogram = None
         return
     keep = overrides.style
     overrides.style = copy.deepcopy(preset.style)
@@ -527,6 +531,7 @@ def apply(preset, overrides, series_list, chart_key):
     overrides.violin = copy.deepcopy(preset.violin)
     overrides.ridgeline = copy.deepcopy(preset.ridgeline)
     overrides.stacked = copy.deepcopy(preset.stacked)
+    overrides.histogram = copy.deepcopy(preset.histogram)
 
 
 def should_auto_apply(overrides, preset):

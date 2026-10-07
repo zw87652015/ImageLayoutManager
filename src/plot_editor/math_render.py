@@ -9,7 +9,7 @@ import functools
 
 from PyQt6.QtGui import QFont, QImage, QPixmap
 
-from .mathtext import safe_text
+from ilmplot.mathtext import safe_text
 
 
 @functools.lru_cache(maxsize=512)
@@ -55,7 +55,7 @@ def math_pixmap(text, font, color, dpr):
         | (color.green() << 8) | color.blue()
     try:
         family = font.family()
-        from .render import available_font_families
+        from ilmplot.render import available_font_families
         if family not in available_font_families():
             family = None
         png = _render_png(safe_text(text), family, size_pt,

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import (QEvent, QPoint, QPointF, QRectF, Qt,
+                          pyqtSignal)
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtSvgWidgets import QGraphicsSvgItem
@@ -154,13 +155,23 @@ class PlotCanvas(QGraphicsView):
         self._selection.setRect(rect.adjusted(-pad, -pad, pad, pad))
         self._selection.show()
 
+    def event(self, event):
+        # The window-level Delete QAction would otherwise steal the
+        # key; claim it while the canvas has focus so keyPressEvent
+        # sees it (nothing selected → it just does nothing).
+        if event.type() == QEvent.Type.ShortcutOverride \
+                and event.key() in (Qt.Key.Key_Delete,
+                                    Qt.Key.Key_Backspace) \
+                and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            event.accept()
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) \
                 and self._selected_key is not None:
-            key = self._selected_key
-            self._select(None)
+            self.delete_selected()
             event.accept()
-            self.element_delete_requested.emit(key)
             return
         if event.key() == Qt.Key.Key_Escape \
                 and self._selected_key is not None:
@@ -168,6 +179,15 @@ class PlotCanvas(QGraphicsView):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def delete_selected(self):
+        """The same path as the Delete key: drop the element selected
+        on the canvas (none selected → nothing happens)."""
+        key = self._selected_key
+        if key is None:
+            return
+        self._select(None)
+        self.element_delete_requested.emit(key)
 
     def _frac_point(self, view_pos):
         """View pos → figure fraction, or None when outside the SVG."""
@@ -224,6 +244,11 @@ class PlotCanvas(QGraphicsView):
                                    view_pos.y(), _HIT_PX)
         if sid is not None:
             return 'series:%s' % sid
+        # Filled areas: after series so a line inside a band still picks
+        # the line, before the frame fallback.
+        area = hit_test.pick_area(self._regions, *frac)
+        if area is not None:
+            return area
         return hit_test.pick_frame(self._regions, *frac)
 
     def _hover_bbox(self, key):
@@ -232,8 +257,10 @@ class PlotCanvas(QGraphicsView):
             entry = (self._regions.get('series') or {}).get(key[7:])
             return entry.get('bbox') if entry else None
         for prefix, coll in (('violin:', 'violins'), ('stack:', 'stacks'),
+                             ('hist:', 'hists'),
                              ('annotation:', 'annotations'),
-                             ('bracket:', 'brackets')):
+                             ('bracket:', 'brackets'),
+                             ('band:', 'bands'), ('span:', 'spans')):
             if key.startswith(prefix):
                 entry = (self._regions.get(coll) or {}).get(
                     key[len(prefix):])
@@ -293,12 +320,17 @@ class PlotCanvas(QGraphicsView):
     def _on_context(self, pos):
         """Emit ``context_requested`` with the hit key and figure
         fraction under the cursor (both possibly None)."""
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         key = self._hit_key(pos)
         frac = self._frac_point(pos)
         self.context_requested.emit(
             key, self.viewport().mapToGlobal(pos), frac)
 
     def mousePressEvent(self, event):
+        # ClickFocus alone doesn't fire for every path — take focus
+        # explicitly so Delete reaches keyPressEvent, not the window
+        # shortcut.
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         if event.button() == Qt.MouseButton.MiddleButton:
             self._panning = True
             self._pan_pos = event.position()
@@ -310,7 +342,8 @@ class PlotCanvas(QGraphicsView):
             pos = event.position().toPoint()
             key = self._hit_key(pos)
             self._select(key if key is not None and key.startswith(
-                ('annotation:', 'bracket:')) else None)
+                ('annotation:', 'bracket:', 'span:', 'band:'))
+                else None)
             if key is not None and key.startswith('annotation:'):
                 bbox = self._hover_bbox(key)
                 if bbox is not None:

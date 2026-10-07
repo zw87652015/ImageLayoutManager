@@ -73,7 +73,10 @@ def pick(regions, fx, fy):
     hit = _pick_map(regions.get('violins'), fx, fy, 'violin:')
     if hit:
         return hit
-    return _pick_map(regions.get('stacks'), fx, fy, 'stack:')
+    hit = _pick_map(regions.get('stacks'), fx, fy, 'stack:')
+    if hit:
+        return hit
+    return _pick_map(regions.get('hists'), fx, fy, 'hist:')
 
 
 def pick_series(series, x, y, tol):
@@ -91,6 +94,36 @@ def pick_series(series, x, y, tol):
         d = polyline_distance(entry.get('points') or [], x, y)
         if d is not None and d <= tol:
             return sid
+    return None
+
+
+def _point_in_polygon(points, fx, fy):
+    """Ray-casting point-in-polygon over ``[(x, y), ...]``."""
+    if not points or len(points) < 3:
+        return False
+    inside = False
+    j = len(points) - 1
+    for i, (xi, yi) in enumerate(points):
+        xj, yj = points[j]
+        if (yi > fy) != (yj > fy) \
+                and fx < (xj - xi) * (fy - yi) / (yj - yi) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def pick_area(regions, fx, fy):
+    """``'band:<id>'`` / ``'span:<id>'`` under figure-fraction ``(fx, fy)``
+    using point-in-polygon on each region's ``points`` (bands checked
+    before spans; last-drawn first). ``None`` on a miss — including a
+    point inside the bbox but outside the polygon."""
+    if not regions:
+        return None
+    for coll, prefix in (('bands', 'band:'), ('spans', 'span:')):
+        entries = regions.get(coll) or {}
+        for rid, entry in reversed(list(entries.items())):
+            if _point_in_polygon(entry.get('points'), fx, fy):
+                return prefix + rid
     return None
 
 

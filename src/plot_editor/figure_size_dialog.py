@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog,
                              QFormLayout, QHBoxLayout, QLabel,
                              QPushButton, QVBoxLayout)
 
-from .document import MAX_DIMENSION_MM, PlotDocumentError
+from ilmplot.document import MAX_DIMENSION_MM, PlotDocumentError
 from .figure_size import FigureSize
 from .i18n import tr
 

@@ -15,11 +15,11 @@ import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
-from . import render
+import ilmplot.render as render
 from .actions import CHART_GROUPS
-from .document import (MAX_FILE_BYTES, METADATA_ID, PlotDocument,
+from ilmplot.document import (MAX_FILE_BYTES, METADATA_ID, PlotDocument,
                        document_from_svg)
-from .export import _atomic_write
+from .export import _atomic_write, HORIZONTAL_CHARTS
 from .overrides import PlotOverrides
 from .plot_data import Series
 from .worksheet import (Column, DESIGNATIONS, MAX_COLUMNS,
@@ -31,7 +31,9 @@ WORKSHEET_SCHEMA_VERSION = 2
 
 # Optional-feature ids the worksheet reader understands beyond the
 # baseline; writers stamp theirs into the payload's ``requires``.
-WORKSHEET_CAPABILITIES = frozenset()
+WORKSHEET_CAPABILITIES = frozenset(
+    {'bands', 'error_band', 'spans', 'fills', 'box_plot',
+     'column_points', 'histogram', 'horizontal_bars'})
 
 _CHART_KEYS = {c.key for g in CHART_GROUPS for c in g.charts}
 _COLUMN_KEYS = ('designation', 'long_name', 'units', 'comments', 'values')
@@ -88,6 +90,37 @@ def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None,
             # editor builds can still read them.
             d['overrides'] = od
             d['schema_version'] = WORKSHEET_SCHEMA_VERSION
+    # ``requires`` is a v1-allowed key: chart kinds needing reader
+    # features stamp it even without overrides.
+    req = []
+    if overrides is not None and overrides.to_dict():
+        if getattr(overrides, 'bands', None) \
+                or getattr(overrides, 'fills', None):
+            req.append('bands')
+        if getattr(overrides, 'spans', None):
+            req.append('spans')
+        if getattr(overrides, 'fills', None):
+            req.append('fills')
+        for so in getattr(overrides, 'series', {}).values():
+            if getattr(so, 'error_style', None) == 'band':
+                req.append('error_band')
+                break
+    if chart_key == 'histogram' \
+            or getattr(overrides, 'histogram', None) is not None:
+        req.append('histogram')
+    vd = {}
+    if overrides is not None and overrides.violin is not None:
+        vd = overrides.violin.to_dict()
+    if chart_key == 'box' or vd.get('body') == 'none' \
+            or 'box_width' in vd or 'show_outliers' in vd:
+        req.append('box_plot')
+    if chart_key == 'column_points' or vd.get('body') == 'bar' \
+            or 'bar_width' in vd or 'bar_error' in vd:
+        req.append('column_points')
+    if chart_key in HORIZONTAL_CHARTS:
+        req.append('horizontal_bars')
+    if req:
+        d['requires'] = sorted(set(req))
     return d
 
 
@@ -117,7 +150,7 @@ def worksheet_from_dict(data):
     if unknown:
         raise _err('%s: unknown field(s) %s — file may need a newer '
                    'version' % (ctx, unknown))
-    from .document import _check_requires
+    from ilmplot.document import _check_requires
     req = _check_requires(data.get('requires'), '%s.requires' % ctx)
     missing = sorted(set(req) - WORKSHEET_CAPABILITIES)
     if missing:
@@ -217,11 +250,13 @@ def worksheet_from_document(doc):
     column. Violin: one Y column per group. Stacked: a Label column of
     bar names plus one Y per category.
     """
-    if doc.kind == 'violin':
-        y_name, y_units = split_axis_title(doc.ylabel)
+    if doc.kind in ('violin', 'histogram'):
+        # Histograms carry the value title on x (y is the count axis).
+        v_name, v_units = split_axis_title(
+            doc.xlabel if doc.kind == 'histogram' else doc.ylabel)
         return Worksheet.from_columns([
-            Column('Y', long_name=y_name if i == 0 else '',
-                   units=y_units if i == 0 else '',
+            Column('Y', long_name=v_name if i == 0 else '',
+                   units=v_units if i == 0 else '',
                    comments=g.label, values=list(g.values))
             for i, g in enumerate(doc.groups)])
     if doc.kind == 'stacked_column':
@@ -291,6 +326,9 @@ def series_from_document(doc):
 def items_from_document(doc):
     """Fallback items for a document whose worksheet can't rebuild."""
     from .plot_data import Category, Group
+    if doc.kind == 'histogram':
+        return [Group(tuple(g.values), g.label, '', doc.xlabel)
+                for g in doc.groups]
     if doc.kind == 'violin':
         return [Group(tuple(g.values), g.label,
                       doc.xlabel, doc.ylabel)
@@ -313,13 +351,20 @@ def items_from_document(doc):
 
 def chart_from_document(doc):
     if doc.kind == 'violin':
-        return 'violin'
+        body = doc.violin.body if doc.violin is not None else 'violin'
+        return {'none': 'box', 'bar': 'column_points'}.get(
+            body, 'violin')
+    if doc.kind == 'histogram':
+        return 'histogram'
     if doc.kind == 'ridgeline':
         return 'ridgeline'
     if doc.kind == 'stacked_column':
+        horizontal = doc.stacked is not None and doc.stacked.horizontal
         if doc.stacked is not None and doc.stacked.grouped:
-            return 'column'
+            return 'bar' if horizontal else 'column'
         pct = doc.stacked.percent if doc.stacked is not None else True
+        if horizontal:
+            return 'stacked_bar_pct' if pct else 'stacked_bar'
         return 'stacked_column_pct' if pct else 'stacked_column'
     s = doc.series[0]
     if not s.linestyle:

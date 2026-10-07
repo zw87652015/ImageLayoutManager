@@ -7,7 +7,7 @@ from PyQt6.QtGui import QPalette, QPixmap
 from PyQt6.QtWidgets import (QLabel, QLineEdit, QStackedLayout, QWidget)
 
 from .i18n import tr
-from .mathtext import has_math
+from ilmplot.mathtext import has_math
 
 
 class PlotTitleField(QWidget):

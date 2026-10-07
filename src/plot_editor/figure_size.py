@@ -8,7 +8,7 @@ does the aspect-ratio arithmetic for the Figure Size dialog.
 from dataclasses import dataclass
 import math
 
-from .document import MAX_DIMENSION_MM, PlotDocumentError
+from ilmplot.document import MAX_DIMENSION_MM, PlotDocumentError
 from .i18n import tr
 
 

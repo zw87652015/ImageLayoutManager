@@ -41,13 +41,19 @@ CHART_GROUPS = (
         ChartType('stacked_line', 'Stacked Line'),
         ChartType('ridgeline', 'Ridgeline'),
     )),
-    ChartGroup('violin', 'Violin', (
+    ChartGroup('violin', 'Distribution', (
         ChartType('violin', 'Violin'),
+        ChartType('box', 'Box'),
+        ChartType('column_points', 'Column + Points'),
+        ChartType('histogram', 'Histogram'),
     )),
-    ChartGroup('column', 'Column', (
+    ChartGroup('column', 'Column & Bar', (
         ChartType('column', 'Column'),
         ChartType('stacked_column_pct', '100% Stacked Column'),
         ChartType('stacked_column', 'Stacked Column'),
+        ChartType('bar', 'Bar'),
+        ChartType('stacked_bar_pct', '100% Stacked Bar'),
+        ChartType('stacked_bar', 'Stacked Bar'),
     )),
 )
 
@@ -95,6 +101,9 @@ ACTIONS = {
                               '', '',
                               'Add a significance bracket between two '
                               'groups or bars'),
+    'add_fill': ActionSpec('add_fill', 'Add Fill…', '', '',
+                           'Add a shaded area: a span, or a fill under '
+                           'or between curves'),
     'tutorials': ActionSpec('tutorials', 'Tutorials…', 'F1', '',
                             'Guided lessons for the Plot Editor'),
     'shortcuts': ActionSpec('shortcuts', 'Keyboard Shortcuts', '', '',

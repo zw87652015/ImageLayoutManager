@@ -18,8 +18,8 @@ import hashlib
 import os
 from typing import Optional, Tuple
 
-from src.plot_editor.document import PlotDocument, has_plot_metadata
-from src.plot_editor.render import (
+from ilmplot.document import PlotDocument, has_plot_metadata
+from ilmplot.render import (
     PlotRender, load_rendered_document, render_document,
 )
 from src.utils.figpack import cache_manager
@@ -121,7 +121,7 @@ def resolve_plot_row_frames(project, layout_result) -> dict:
 
 def _compute_plot_row_frames(project, layout_result) -> dict:
     from src.model.layout_engine import LayoutEngine
-    from src.plot_editor.render import (
+    from ilmplot.render import (
         MIN_AXES_FRACTION, fit_plot_area, load_rendered_document)
     from src.utils.plot_alignment import content_rect
     rows = LayoutEngine._row_by_cell_id(project)

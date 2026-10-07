@@ -12,7 +12,7 @@ import json
 import os
 import re
 
-from .document import _check_color
+from ilmplot.document import _check_color
 from .presets import PresetError, _check_name, _slug, _write_atomic
 
 FORMAT = 'ilm-plot-theme'

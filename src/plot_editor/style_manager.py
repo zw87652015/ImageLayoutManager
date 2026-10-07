@@ -21,11 +21,11 @@ from PyQt6.QtWidgets import (QDialog, QHBoxLayout, QInputDialog, QLabel,
 
 from . import presets
 from .actions import CHART_GROUPS
-from .document import LineSeries, PlotDocument, PlotDocumentError
+from ilmplot.document import LineSeries, PlotDocument, PlotDocumentError
 from .i18n import tr
 from .overrides import PlotOverrides, effective_document
 from .plot_data import Category, Group, Series
-from .render import render_document
+from ilmplot.render import render_document
 
 # Eight items per sample so a colour theme shows its full range.
 _SAMPLE_N = 8

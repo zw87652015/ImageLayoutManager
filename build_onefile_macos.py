@@ -101,6 +101,7 @@ def main() -> int:
 
     # Make sure imports like `from src...` work during analysis.
     src_path = str(project_root / "src")
+    ilmplot_path = str(project_root / "packages" / "ilmplot" / "src")
 
     # Detect current architecture so the build matches the running Python.
     # Override by setting MACOS_ARCH env var to "x86_64", "arm64", or "universal2".
@@ -165,7 +166,7 @@ for _pkg in ('rapidocr', 'onnxruntime'):
 hidden += extra_hidden
 
 _common = dict(
-    pathex=[{src_path!r}],
+    pathex=[{src_path!r}, {ilmplot_path!r}],
     binaries=extra_binaries,
     datas={spec_datas!r} + extra_datas,
     hiddenimports=hidden,

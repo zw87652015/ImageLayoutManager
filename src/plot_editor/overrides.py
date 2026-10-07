@@ -9,10 +9,12 @@ unstyled files at schema v1.
 import copy
 import math
 
-from .document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
-                       MAX_ANNOTATIONS, MAX_BRACKETS, MAX_SERIES,
-                       Annotation, Bracket, PlotDocument, PlotStyle,
-                       RidgeOptions, StackOptions, ViolinOptions,
+from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
+                       MAX_ANNOTATIONS, MAX_BANDS, MAX_BRACKETS,
+                       MAX_SERIES, MAX_SPANS,
+                       Annotation, Band, Bracket, HistOptions,
+                       PlotDocument, PlotStyle, RidgeOptions, Span,
+                       StackOptions, ViolinOptions,
                        _check_color, _check_limit, _is_num)
 
 
@@ -69,17 +71,20 @@ class SeriesOverride:
     """Per-series overrides keyed by Y column index; all None = unset."""
 
     __slots__ = ('label', 'color', 'linewidth_pt', 'linestyle', 'marker',
-                 'markersize_pt')
+                 'markersize_pt', 'error_style', 'error_alpha')
     _KEYS = __slots__
 
     def __init__(self, label=None, color=None, linewidth_pt=None,
-                 linestyle=None, marker=None, markersize_pt=None):
+                 linestyle=None, marker=None, markersize_pt=None,
+                 error_style=None, error_alpha=None):
         self.label = label
         self.color = color
         self.linewidth_pt = linewidth_pt
         self.linestyle = linestyle
         self.marker = marker
         self.markersize_pt = markersize_pt
+        self.error_style = error_style
+        self.error_alpha = error_alpha
 
     def is_empty(self):
         return all(getattr(self, k) is None for k in self._KEYS)
@@ -110,6 +115,10 @@ class SeriesOverride:
         s.marker = _opt_choice(data, 'marker', ctx, MARKERS)
         s.markersize_pt = _opt_num(data, 'markersize_pt', ctx,
                                    lo=0, hi=200)
+        s.error_style = _opt_choice(data, 'error_style', ctx,
+                                    ('bars', 'band'))
+        s.error_alpha = _opt_num(data, 'error_alpha', ctx,
+                                 lo=0, hi=1, lo_exclusive=True)
         return s
 
 
@@ -119,11 +128,13 @@ class PlotOverrides:
     __slots__ = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
                  'xlim', 'ylim', 'style', 'series', 'palette',
                  'palette_reverse', 'violin', 'ridgeline', 'stacked',
-                 'annotations', 'brackets', 'bar_labels')
+                 'histogram', 'annotations', 'brackets', 'bands',
+                 'bar_labels', 'spans', 'fills')
     _KEYS = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
              'xlim', 'ylim', 'style', 'series', 'palette',
              'palette_reverse', 'violin', 'ridgeline', 'stacked',
-             'annotations', 'brackets', 'bar_labels')
+             'histogram', 'annotations', 'brackets', 'bands',
+             'bar_labels', 'spans', 'fills')
 
     def __init__(self):
         self.xlabel = None
@@ -140,9 +151,13 @@ class PlotOverrides:
         self.violin = None
         self.ridgeline = None
         self.stacked = None
+        self.histogram = None
         self.annotations = None
         self.brackets = None
+        self.bands = None
         self.bar_labels = None
+        self.spans = None
+        self.fills = None
 
     def is_empty(self):
         return (self.xlabel is None and self.ylabel is None
@@ -152,8 +167,11 @@ class PlotOverrides:
                 and all(o.is_empty() for o in self.series.values())
                 and self.palette is None and self.palette_reverse is None
                 and self.violin is None and self.ridgeline is None
-                and self.stacked is None and not self.annotations
-                and not self.brackets and not self.bar_labels)
+                and self.stacked is None and self.histogram is None
+                and not self.annotations
+                and not self.brackets and not self.bands
+                and not self.bar_labels and not self.spans
+                and not self.fills)
 
     def to_dict(self):
         d = {}
@@ -169,7 +187,7 @@ class PlotOverrides:
                   if not o.is_empty()}
         if series:
             d['series'] = series
-        for k in ('violin', 'ridgeline', 'stacked'):
+        for k in ('violin', 'ridgeline', 'stacked', 'histogram'):
             opt = getattr(self, k)
             if opt is not None:
                 od = opt.to_dict()
@@ -179,9 +197,15 @@ class PlotOverrides:
             d['annotations'] = [a.to_dict() for a in self.annotations]
         if self.brackets:
             d['brackets'] = [b.to_dict() for b in self.brackets]
+        if self.bands:
+            d['bands'] = [b.to_dict() for b in self.bands]
         if self.bar_labels:
             d['bar_labels'] = {str(k): v for k, v in
                                self.bar_labels.items()}
+        if self.spans:
+            d['spans'] = [s.to_dict() for s in self.spans]
+        if self.fills:
+            d['fills'] = [f.to_dict() for f in self.fills]
         return d
 
     @classmethod
@@ -233,7 +257,8 @@ class PlotOverrides:
         o.palette_reverse = _opt_bool(data, 'palette_reverse', ctx)
         for name, typ in (('violin', ViolinOptions),
                           ('ridgeline', RidgeOptions),
-                          ('stacked', StackOptions)):
+                          ('stacked', StackOptions),
+                          ('histogram', HistOptions)):
             if data.get(name) is not None:
                 try:
                     setattr(o, name, typ.from_dict(
@@ -242,7 +267,9 @@ class PlotOverrides:
                     raise _err(str(e))
         for name, typ, limit in (('annotations', Annotation,
                                   MAX_ANNOTATIONS),
-                                 ('brackets', Bracket, MAX_BRACKETS)):
+                                 ('brackets', Bracket, MAX_BRACKETS),
+                                 ('bands', Band, MAX_BANDS),
+                                 ('spans', Span, MAX_SPANS)):
             items = data.get(name)
             if items is None:
                 continue
@@ -272,6 +299,24 @@ class PlotOverrides:
                     raise _err(f"{ctx}.bar_labels[{key}]: expected a "
                                "string of at most 200 characters")
                 o.bar_labels[idx] = text
+        fills = data.get('fills')
+        if fills is not None:
+            from .fills import CurveFill
+            if not isinstance(fills, list) \
+                    or len(fills) > MAX_BANDS + MAX_SPANS:
+                raise _err(f"{ctx}.fills: expected at most "
+                           f"{MAX_BANDS + MAX_SPANS} entries")
+            try:
+                o.fills = [CurveFill.from_dict(
+                    f, f"{ctx}.fills[{i}]")
+                    for i, f in enumerate(fills)]
+            except ValueError as e:
+                raise _err(str(e))
+            ids = set()
+            for f in o.fills:
+                if f.id in ids:
+                    raise _err(f"{ctx}.fills: duplicate id {f.id!r}")
+                ids.add(f.id)
         return o
 
 
@@ -302,7 +347,7 @@ def reset_element(overrides, key, y_column=None):
         overrides.style.grid = None
         overrides.palette = None
         overrides.palette_reverse = None
-    elif key.startswith(('series:', 'violin:', 'stack:')):
+    elif key.startswith(('series:', 'violin:', 'stack:', 'hist:')):
         if y_column is not None:
             overrides.series.pop(y_column, None)
     elif key.startswith('annotation:'):
@@ -334,6 +379,16 @@ def parse_axis_limits(lo_text, hi_text):
     return [lo, hi], False
 
 
+def static_bands(doc, overrides):
+    """``doc.bands`` minus the bands computed from ``overrides.fills``
+    (they share the fill's id): the list to lift into
+    ``overrides.bands`` for editing/deleting, so the next
+    ``effective_document`` doesn't append a duplicate fill band."""
+    fill_ids = {f.id for f in (overrides.fills or ())}
+    return [b for b in getattr(doc, 'bands', None) or ()
+            if b.id not in fill_ids]
+
+
 def remap_series_keys(overrides, event):
     """Shift ``overrides.series`` keys for column insert/remove events."""
     if not event or event[0] not in ('columns_inserted',
@@ -349,6 +404,24 @@ def remap_series_keys(overrides, event):
             (k - count if k >= at + count else k): o
             for k, o in overrides.series.items()
             if not (at <= k < at + count)}
+    # Curve fills reference Y columns: remap them the same way and drop
+    # fills whose column was removed.
+    if overrides.fills:
+        def _remap(col):
+            if event[0] == 'columns_inserted':
+                return col + count if col >= at else col
+            if at <= col < at + count:
+                return None
+            return col - count if col >= at + count else col
+        kept = []
+        for f in overrides.fills:
+            a = _remap(f.a)
+            b = _remap(f.b) if f.b is not None else None
+            if a is None or (f.b is not None and b is None):
+                continue
+            f.a, f.b = a, b
+            kept.append(f)
+        overrides.fills = kept or None
     # bar_labels keys are bar (row) indices, not columns — no remap.
 
 
@@ -377,10 +450,52 @@ def apply_update(overrides, fn, commit):
         return False
 
 
-def overrides_from_document(doc):
+def record_overrides_edit(worksheet, overrides, fn, commit,
+                          label='Edit Plot'):
+    """Apply ``fn(overrides)`` and record it in *worksheet*'s undo
+    history (chronological with cell edits).
+
+    Keeps ``apply_update``'s rollback; a no-op edit (identical
+    ``to_dict``) or a failed one records nothing. Apply/revert restore
+    every ``PlotOverrides._KEYS`` field **in place** — open panels and
+    the tab hold that exact object — then run ``commit()`` (re-render).
+    ``_record`` calls ``apply`` immediately, so the restore is
+    idempotent. Returns True when an entry was recorded.
+    """
+    before = copy.deepcopy(overrides)
+    if not apply_update(overrides, fn, commit):
+        return False
+    after = copy.deepcopy(overrides)
+    if before.to_dict() == after.to_dict():
+        return False
+
+    def restore(snapshot):
+        fresh = copy.deepcopy(snapshot)
+        for name in PlotOverrides._KEYS:
+            setattr(overrides, name, getattr(fresh, name))
+        commit()
+
+    worksheet.record_external_edit(
+        label, apply=lambda: restore(after),
+        revert=lambda: restore(before))
+    return True
+
+
+_SERIES_SEED_FIELDS = ('color', 'linewidth_pt', 'linestyle', 'marker',
+                       'markersize_pt', 'error_style', 'error_alpha')
+
+
+def overrides_from_document(doc, items=None, chart_key=None):
     """Seed overrides from a document with no override metadata (legacy or
     ILM file): style is cloned; document-level fields are set only where
-    they differ from a fresh ``PlotDocument``."""
+    they differ from a fresh ``PlotDocument``.
+
+    With *items* + *chart_key* and a line-kind document whose series
+    count matches, per-series overrides are seeded with every look
+    field (colour, width, style, marker, size, error display) that
+    differs from a plain ``document_from_plot`` regeneration — so the
+    series look survives the first save (which switches the file onto
+    the regenerated-document path)."""
     o = PlotOverrides()
     base = PlotDocument()
     o.style = copy.deepcopy(doc.style) if doc.style is not None \
@@ -403,10 +518,35 @@ def overrides_from_document(doc):
         o.ridgeline = copy.deepcopy(doc.ridgeline)
     if doc.stacked is not None:
         o.stacked = copy.deepcopy(doc.stacked)
+    if doc.histogram is not None:
+        o.histogram = copy.deepcopy(doc.histogram)
     if doc.annotations:
         o.annotations = copy.deepcopy(doc.annotations)
     if doc.brackets:
         o.brackets = copy.deepcopy(doc.brackets)
+    if doc.bands:
+        o.bands = copy.deepcopy(doc.bands)
+    if getattr(doc, 'spans', None):
+        o.spans = copy.deepcopy(doc.spans)
+    if items is not None and chart_key is not None \
+            and doc.kind in ('line', 'ridgeline') \
+            and len(items) == len(doc.series):
+        from .export import document_from_plot
+        try:
+            regen = document_from_plot(items, chart_key)
+        except Exception:
+            regen = None
+        if regen is not None:
+            for i, (s, rs) in enumerate(zip(doc.series, regen.series)):
+                y_col = getattr(items[i], 'y_column', None)
+                if y_col is None:
+                    continue
+                diff = {}
+                for f in _SERIES_SEED_FIELDS:
+                    if getattr(s, f, None) != getattr(rs, f, None):
+                        diff[f] = getattr(s, f)
+                if diff:
+                    o.series[y_col] = SeriesOverride(**diff)
     return o
 
 
@@ -419,7 +559,9 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
     its series count matches; new kinds always regenerate from the
     worksheet items. Overrides are applied on top.
     """
-    from .export import CHART_KIND, document_from_plot
+    from .export import (CHART_KIND, GROUPED_CHARTS,
+                         HORIZONTAL_CHARTS, VIOLIN_BODY,
+                         default_axis_titles, document_from_plot)
     from .plot_data import tick_label_map
     kind, percent = CHART_KIND.get(chart_key, ('line', None))
     if kind in ('line', 'ridgeline') and base_doc is not None \
@@ -444,11 +586,15 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
                                  palette_reverse=bool(
                                      overrides.palette_reverse))
     doc.title = title
+    h_eff = overrides.histogram if overrides.histogram is not None \
+        else doc.histogram
+    x_def, y_def = default_axis_titles(
+        items, chart_key,
+        density=bool(h_eff.density) if h_eff is not None else False)
     doc.xlabel = overrides.xlabel if overrides.xlabel is not None \
-        else items[0].x_label
+        else x_def
     doc.ylabel = overrides.ylabel if overrides.ylabel is not None \
-        else doc.ylabel if kind == 'stacked_column' and percent \
-        else items[0].y_label
+        else y_def
     if overrides.legend is not None:
         doc.legend = overrides.legend
     if overrides.legend_location is not None:
@@ -463,12 +609,21 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
     # reach a document of their own kind.
     if overrides.violin is not None and kind == 'violin':
         doc.violin = copy.deepcopy(overrides.violin)
+    if kind == 'violin' and (doc.violin is not None
+                             or chart_key != 'violin'):
+        # The chart key owns the body; a plain violin without
+        # overrides keeps ``violin=None`` (byte-identical output).
+        doc.violin = doc.violin or ViolinOptions()
+        doc.violin.body = VIOLIN_BODY[chart_key]
+    if overrides.histogram is not None and kind == 'histogram':
+        doc.histogram = copy.deepcopy(overrides.histogram)
     if overrides.ridgeline is not None and kind == 'ridgeline':
         doc.ridgeline = copy.deepcopy(overrides.ridgeline)
     if overrides.stacked is not None and kind == 'stacked_column':
         doc.stacked = copy.deepcopy(overrides.stacked)
         doc.stacked.percent = bool(percent)
-        doc.stacked.grouped = chart_key == 'column'
+        doc.stacked.grouped = chart_key in GROUPED_CHARTS
+        doc.stacked.horizontal = chart_key in HORIZONTAL_CHARTS
     if overrides.bar_labels and doc.x_tick_labels:
         for entry in doc.x_tick_labels:
             idx = int(entry[0])
@@ -478,6 +633,25 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
         doc.annotations = copy.deepcopy(overrides.annotations)
     if overrides.brackets:
         doc.brackets = copy.deepcopy(overrides.brackets)
+    if overrides.bands is not None and doc.kind == 'line':
+        doc.bands = copy.deepcopy(overrides.bands)
+    if doc.kind == 'line':
+        if overrides.spans is not None:
+            doc.spans = copy.deepcopy(overrides.spans)
+        if overrides.fills:
+            # Curve fills compile to bands after the static ones, bound
+            # to the *drawn* series (stacked-line offsets already in
+            # ``doc.series``).
+            from .fills import compute_band
+            drawn = {}
+            for it, s in zip(items, doc.series):
+                y_col = getattr(it, 'y_column', None)
+                if y_col is not None:
+                    drawn[y_col] = (s.x, s.y)
+            for fl in overrides.fills:
+                band = compute_band(fl, drawn)
+                if band is not None:
+                    doc.bands.append(band)
     doc.style = copy.deepcopy(overrides.style) \
         if overrides.style is not None else PlotStyle()
     # Per-item label/colour overrides, keyed by Y column (the other
@@ -510,6 +684,10 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
                     entry.marker = so.marker
                 if so.markersize_pt is not None:
                     entry.markersize_pt = so.markersize_pt
+                if so.error_style is not None:
+                    entry.error_style = so.error_style
+                if so.error_alpha is not None:
+                    entry.error_alpha = so.error_alpha
     if figure_size is not None:
         doc.width_mm = figure_size.width_mm
         doc.height_mm = figure_size.height_mm
