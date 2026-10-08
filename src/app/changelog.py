@@ -9,6 +9,26 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.5.2", "2026-10-07", [
+        {"en": "Plot Editor: new Box plot and Column + Points charts (bars of the mean with SD or SEM error bars and every data point) in the Distribution group, alongside Violin.",
+         "zh": "图表编辑器：“分布”分组新增箱线图和“柱状 + 散点”（均值柱 + SD/SEM 误差线 + 全部数据点），与小提琴图并列。"},
+        {"en": "Plot Editor: new Histogram chart with shared bins across groups, bin count or bin width, density normalisation, outline style and an optional KDE curve.",
+         "zh": "图表编辑器：新增直方图，各组共用分箱，可设分箱数或分箱宽度、归一化为密度、轮廓样式和可选的核密度曲线。"},
+        {"en": "Plot Editor: horizontal Bar, Stacked Bar and 100% Stacked Bar charts, with the category axis on the left for long category names.",
+         "zh": "图表编辑器：新增条形图、堆积条形图和百分比堆积条形图，类别轴位于左侧，适合较长的类别名称。"},
+        {"en": "Show the sample size (n = …) for each group of a box, violin or column chart — under the tick label, above the group or at the axis bottom, with an editable template, size and colour; histograms show it in the legend.",
+         "zh": "箱线图、小提琴图和柱状图可显示每组的样本量（n = …）：位于刻度标签下、组上方或坐标轴底部，模板、字号和颜色可调；直方图在图例中显示。"},
+        {"en": "Long axis titles and plot titles now wrap to fit instead of running off the figure.",
+         "zh": "过长的坐标轴标题和图表标题现在会自动换行，不再超出图面。"},
+        {"en": "Free text notes can span several lines: press Enter for a new line in the note editor, Ctrl+Enter to apply.",
+         "zh": "自由文本注释支持多行：在注释编辑器中按回车换行，Ctrl+回车应用。"},
+        {"en": "The edit window for a box or column chart now shows only the settings that apply to it, under its own title.",
+         "zh": "箱线图和柱状图的编辑窗口现在只显示与之相关的设置，并使用各自的标题。"},
+        {"en": "Fixed: changing a style setting in the title's edit window no longer erases the plot title.",
+         "zh": "修复：在标题编辑窗口中修改样式设置时，图表标题不再被清空。"},
+        {"en": "Plots that use these new charts or settings need 3.5.2 or later to edit; older versions still show them as saved and say that an update is needed.",
+         "zh": "使用这些新图表或新设置的图表需要 3.5.2 或更高版本才能编辑；旧版本仍按保存时的样子显示，并提示需要更新。"},
+    ]),
     ("3.5.1", "2026-10-05", [
         {"en": "New Plot Editor: a separate window for making editable scientific plots. Open it from the Welcome window, File → Open Plot Editor, or right-click an empty cell → New .ilmplot.svg.",
          "zh": "全新图表编辑器：用于制作可编辑科学图表的独立窗口。可从欢迎窗口、“文件 → 打开图表编辑器”，或右键空单元格 →“新建 .ilmplot.svg”打开。"},
