@@ -239,3 +239,5 @@ if ($LASTEXITCODE -ne 0) { throw "MSIX packaging failed" }
 源代码采用 Apache-2.0 许可证，详见 `LICENSE`。
 
 **关于预编译二进制文件的说明：**官方二进制文件捆绑了 PyQt6（GPL v3）与 PyMuPDF（AGPL-3.0）。作为组合作品，分发的二进制文件除 Apache-2.0 外还受 GPL v3 / AGPL-3.0 条款约束。如果你再分发这些二进制文件，或自行构建并分发包含上述组件的版本，必须遵守相应许可证，或分别向 Riverbank Computing（PyQt6）和 Artifex Software（PyMuPDF）购买商业许可。完整第三方组件清单见 `NOTICE`。**关于 → 许可协议与源码…** 可离线查看随附声明。[`SOURCES.md`](SOURCES.md) 列出对应源码位置及其记录的核验状态；[`NOTICE`](NOTICE) 提供第三方声明。
+
+<img src="assets/Alipay.jpg" alt="Alipay" width="300" />

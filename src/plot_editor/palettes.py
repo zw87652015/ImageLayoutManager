@@ -41,8 +41,10 @@ STACKED_WONG = ['#0072B2', '#E69F00', '#009E73', '#CC79A7',
                 '#56B4E9', '#D55E00', '#F0E442']
 
 # User themes, referenced as ``'custom:<name>'``. Populated by the
-# editor window from ``theme_store.ThemeStore``; unknown names fall back
-# to the chart default so files travel between machines.
+# editor window from ``theme_store.ThemeStore``. A plot file also stores
+# the resolved list (``PlotOverrides.palette_colors``) so a machine
+# without that theme still draws the saved colours. With no snapshot
+# and no installed theme, resolution falls back to the chart default.
 _CUSTOM = {}
 
 _BAD_NAME_CHARS = re.compile(r'[\\/:*?"<>|]')
@@ -118,16 +120,45 @@ def default_theme(chart_key, n_items):
     return 'default'
 
 
-def theme_colors(name, n, chart_key='', mode=None, reverse=False):
+def custom_theme_missing(name):
+    """True when *name* is a ``custom:`` ref with nothing installed."""
+    return (isinstance(name, str) and name.startswith('custom:')
+            and theme_colors_list(name) is None)
+
+
+def stamp_palette_colors(overrides):
+    """Copy an installed custom theme's colours onto *overrides*.
+
+    Called when a plot file is written. A missing theme keeps a snapshot
+    already loaded from the file; any other palette clears it.
+    """
+    name = getattr(overrides, 'palette', None)
+    if not (isinstance(name, str) and name.startswith('custom:')):
+        overrides.palette_colors = None
+        return
+    found = theme_colors_list(name)
+    if found:
+        overrides.palette_colors = list(found)
+
+
+def theme_colors(name, n, chart_key='', mode=None, reverse=False,
+                 fallback_colors=None):
     """Resolve *name* (a THEMES key, ``'custom:<name>'``, ``None``/``''``
     for the chart default, or the internal ``'_stacked_wong'``) to n hex
-    colours. Unknown custom names fall back to the chart default."""
+    colours.
+
+    ``fallback_colors`` is a custom theme's own list, used only when that
+    theme is not installed. Built-in names ignore it. A custom name with
+    neither an installation nor a fallback uses the chart default.
+    """
     if mode is None:
         from .export import CHART_KIND
         kind = CHART_KIND.get(chart_key, ('line', None))[0]
         mode = 'spread' if kind == 'ridgeline' else 'first'
     if isinstance(name, str) and name.startswith('custom:'):
         colors = _CUSTOM.get(name[7:])
+        if colors is None and fallback_colors:
+            colors = list(fallback_colors)
         if colors is not None:
             return _pick(colors, n, mode, reverse)
         name = None

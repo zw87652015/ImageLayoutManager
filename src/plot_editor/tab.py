@@ -13,9 +13,11 @@ from PyQt6.QtWidgets import (QInputDialog, QMenu, QMessageBox,
 
 from . import presets
 from .i18n import tr
-from .overrides import (PlotOverrides, effective_document,
-                        overrides_from_document, remap_series_keys,
-                        record_overrides_edit, static_bands)
+from .overrides import (PlotOverrides, assign_palette,
+                        assign_palette_reverse, effective_document,
+                        hold_baked_colours, overrides_from_document,
+                        remap_series_keys, record_overrides_edit,
+                        static_bands)
 from .plot_canvas import PlotCanvas
 from .export import CHART_KIND
 from .plot_data import (PlotSelectionError, build_categories,
@@ -562,6 +564,21 @@ class PlotTab(QSplitter):
                 act.setChecked(ref == current)
                 act.triggered.connect(
                     lambda _c=False, r=ref: self._set_palette(r))
+        # A file can name a theme this machine does not have. Keep it
+        # checked so the menu shows the name the colours came from.
+        if (isinstance(current, str) and current.startswith('custom:')
+                and current[7:] not in custom):
+            if not custom:
+                menu.addSeparator()
+            swatch = (self.overrides.palette_colors
+                      or self.overrides.baked_item_colors)
+            act = menu.addAction(
+                palette_strip(current, colors=swatch),
+                theme_display_name(current))
+            act.setCheckable(True)
+            act.setChecked(True)
+            act.triggered.connect(
+                lambda _c=False, r=current: self._set_palette(r))
         menu.addSeparator()
         rev = menu.addAction(tr('row_reverse_colours'))
         rev.setCheckable(True)
@@ -572,13 +589,11 @@ class PlotTab(QSplitter):
                        self._open_theme_editor)
 
     def _set_palette(self, name):
-        self.update_overrides(
-            lambda o: setattr(o, 'palette', name))
+        self.update_overrides(lambda o: assign_palette(o, name))
 
     def _set_palette_reverse(self, checked):
         self.update_overrides(
-            lambda o: setattr(o, 'palette_reverse',
-                              True if checked else None))
+            lambda o: assign_palette_reverse(o, checked))
 
     def _open_theme_editor(self):
         window = self.window()
@@ -685,6 +700,8 @@ class PlotTab(QSplitter):
         target.series = source.series
         target.palette = source.palette
         target.palette_reverse = source.palette_reverse
+        target.palette_colors = source.palette_colors
+        target.baked_item_colors = source.baked_item_colors
         target.violin = source.violin
         target.ridgeline = source.ridgeline
         target.stacked = source.stacked
@@ -776,6 +793,7 @@ class PlotTab(QSplitter):
         # the document (style cloned; only fields differing from defaults).
         self.overrides = pf.overrides if pf.overrides is not None \
             else overrides_from_document(pf.document, series, chart)
+        hold_baked_colours(self.overrides, pf.document)
         self.regions = None
         self._set_path(path)
         self.plot_title = pf.document.title or ''

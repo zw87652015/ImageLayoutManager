@@ -5,7 +5,9 @@ Custom themes live as one JSON file each under ``<root>`` (the
 ``<slug>.ilmtheme.json`` with ``{"format": "ilm-plot-theme",
 "schema_version": 1, "name", "colors": [hex, ...]}``. Documents and
 overrides reference them as ``'custom:<name>'``; ``palettes`` resolves
-the name at render time through its installed registry.
+the name at render time through its installed registry. Saved plots and
+style presets also store that colour list, so a machine without the
+theme file still draws the same colours.
 """
 
 import json

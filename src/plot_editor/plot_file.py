@@ -392,6 +392,9 @@ def _metadata_nodes(root):
 def save_plot_file(path, document, worksheet, chart_key, plot_columns,
                    overrides=None):
     """Atomically write the SVG with both metadata nodes."""
+    if overrides is not None:
+        from .palettes import stamp_palette_colors
+        stamp_palette_colors(overrides)
     svg = render.render_document(document).svg
     payload = json.dumps(
         worksheet_to_dict(worksheet, chart_key, plot_columns, overrides,

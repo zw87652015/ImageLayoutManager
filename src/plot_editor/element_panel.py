@@ -38,8 +38,9 @@ from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
                        TitleStyle, ViolinOptions)
 from . import palettes
 from .palettes import THEMES, theme_display_key
-from .overrides import (SeriesOverride, parse_axis_limits,
-                        reset_element, static_bands)
+from .overrides import (SeriesOverride, assign_palette,
+                        assign_palette_reverse, clear_palette,
+                        parse_axis_limits, reset_element, static_bands)
 from .note_text import MAX_NOTE_TEXT, expand_newline_escapes
 
 _PANEL_WIDTH = 300
@@ -1346,20 +1347,31 @@ class ElementPanel(QFrame):
             lambda xo, v: setattr(fget(xo), 'hide_bottom', v)))
 
         self._section(tr('sec_theme'))
-        names = list(THEMES) + ['custom:' + n
-                                for n in palettes.custom_theme_names()]
+        installed = ['custom:' + n
+                     for n in palettes.custom_theme_names()]
+        names = list(THEMES) + installed
+        # Keep a theme named by the file even when it is not installed,
+        # so opening the panel does not display (or later write) Default.
+        if (isinstance(o.palette, str) and o.palette.startswith('custom:')
+                and o.palette not in names):
+            names.append(o.palette)
         labels = [palettes.theme_display_name(n) for n in names]
         dpr = self.devicePixelRatioF()
+        present = set(THEMES)
+        present.update(installed)
         theme_combo = QComboBox()
+        swatch = o.palette_colors or o.baked_item_colors
         for i, n in enumerate(names):
-            theme_combo.addItem(palette_strip(n, dpr=dpr), labels[i], n)
+            cols = None if n in present else swatch
+            theme_combo.addItem(
+                palette_strip(n, dpr=dpr, colors=cols), labels[i], n)
         theme_combo.setIconSize(QSize(44, 14))
         theme_combo.setCurrentIndex(
             names.index(o.palette) if o.palette in names else 0)
         theme_combo.currentIndexChanged.connect(
             lambda idx: self._apply_now(
-                lambda xo: setattr(xo, 'palette',
-                                   theme_combo.itemData(idx))))
+                lambda xo: assign_palette(
+                    xo, theme_combo.itemData(idx))))
         theme_row = QWidget()
         th = QHBoxLayout(theme_row)
         th.setContentsMargins(0, 0, 0, 0)
@@ -1373,14 +1385,13 @@ class ElementPanel(QFrame):
         th.addWidget(theme_edit)
         self._row(form, tr('row_theme'), theme_row,
                   is_set=lambda: o.palette is not None,
-                  reset=lambda xo: setattr(xo, 'palette', None),
+                  reset=lambda xo: clear_palette(xo),
                   sync=lambda: theme_combo.setCurrentIndex(
                       names.index(o.palette)
                       if o.palette in names else 0))
         form.addRow(self._checkbox(
             tr('row_reverse_colours'), bool(o.palette_reverse),
-            lambda xo, v: setattr(xo, 'palette_reverse',
-                                  True if v else None)))
+            lambda xo, v: assign_palette_reverse(xo, v)))
 
         self._section(tr('sec_grid'))
         form.addRow(self._checkbox(

@@ -151,6 +151,9 @@ class StylePreset:
     series: SeriesLook = field(default_factory=SeriesLook)
     palette: 'str | None' = None
     palette_reverse: 'bool | None' = None
+    # Colour list behind a ``custom:`` palette, so the preset still
+    # colours a plot on a machine that does not have the theme.
+    palette_colors: 'list | None' = None
     violin: 'ViolinOptions | None' = None
     ridgeline: 'RidgeOptions | None' = None
     stacked: 'StackOptions | None' = None
@@ -175,6 +178,8 @@ class StylePreset:
             d['palette'] = self.palette
         if self.palette_reverse is not None:
             d['palette_reverse'] = self.palette_reverse
+        if self.palette_colors:
+            d['palette_colors'] = list(self.palette_colors)
         for k in ('violin', 'ridgeline', 'stacked', 'histogram'):
             opt = getattr(self, k)
             if opt is not None:
@@ -189,7 +194,8 @@ class StylePreset:
             raise PresetError('expected a JSON object')
         allowed = {'format', 'schema_version', 'type', 'name', 'style',
                    'legend', 'legend_location', 'grid', 'series',
-                   'palette', 'palette_reverse', 'violin', 'ridgeline',
+                   'palette', 'palette_reverse', 'palette_colors',
+                   'violin', 'ridgeline',
                    'stacked', 'histogram'}
         for k in data:
             if k not in allowed:
@@ -237,6 +243,13 @@ class StylePreset:
             if not isinstance(pr, bool):
                 raise PresetError('palette_reverse: expected a bool')
             preset.palette_reverse = pr
+        raw_colors = data.get('palette_colors')
+        if raw_colors is not None:
+            from .theme_store import ThemeError, check_colors
+            try:
+                preset.palette_colors = check_colors(raw_colors)
+            except ThemeError as e:
+                raise PresetError('palette_colors: %s' % e) from e
         for name, typ in (('violin', ViolinOptions),
                           ('ridgeline', RidgeOptions),
                           ('stacked', StackOptions),
@@ -451,12 +464,28 @@ def capture(overrides, plot_type):
             series.marker = s.marker
         if series.markersize_pt is None and s.markersize_pt is not None:
             series.markersize_pt = s.markersize_pt
+    from .palettes import theme_colors_list
+    snap = None
+    if isinstance(overrides.palette, str) \
+            and overrides.palette.startswith('custom:'):
+        live = theme_colors_list(overrides.palette)
+        if live:
+            snap = list(live)
+        elif overrides.palette_colors:
+            snap = list(overrides.palette_colors)
+        elif overrides.baked_item_colors:
+            # Already the drawn colours. Undo a saved reversal so applying
+            # the preset does not flip them a second time.
+            snap = list(overrides.baked_item_colors)
+            if overrides.palette_reverse:
+                snap.reverse()
     return StylePreset(name='', plot_type=plot_type, style=style,
                        legend=overrides.legend,
                        legend_location=overrides.legend_location,
                        grid=overrides.grid, series=series,
                        palette=overrides.palette,
                        palette_reverse=overrides.palette_reverse,
+                       palette_colors=snap,
                        violin=copy.deepcopy(overrides.violin),
                        ridgeline=copy.deepcopy(overrides.ridgeline),
                        stacked=copy.deepcopy(overrides.stacked),
@@ -493,6 +522,8 @@ def apply(preset, overrides, series_list, chart_key):
                 del overrides.series[key]
         overrides.palette = None
         overrides.palette_reverse = None
+        overrides.palette_colors = None
+        overrides.baked_item_colors = None
         overrides.violin = None
         overrides.ridgeline = None
         overrides.stacked = None
@@ -528,6 +559,9 @@ def apply(preset, overrides, series_list, chart_key):
             so.markersize_pt = look.markersize_pt
     overrides.palette = preset.palette
     overrides.palette_reverse = preset.palette_reverse
+    overrides.palette_colors = (
+        list(preset.palette_colors) if preset.palette_colors else None)
+    overrides.baked_item_colors = None
     overrides.violin = copy.deepcopy(preset.violin)
     overrides.ridgeline = copy.deepcopy(preset.ridgeline)
     overrides.stacked = copy.deepcopy(preset.stacked)

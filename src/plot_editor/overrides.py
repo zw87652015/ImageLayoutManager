@@ -127,12 +127,14 @@ class PlotOverrides:
 
     __slots__ = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
                  'xlim', 'ylim', 'style', 'series', 'palette',
-                 'palette_reverse', 'violin', 'ridgeline', 'stacked',
+                 'palette_reverse', 'palette_colors', 'baked_item_colors',
+                 'violin', 'ridgeline', 'stacked',
                  'histogram', 'annotations', 'brackets', 'bands',
                  'bar_labels', 'spans', 'fills')
     _KEYS = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
              'xlim', 'ylim', 'style', 'series', 'palette',
-             'palette_reverse', 'violin', 'ridgeline', 'stacked',
+             'palette_reverse', 'palette_colors', 'baked_item_colors',
+             'violin', 'ridgeline', 'stacked',
              'histogram', 'annotations', 'brackets', 'bands',
              'bar_labels', 'spans', 'fills')
 
@@ -148,6 +150,13 @@ class PlotOverrides:
         self.series = {}
         self.palette = None
         self.palette_reverse = None
+        # Colour list of a ``custom:`` theme, written into the file so
+        # another machine can draw it. None for built-in themes.
+        self.palette_colors = None
+        # Exact item colours from a file whose custom theme is not
+        # installed and that has no ``palette_colors`` snapshot. Session
+        # only — ``to_dict`` omits it. Cleared when the theme name changes.
+        self.baked_item_colors = None
         self.violin = None
         self.ridgeline = None
         self.stacked = None
@@ -166,6 +175,7 @@ class PlotOverrides:
                 and self.ylim is None and not self.style.to_dict()
                 and all(o.is_empty() for o in self.series.values())
                 and self.palette is None and self.palette_reverse is None
+                and not self.palette_colors
                 and self.violin is None and self.ridgeline is None
                 and self.stacked is None and self.histogram is None
                 and not self.annotations
@@ -180,6 +190,10 @@ class PlotOverrides:
             v = getattr(self, k)
             if v is not None:
                 d[k] = v
+        if (isinstance(self.palette, str)
+                and self.palette.startswith('custom:')
+                and self.palette_colors):
+            d['palette_colors'] = list(self.palette_colors)
         style = self.style.to_dict() if self.style is not None else {}
         if style:
             d['style'] = style
@@ -255,6 +269,13 @@ class PlotOverrides:
                 raise _err(f"{ctx}.palette: unknown theme {pal!r}")
             o.palette = pal
         o.palette_reverse = _opt_bool(data, 'palette_reverse', ctx)
+        raw_colors = data.get('palette_colors')
+        if raw_colors is not None:
+            from .theme_store import ThemeError, check_colors
+            try:
+                o.palette_colors = check_colors(raw_colors)
+            except ThemeError as e:
+                raise _err(f"{ctx}.palette_colors: {e}")
         for name, typ in (('violin', ViolinOptions),
                           ('ridgeline', RidgeOptions),
                           ('stacked', StackOptions),
@@ -347,6 +368,8 @@ def reset_element(overrides, key, y_column=None):
         overrides.style.grid = None
         overrides.palette = None
         overrides.palette_reverse = None
+        overrides.palette_colors = None
+        overrides.baked_item_colors = None
     elif key.startswith(('series:', 'violin:', 'stack:', 'hist:')):
         if y_column is not None:
             overrides.series.pop(y_column, None)
@@ -550,6 +573,61 @@ def overrides_from_document(doc, items=None, chart_key=None):
     return o
 
 
+def document_item_colors(document):
+    """Item colours in draw order: series, violin/histogram groups, or bars."""
+    kind = getattr(document, 'kind', 'line')
+    if kind in ('violin', 'histogram'):
+        coll = getattr(document, 'groups', None) or ()
+    elif kind == 'stacked_column':
+        coll = getattr(document, 'categories', None) or ()
+    else:
+        coll = getattr(document, 'series', None) or ()
+    return [getattr(item, 'color', None) for item in coll]
+
+
+def hold_baked_colours(overrides, document):
+    """Keep a file's item colours when its custom theme is not installed.
+
+    The list stays in memory for this session and is not written into the
+    file. An embedded ``palette_colors`` snapshot, or a theme of the same
+    name installed on this machine, is left to resolve on its own.
+    """
+    from .palettes import custom_theme_missing
+    if document is None or not custom_theme_missing(overrides.palette):
+        return
+    if overrides.palette_colors:
+        return
+    colors = document_item_colors(document)
+    if colors and all(isinstance(c, str) and c for c in colors):
+        overrides.baked_item_colors = list(colors)
+
+
+def assign_palette(overrides, name):
+    """Select *name*. A different name drops held file colours."""
+    if overrides.palette != name:
+        overrides.baked_item_colors = None
+    overrides.palette = name
+
+
+def assign_palette_reverse(overrides, checked):
+    """Set colour reversal.
+
+    Held file colours are already the expanded list, so they are flipped
+    here instead of being run through the theme resolver again.
+    """
+    overrides.palette_reverse = True if checked else None
+    if overrides.baked_item_colors:
+        overrides.baked_item_colors = list(
+            reversed(overrides.baked_item_colors))
+
+
+def clear_palette(overrides):
+    """Drop the theme choice and any colour list held for it."""
+    overrides.palette = None
+    overrides.palette_colors = None
+    overrides.baked_item_colors = None
+
+
 def effective_document(base_doc, items, chart_key, title, overrides, *,
                        figure_size=None):
     """Build the validated ``PlotDocument`` shown/saved by the editor.
@@ -656,13 +734,20 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
         if overrides.style is not None else PlotStyle()
     # Per-item label/colour overrides, keyed by Y column (the other
     # SeriesOverride fields only apply to line-kind series).
+    from .palettes import custom_theme_missing, theme_colors
+    missing_theme = custom_theme_missing(overrides.palette)
+    snapshot = overrides.palette_colors if missing_theme else None
+    # Exact colours from a file that predates palette_colors. They already
+    # include reversal, so they are not passed through theme_colors.
+    baked = (overrides.baked_item_colors
+             if missing_theme and not snapshot else None)
     for coll in (doc.series, doc.groups, doc.categories):
         pal_colors = None
         if overrides.palette or overrides.palette_reverse:
-            from .palettes import theme_colors
             pal_colors = theme_colors(
                 overrides.palette, len(coll), chart_key,
-                reverse=bool(overrides.palette_reverse))
+                reverse=bool(overrides.palette_reverse),
+                fallback_colors=snapshot)
         for i, entry in enumerate(coll):
             if i >= len(items):
                 break
@@ -673,6 +758,8 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
                 and so.label is not None else items[i].label
             if so is not None and so.color is not None:
                 entry.color = so.color
+            elif baked is not None and i < len(baked) and baked[i]:
+                entry.color = baked[i]
             elif pal_colors is not None:
                 entry.color = pal_colors[i]
             if kind in ('line', 'ridgeline') and so is not None:

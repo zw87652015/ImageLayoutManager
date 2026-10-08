@@ -53,14 +53,22 @@ def clear_cache():
     _cache.clear()
 
 
-def palette_strip(name, w=44, h=14, dpr=1.0):
-    """Icon of equal-width colour swatches for theme ``name``."""
-    key = ('palette', name, w, h, round(dpr, 2))
+def palette_strip(name, w=44, h=14, dpr=1.0, colors=None):
+    """Icon of equal-width colour swatches for theme ``name``.
+
+    ``colors`` draws that list instead of looking the theme up, so a
+    file whose custom theme is not installed still shows its own swatches.
+    """
+    shown = tuple(colors) if colors else None
+    key = ('palette', name, w, h, round(float(dpr), 2), shown)
     icon = _cache.get(key)
     if icon is None:
         from .palettes import theme_colors_list
-        colors = theme_colors_list(name) or theme_colors_list(
-            'default')
+        if shown is None:
+            colors = theme_colors_list(name) or theme_colors_list(
+                'default')
+        else:
+            colors = list(shown)
         pm = QPixmap(round(w * dpr), round(h * dpr))
         pm.setDevicePixelRatio(dpr)
         pm.fill(Qt.GlobalColor.transparent)
