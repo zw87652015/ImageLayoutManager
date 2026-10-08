@@ -209,6 +209,12 @@ _STRINGS = {
     'dlg_open':        {'en': 'Open',        'zh': '打开'},
     'dlg_save_as':     {'en': 'Save As',     'zh': '另存为'},
     'dlg_export':      {'en': 'Export',      'zh': '导出'},
+    'export_filter_white': {
+        'en': '{format} - White background (*.{suffix})',
+        'zh': '{format} - 白色背景 (*.{suffix})'},
+    'export_filter_transparent': {
+        'en': '{format} - Transparent background (*.{suffix})',
+        'zh': '{format} - 透明背景 (*.{suffix})'},
     'dlg_save':        {'en': 'Save',        'zh': '保存'},
     'dlg_plot':        {'en': 'Plot',        'zh': '绘图'},
     'err_plot_newer_schema': {

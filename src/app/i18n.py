@@ -445,7 +445,7 @@ _T: dict[str, dict[str, str]] = {
     "multi_mixed_selection":     {"en": "{count} items selected (mixed types)", "zh": "已选中 {count} 项（混合类型）"},
     "multi_mixed_selection_no_count": {"en": "Multiple items selected (mixed types)", "zh": "已选中多项（混合类型）"},
     "btn_apply_all_corner":      {"en": "Apply Style to All Corner Labels",  "zh": "将样式应用到全部角标"},
-    "btn_apply_all_numbering":   {"en": "Apply Style to All Panel Labels",   "zh": "将样式应用到全部面板编号"},
+    "btn_apply_all_numbering":   {"en": "Apply Style to All",   "zh": "将样式应用到全部"},
 
     # ── Layers cell ──────────────────────────────────────────────
     "layers_header":        {"en": "LAYERS",            "zh": "图层"},
@@ -636,6 +636,10 @@ _T: dict[str, dict[str, str]] = {
     },
     "dlg_export_pdf":       {"en": "Export PDF",         "zh": "导出 PDF"},
     "dlg_export_png":       {"en": "Export PNG",         "zh": "导出 PNG"},
+    "png_filter_transparent": {"en": "PNG - Transparent background (*.png)",
+                             "zh": "PNG - 透明背景 (*.png)"},
+    "png_filter_white":     {"en": "PNG - White background (*.png)",
+                             "zh": "PNG - 白色背景 (*.png)"},
     "dlg_export_jpg":       {"en": "Export JPG",         "zh": "导出 JPG"},
     "dlg_export_svg":       {"en": "Export SVG",         "zh": "导出 SVG"},
     "dlg_import_images":    {"en": "Import Images",      "zh": "导入图片"},

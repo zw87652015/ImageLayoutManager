@@ -2162,11 +2162,12 @@ def _atomic_write(path, write):
 
 
 def export_document(document: PlotDocument, path: str, fmt: str,
-                    dpi: int = 300):
+                    dpi: int = 300, *, transparent: bool = False):
     """Export *document* via the native figure to pdf/svg/png/tiff/jpeg.
 
     Same figure and rc context as ``render_document`` (style scale 1);
-    writes atomically.
+    writes atomically. ``transparent`` applies only to png/svg: it drops
+    the figure and axes background patches; other formats stay opaque.
     """
     document.validate()
     if fmt not in ('pdf', 'svg', 'png', 'tiff', 'jpeg'):
@@ -2180,8 +2181,14 @@ def export_document(document: PlotDocument, path: str, fmt: str,
             _fit_figure(document, fig, ax)
 
             def _write(fh):
-                if fmt in ('pdf', 'svg'):
+                if fmt == 'svg':
+                    fig.savefig(fh, format=fmt, metadata={'Date': None},
+                                transparent=transparent)
+                elif fmt == 'pdf':
                     fig.savefig(fh, format=fmt, metadata={'Date': None})
+                elif fmt == 'png':
+                    fig.savefig(fh, format=fmt, dpi=dpi,
+                                transparent=transparent)
                 else:
                     fig.savefig(fh, format=fmt, dpi=dpi)
 

@@ -1140,6 +1140,9 @@ class MainWindow(QMainWindow):
         self._export_button = export_button  # icon applied via _refresh_toolbar_icons
         self.toolbar.addWidget(export_button)
 
+        # Toolbar buttons now all exist: show each action's shortcuts on hover.
+        self._install_toolbar_shortcut_tooltips()
+
         # ── Tab actions ──
         self._act_new_tab = QAction(tr("action_new_tab"), self)
         self._act_new_tab.setShortcut(QKeySequence("Ctrl+T"))
@@ -1702,6 +1705,37 @@ class MainWindow(QMainWindow):
         # on the filled accent background.
         if hasattr(self, "_export_button"):
             self._export_button.setIcon(make_icon("export", tokens["on_accent"]))
+
+    def _update_toolbar_button_tooltip(self, button):
+        """Append the default action's shortcuts to a toolbar button tooltip.
+
+        Only mutates the button (never the action), so re-running after
+        action.changed rebuilds from the fresh action tooltip with no
+        duplicated suffix. Buttons with a custom tooltip and no shortcuts
+        are left untouched.
+        """
+        action = button.defaultAction()
+        if action is None:
+            return
+        shortcuts = []
+        for seq in action.shortcuts():
+            text = seq.toString(QKeySequence.SequenceFormat.NativeText)
+            if text and text not in shortcuts:
+                shortcuts.append(text)
+        if not shortcuts:
+            return
+        base = action.toolTip() or action.text()
+        button.setToolTip(f"{base}\n({', '.join(shortcuts)})")
+
+    def _install_toolbar_shortcut_tooltips(self):
+        """Show action shortcuts on toolbar button hover and keep them in sync."""
+        for button in self.toolbar.findChildren(QToolButton):
+            action = button.defaultAction()
+            if action is None or not action.shortcuts():
+                continue
+            self._update_toolbar_button_tooltip(button)
+            action.changed.connect(
+                lambda b=button: self._update_toolbar_button_tooltip(b))
 
     def _update_theme_labels(self):
         if self._current_theme == DARK:
@@ -5766,11 +5800,18 @@ class MainWindow(QMainWindow):
         if not self._check_plot_alignment_for_export():
             return
         default_dir = self._get_export_default_dir()
-        path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_png"), default_dir, "PNG Files (*.png)")
+        transparent_filter = tr("png_filter_transparent")
+        white_filter = tr("png_filter_white")
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, tr("dlg_export_png"), default_dir,
+            f"{transparent_filter};;{white_filter}",
+            transparent_filter,
+        )
         if path:
             if not path.lower().endswith('.png'):
                 path += '.png'
-            ImageExporter.export(self.project, path, "PNG")
+            ImageExporter.export(self.project, path, "PNG",
+                                 transparent=selected_filter != white_filter)
             QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
 
     def _on_export_jpg(self):

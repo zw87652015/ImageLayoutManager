@@ -2045,14 +2045,6 @@ class Inspector(QWidget):
         self.text_color.colorChanged.connect(self._on_text_color_changed)
         self.text_layout.addRow(self._fl("lbl_color"), self.text_color)
 
-        # Every control above edits the selected label only. This button is
-        # the single explicit way to push that whole style onto the group, so
-        # font, size, weight and colour all behave the same way.
-        self.apply_style_btn = QPushButton(tr("btn_apply_all"))
-        self.apply_style_btn.setToolTip(tr("tip_apply_all"))
-        self.apply_style_btn.clicked.connect(self._on_apply_style_to_group)
-        self.text_layout.addRow("", self.apply_style_btn)
-        
         # Store current text item subtype for apply-to-group
         self._current_text_subtype = None
 
@@ -2140,6 +2132,14 @@ class Inspector(QWidget):
         )
         self._incell_scheme_label = self._fl("lbl_scheme")
         self.text_layout.addRow(self._incell_scheme_label, self._incell_scheme)
+
+        # Every control above edits the selected label only. This button is
+        # the single explicit way to push that whole style onto the group, so
+        # font, size, weight and colour all behave the same way.
+        self.apply_style_btn = QPushButton(tr("btn_apply_all"))
+        self.apply_style_btn.setToolTip(tr("tip_apply_all"))
+        self.apply_style_btn.clicked.connect(self._on_apply_style_to_group)
+        self.text_layout.addRow("", self.apply_style_btn)
 
         self.layout.addWidget(self.text_group)
         self.text_group.hide()

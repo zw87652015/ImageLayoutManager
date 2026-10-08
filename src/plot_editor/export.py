@@ -208,12 +208,13 @@ def _atomic_write(path, write):
         raise
 
 
-def export_plot(document, path, key):
+def export_plot(document, path, key, *, transparent: bool = False):
     """Atomically write *document* in format *key* to *path*.
 
     Everything goes through the native renderer: ``ilmplot`` embeds the
     document metadata; other formats use ``render.export_document`` so
-    exports match the preview exactly.
+    exports match the preview exactly. ``transparent`` is honoured for
+    ``png``/``svg`` only and ignored by pdf/tiff/jpeg/native.
     """
     if key == 'ilmplot':
         render.save_document(document, path)
@@ -221,4 +222,5 @@ def export_plot(document, path, key):
     if key not in EXPORT_FORMATS:
         raise ValueError(tr('err_unknown_export', value=repr(key)))
     fmt = 'jpeg' if key == 'jpg' else key
-    render.export_document(document, path, fmt, dpi=RASTER_DPI)
+    render.export_document(document, path, fmt, dpi=RASTER_DPI,
+                           transparent=transparent)

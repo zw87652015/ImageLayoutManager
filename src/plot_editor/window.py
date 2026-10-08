@@ -519,15 +519,31 @@ class PlotEditorWindow(QMainWindow):
         if tab.plot is None:
             return
         dialog_filter, suffix = EXPORT_FORMATS[key]
-        path, _f = QFileDialog.getSaveFileName(
-            self, tr('dlg_export'),
-            os.path.join(self._export_dir, 'Plot' + suffix),
-            dialog_filter)
+        transparent = False
+        if key in ('png', 'svg'):
+            white_filter = tr('export_filter_white',
+                              format=key.upper(), suffix=key)
+            transparent_filter = tr('export_filter_transparent',
+                                    format=key.upper(), suffix=key)
+            path, selected_filter = QFileDialog.getSaveFileName(
+                self, tr('dlg_export'),
+                os.path.join(self._export_dir, 'Plot' + suffix),
+                f'{white_filter};;{transparent_filter}', white_filter)
+            transparent = selected_filter == transparent_filter
+        else:
+            path, _f = QFileDialog.getSaveFileName(
+                self, tr('dlg_export'),
+                os.path.join(self._export_dir, 'Plot' + suffix),
+                dialog_filter)
         if not path:
             return
         path = with_suffix(path, key)
         try:
-            export_plot(tab.effective_document(), path, key)
+            if key in ('png', 'svg'):
+                export_plot(tab.effective_document(), path, key,
+                            transparent=transparent)
+            else:
+                export_plot(tab.effective_document(), path, key)
         except (OSError, PlotDocumentError, ValueError) as e:
             QMessageBox.warning(
                 self, tr('dlg_export'),

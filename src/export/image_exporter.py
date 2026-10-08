@@ -164,7 +164,7 @@ class ImageExporter:
     @staticmethod
     def export(project: Project, output_path: str, format: str = "TIFF",
                color_mode: str = "rgb", icc_profile_path: str = None,
-               rendering_intent: int = 1):
+               rendering_intent: int = 1, *, transparent: bool = True):
         """
         Export project to a raster image.
 
@@ -172,6 +172,8 @@ class ImageExporter:
             project: The project to export
             output_path: Output file path
             format: Image format - "TIFF", "JPG", "JPEG", or "PNG"
+            transparent: PNG only: keep a transparent background instead of
+                compositing onto opaque white. Other formats are always opaque.
         """
         # Calculate Layout (mm)
         layout_result = LayoutEngine.calculate_layout(project)
@@ -199,14 +201,16 @@ class ImageExporter:
         width_px = int(page_w_mm * scale)
         height_px = int(page_h_mm * scale)
         
-        # Create QImage with white background
-        # Use ARGB32 for transparency support, RGB32 for JPG
+        # Preserve PNG alpha; keep the existing white background for other formats.
         if format.upper() in ("JPG", "JPEG"):
             image = QImage(width_px, height_px, QImage.Format.Format_RGB32)
             image.fill(Qt.GlobalColor.white)
         else:
             image = QImage(width_px, height_px, QImage.Format.Format_ARGB32)
-            image.fill(Qt.GlobalColor.white)
+            if format.upper() == "PNG" and transparent:
+                image.fill(Qt.GlobalColor.transparent)
+            else:
+                image.fill(Qt.GlobalColor.white)
         
         # Set DPI metadata
         # QImage uses dots per meter: dpi * 39.3701 (inches per meter)
