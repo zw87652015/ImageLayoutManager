@@ -1,8 +1,12 @@
+import argparse
+import hashlib
+import json
 import os
 import sys
 import re
 import plistlib
 import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -52,11 +56,144 @@ def _generate_icns(src: Path, dest: Path) -> bool:
         shutil.rmtree(str(iconset.parent), ignore_errors=True)
 
 
-def main() -> int:
+def _run(cmd: list) -> subprocess.CompletedProcess:
+    """Run a command, printing the command and its output on failure."""
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        print(f"Command failed ({proc.returncode}): {' '.join(str(c) for c in cmd)}")
+        if proc.stdout:
+            print(proc.stdout)
+        if proc.stderr:
+            print(proc.stderr)
+    return proc
+
+
+_MACHO_MAGICS = {b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+                 b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe",
+                 b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"}
+
+
+def _is_macho(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) in _MACHO_MAGICS
+    except OSError:
+        return False
+
+
+def _sign_app(app: Path, identity: str | None) -> bool:
+    """Re-seal the outer bundle after the post-build Info.plist/license edits.
+
+    Nested code is already signed by PyInstaller, so no --deep here.
+    """
+    if identity:
+        cmd = ["codesign", "--force", "--timestamp", "--options", "runtime",
+               "--sign", identity, str(app)]
+    else:
+        cmd = ["codesign", "--force", "--sign", "-", str(app)]
+    return _run(cmd).returncode == 0
+
+
+def _verify_signature(app: Path, identity: str | None) -> list[str]:
+    """Return a list of signature problems (empty = OK)."""
+    problems = []
+    proc = _run(["codesign", "--verify", "--deep", "--strict",
+                 "--verbose=2", str(app)])
+    if proc.returncode != 0:
+        problems.append(f"{app}: codesign --verify failed")
+
+    if identity:
+        for target in (app, app / "Contents" / "MacOS" / "imagelayout-cli"):
+            disp = _run(["codesign", "--display", "--verbose=4", str(target)])
+            out = disp.stdout + disp.stderr
+            if disp.returncode != 0:
+                problems.append(f"{target}: codesign --display failed")
+                continue
+            if "Authority=Developer ID Application" not in out:
+                problems.append(f"{target}: not signed with a Developer ID Application certificate")
+            team = next((l for l in out.splitlines()
+                         if l.startswith("TeamIdentifier=")), "")
+            if not team or team == "TeamIdentifier=not set":
+                problems.append(f"{target}: TeamIdentifier not set")
+            flags = next((l for l in out.splitlines()
+                          if l.startswith("CodeDirectory v=")), "")
+            if "(runtime)" not in flags:
+                problems.append(f"{target}: hardened runtime flag missing")
+
+        contents = app / "Contents"
+        for dirpath, dirnames, filenames in os.walk(contents, followlinks=False):
+            for name in filenames:
+                p = Path(dirpath) / name
+                if p.is_symlink() or not _is_macho(p):
+                    continue
+                disp = _run(["codesign", "--display", "--verbose=2", str(p)])
+                out = disp.stdout + disp.stderr
+                if disp.returncode != 0:
+                    problems.append(f"{p.relative_to(app)}: unsigned Mach-O")
+                elif "Signature=adhoc" in out:
+                    problems.append(f"{p.relative_to(app)}: ad-hoc signed Mach-O")
+    return problems
+
+
+def _notarize(app: Path, profile: str, work_dir: Path) -> bool:
+    """Submit the app to Apple notarization, staple the ticket, verify with spctl."""
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True)
+    zip_path = work_dir / "ImageLayoutManager-notarize.zip"
+    if _run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
+             str(app), str(zip_path)]).returncode != 0:
+        return False
+
+    proc = _run(["xcrun", "notarytool", "submit", str(zip_path),
+                 "--keychain-profile", profile, "--wait",
+                 "--output-format", "json"])
+    if proc.returncode != 0:
+        return False
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        print(f"Could not parse notarytool output:\n{proc.stdout}")
+        return False
+    submission_id = result.get("id")
+    status = result.get("status")
+
+    if submission_id:
+        log_path = work_dir / "notary-log.json"
+        if _run(["xcrun", "notarytool", "log", submission_id,
+                 "--keychain-profile", profile,
+                 str(log_path)]).returncode == 0:
+            print(f"Notary log saved: {log_path}")
+
+    if status != "Accepted":
+        print(f"Notarization failed: status={status!r}")
+        return False
+
+    if _run(["xcrun", "stapler", "staple", str(app)]).returncode != 0:
+        return False
+    if _run(["xcrun", "stapler", "validate", str(app)]).returncode != 0:
+        return False
+    assess = _run(["spctl", "--assess", "--type", "execute",
+                   "--verbose=4", str(app)])
+    out = assess.stdout + assess.stderr
+    if assess.returncode != 0 or "accepted" not in out \
+            or "Notarized Developer ID" not in out:
+        print(f"Gatekeeper assessment failed:\n{out}")
+        return False
+    return True
+
+
+def _find_identity(identity: str) -> bool:
+    proc = _run(["security", "find-identity", "-v", "-p", "codesigning"])
+    return proc.returncode == 0 and identity in proc.stdout
+
+
+def main(argv=None) -> int:
     """Build a single-file macOS application bundle using PyInstaller.
 
     Usage:
-        python build_onefile_macos.py
+        python build_onefile_macos.py [--codesign-identity NAME]
+                                      [--bundle-id ID] [--notary-profile NAME]
 
     Notes:
         - Ensure you have PyInstaller installed: pip install pyinstaller
@@ -71,14 +208,52 @@ def main() -> int:
           first executable as CFBundleExecutable).
         - On macOS, --windowed produces a .app bundle; --onefile wraps it
           into a single self-extracting binary alongside the .app.
-        - To code-sign the result, run:
-              codesign --deep --force --sign "-" dist/ImageLayoutManager.app
+        - To code-sign, pass ``--codesign-identity "Developer ID
+          Application: …"`` (or set MACOS_CODESIGN_IDENTITY); the identity
+          is handed to PyInstaller so all nested binaries get hardened
+          runtime + timestamp, and the outer bundle is re-sealed after
+          the Info.plist/license edits. ``--bundle-id`` (or
+          MACOS_BUNDLE_ID) sets CFBundleIdentifier. With a
+          ``notarytool`` keychain profile via ``--notary-profile`` (or
+          MACOS_NOTARY_PROFILE) the app is also notarized, stapled and
+          zipped into ``dist/``. Without an identity the bundle is
+          ad-hoc re-signed (local use only).
     """
 
     if sys.platform != "darwin":
         print("This script is intended for macOS only.")
         print(f"Current platform: {sys.platform}")
         return 1
+
+    parser = argparse.ArgumentParser(
+        description="Build the macOS .app bundle for ImageLayoutManager.")
+    parser.add_argument("--codesign-identity",
+                        default=os.environ.get("MACOS_CODESIGN_IDENTITY"),
+                        help="Signing identity (e.g. 'Developer ID Application: "
+                             "Name (TEAMID)' or its SHA-1); default ad-hoc.")
+    parser.add_argument("--bundle-id",
+                        default=os.environ.get("MACOS_BUNDLE_ID")
+                        or "com.zw87652015.imagelayoutmanager",
+                        help="CFBundleIdentifier for the .app bundle.")
+    parser.add_argument("--notary-profile",
+                        default=os.environ.get("MACOS_NOTARY_PROFILE"),
+                        help="notarytool keychain profile used to notarize "
+                             "the signed app.")
+    args = parser.parse_args(argv)
+
+    identity = args.codesign_identity or None
+    if args.notary_profile and not identity:
+        print("Error: --notary-profile requires a code-signing identity "
+              "(--codesign-identity or MACOS_CODESIGN_IDENTITY).")
+        return 1
+
+    if identity:
+        if not _find_identity(identity):
+            print(f"Error: signing identity not found in the keychain: {identity}")
+            print("Available identities:")
+            _run(["security", "find-identity", "-v", "-p", "codesigning"])
+            return 1
+        os.environ["PYINSTALLER_STRICT_BUNDLE_CODESIGN_ERROR"] = "1"
 
     try:
         from PyInstaller.__main__ import run as pyinstaller_run
@@ -189,6 +364,7 @@ gui_exe = EXE(
     target_arch={arch!r},
     icon={icns_arg},
     upx=False,
+    codesign_identity={identity!r},
 )
 cli_exe = EXE(
     pyz_cli,
@@ -198,6 +374,7 @@ cli_exe = EXE(
     exclude_binaries=True,
     target_arch={arch!r},
     upx=False,
+    codesign_identity={identity!r},
 )
 
 coll = COLLECT(
@@ -218,6 +395,7 @@ app = BUNDLE(
     coll,
     name='ImageLayoutManager.app',
     icon={icns_arg},
+    bundle_identifier={args.bundle_id!r},
     info_plist={{'LSBackgroundOnly': False, 'NSHighResolutionCapable': True}},
 )
 """, encoding="utf-8")
@@ -322,10 +500,61 @@ app = BUNDLE(
             print(f"  {plist_path}")
             return 2
 
+        # The plist/license edits above invalidated the signature PyInstaller
+        # applied, so re-seal the outer bundle (nested code stays signed).
+        if not _sign_app(dist_app, identity):
+            print("Failed to sign the app bundle.")
+            return 2
+
+        problems = _verify_signature(dist_app, identity)
+        if problems:
+            print("Signature verification found problems:")
+            for p in problems:
+                print(f"  - {p}")
+            return 2
+
         print(f"\nBuild OK: {dist_app}")
         print(f"Bundled CLI: {cli_bin}")
-        print("To ad-hoc sign (required to run on macOS 10.15+):")
-        print(f'  codesign --deep --force --sign "-" "{dist_app}"')
+
+        if args.notary_profile:
+            notary_dir = project_root / "build" / "notarize"
+            if not _notarize(dist_app, args.notary_profile, notary_dir):
+                return 2
+            problems = _verify_signature(dist_app, identity)
+            if problems:
+                print("Signature verification found problems after stapling:")
+                for p in problems:
+                    print(f"  - {p}")
+                return 2
+            zip_name = f"ImageLayoutManager_v{app_version}_macOS_{arch}.zip"
+            release_zip = project_root / "dist" / zip_name
+            if release_zip.exists():
+                release_zip.unlink()
+            if _run(["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent",
+                     str(dist_app), str(release_zip)]).returncode != 0:
+                return 2
+            digest = hashlib.sha256(release_zip.read_bytes()).hexdigest()
+            print(f"Release zip: {release_zip}")
+            print(f"SHA-256: {digest}")
+            return 0
+
+        if identity:
+            print(f"\nSigned with: {identity}")
+            print("The app is signed but NOT notarized — it still needs "
+                  "notarization before distribution.")
+            print("Create a notarytool keychain profile once:")
+            print('  xcrun notarytool store-credentials "ILM-notary" '
+                  "--apple-id <you@example.com> --team-id BHG2P58XCR")
+            print("Then rebuild with:")
+            print(f"  {Path(sys.argv[0]).name} --codesign-identity "
+                  f'"{identity}" --notary-profile ILM-notary')
+        else:
+            print("\nAd-hoc signed only — for local use, NOT for distribution.")
+            print("To sign with a Developer ID certificate:")
+            print(f'  {Path(sys.argv[0]).name} --codesign-identity '
+                  '"Developer ID Application: <Name> (<TEAMID>)"')
+            print("Add --notary-profile <profile> to also notarize "
+                  "(requires `xcrun notarytool store-credentials`).")
         return 0
 
     if dist_bin.exists():
