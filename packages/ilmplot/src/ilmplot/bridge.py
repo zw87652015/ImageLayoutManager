@@ -207,6 +207,7 @@ class _Converter:
         self._base_family = 'DejaVu Sans'
         self._base_size = 10.0
         self._line_yerr = {}          # Line2D -> (kind, yerr tuple)
+        self._line_label = {}         # id(Line2D) -> container label
         self._owned_collections = set()  # errorbar LineCollections
         self._bar_yerr = {}              # id(BarContainer) -> (lo, hi)
         self._bar_containers = []
@@ -391,6 +392,10 @@ class _Converter:
             else:
                 self._bar_yerr[id(owner)] = (minus, plus)
         if owner is None and data_line is not None:
+            # The label lives on the container — the data Line2D
+            # carries '_nolegend_'.
+            self._line_label[id(data_line)] = \
+                container.get_label() or ''
             lc0 = barcols[0] if barcols else None
             if lc0 is not None:
                 try:
@@ -719,6 +724,9 @@ class _Converter:
                 raise _BridgeError(
                     "x and y must be non-empty arrays of equal length")
         label = line.get_label() or ''
+        if not label or label.startswith('_'):
+            # e.g. errorbar data lines: the container owns the label.
+            label = self._line_label.get(id(line), '') or ''
         if label.startswith('_'):
             label = ''
         s = LineSeries(

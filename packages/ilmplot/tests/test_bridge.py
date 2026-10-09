@@ -131,6 +131,87 @@ class ConvertTests(unittest.TestCase):
         self.assertTrue(any('xerr' in r for r in res.reasons))
         plt.close(fig)
 
+    def _labels_round_trip(self, fig, expected):
+        """Convert → native doc, save, re-parse; labels must match."""
+        res = bridge.convert(fig)
+        self.assertEqual(res.reasons, [])
+        doc = res.document
+        self.assertIsNotNone(doc)
+        self.assertTrue(doc.legend)
+        self.assertEqual([s.label for s in doc.series], expected)
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, 'e.ilmplot.svg')
+            out = bridge.savefig(fig, p)
+            self.assertTrue(out.native)
+            with open(p, 'rb') as fh:
+                doc2 = document_from_svg(fh.read())
+            self.assertEqual([s.label for s in doc2.series],
+                             expected)
+
+    def test_errorbar_label_legend(self):
+        # The label lives on the ErrorbarContainer, not the Line2D.
+        fig, ax = plt.subplots()
+        ax.errorbar([0, 1, 2], [1, 2, 1], yerr=0.2, label='Control')
+        ax.legend()
+        self._labels_round_trip(fig, ['Control'])
+        plt.close(fig)
+
+    def test_errorbar_label_fmt_caps(self):
+        fig, ax = plt.subplots()
+        ax.errorbar([0, 1, 2], [1, 2, 1], yerr=0.2, fmt='o-',
+                    capsize=3, label='Control')
+        ax.legend()
+        res = bridge.convert(fig)
+        self.assertEqual(res.reasons, [])
+        self.assertTrue(any('cap' in n for n in res.notes))
+        self.assertEqual([s.label for s in res.document.series],
+                         ['Control'])
+        plt.close(fig)
+
+    def test_two_errorbars_labels(self):
+        fig, ax = plt.subplots()
+        ax.errorbar([0, 1], [1, 2], yerr=0.1, label='A')
+        ax.errorbar([0, 1], [2, 3], yerr=0.1, label='B')
+        ax.legend()
+        self._labels_round_trip(fig, ['A', 'B'])
+        plt.close(fig)
+
+    def test_plot_and_errorbar_labels(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1, 2], [1, 2, 1], label='Fit')
+        ax.errorbar([0, 1], [0.5, 1.5], yerr=0.1, fmt='o',
+                    label='Data')
+        ax.legend()
+        self._labels_round_trip(fig, ['Fit', 'Data'])
+        plt.close(fig)
+
+    def test_plot_and_errorbar_same_data(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1, 2], [1, 2, 1], label='mean')
+        ax.errorbar([0, 1, 2], [1, 2, 1], yerr=0.2, label='err')
+        ax.legend()
+        self._labels_round_trip(fig, ['mean', 'err'])
+        plt.close(fig)
+
+    def test_errorbar_no_legend_still_native(self):
+        fig, ax = plt.subplots()
+        ax.errorbar([0, 1, 2], [1, 2, 1], yerr=0.2, label='Control')
+        res = bridge.convert(fig)
+        self.assertEqual(res.reasons, [])
+        self.assertEqual([s.label for s in res.document.series],
+                         ['Control'])
+        self.assertFalse(res.document.legend)
+        plt.close(fig)
+
+    def test_errorbar_private_label_ignored(self):
+        fig, ax = plt.subplots()
+        ax.plot([0, 1], [0, 1], label='L')
+        ax.errorbar([0, 1], [0.5, 1.5], yerr=0.1,
+                    label='_nolegend_')
+        ax.legend()
+        self._labels_round_trip(fig, ['L', ''])
+        plt.close(fig)
+
     def test_scatter_markers(self):
         for marker in ('o', 's', '^', 'D'):
             fig, ax = plt.subplots()
