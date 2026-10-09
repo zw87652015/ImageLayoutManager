@@ -1,18 +1,37 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ilmplot"
 version = "0.1.0"
-description = "Qt-free core for ILM's editable *.ilmplot.svg plot documents"
+description = "Save matplotlib figures as editable, reflowable *.ilmplot.svg documents for ILM"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{name = "Luojia Jiang"}]
+keywords = ["matplotlib", "svg", "figure", "plot", "publication", "ilm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Matplotlib",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
 dependencies = [
     "matplotlib>=3.7",
     "numpy>=1.23",
 ]
+
+[project.urls]
+Homepage = "https://github.com/zw87652015/ImageLayoutManager"
+Repository = "https://github.com/zw87652015/ImageLayoutManager"
+Issues = "https://github.com/zw87652015/ImageLayoutManager/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -41,3 +41,6 @@ _smoke_gui_out.txt
 !/test_plot_editor_blank.py
 !/test_figpack_legacy_paths.py
 /tm/
+/packages/ilmplot/build/
+/packages/ilmplot/dist/
+*.egg-info/

@@ -11,11 +11,11 @@ only scale as pictures.
 
 ## Install
 
-Not on PyPI yet — install from the repo path:
-
 ```sh
-pip install packages/ilmplot
+pip install ilmplot
 ```
+
+From a source checkout: `pip install packages/ilmplot`.
 
 Requires Python ≥ 3.10, matplotlib ≥ 3.7, numpy ≥ 1.23.
 
