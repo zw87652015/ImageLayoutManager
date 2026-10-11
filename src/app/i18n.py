@@ -1287,12 +1287,50 @@ _T: dict[str, dict[str, str]] = {
     "status_paste_shapes_invalid": {"en": "Clipboard shapes could not be read", "zh": "无法读取剪贴板中的形状"},
     "status_paste_draw_mode_shapes_only": {"en": "Only shapes can be pasted in Draw mode", "zh": "绘制模式下只能粘贴形状"},
     "lbl_sides":             {"en": "Sides",          "zh": "边数"},
+    "pdf_opts_title":        {"en": "PDF Image Quality", "zh": "PDF 图像质量"},
+    "pdf_opts_intro":        {"en": "Choose how raster images are stored in the PDF. Vector content is not affected.",
+                              "zh": "选择 PDF 中栅格图像的存储方式。矢量内容不受影响。"},
+    "pdf_opts_lossless":     {"en": "Lossless — original pixels", "zh": "无损 — 原始像素"},
+    "pdf_opts_lossless_hint": {"en": "Largest files. JPEG sources are embedded byte-for-byte; other images are stored losslessly.",
+                               "zh": "文件最大。JPEG 源文件逐字节原样嵌入；其他图像无损存储。"},
+    "pdf_opts_lossy":        {"en": "Compressed — JPEG at adjustable quality", "zh": "压缩 — 可调质量的 JPEG"},
+    "pdf_opts_lossy_hint":   {"en": "Much smaller files. Pixels are never exact, and 100% is still lossy.",
+                              "zh": "文件明显更小。像素不再完全一致，即使 100% 仍为有损压缩。"},
+    "pdf_opts_quality":      {"en": "JPEG quality", "zh": "JPEG 质量"},
+    "pdf_export_warnings":   {"en": "Exported with warnings:\n{warnings}", "zh": "导出完成，但有以下警告：\n{warnings}"},
+    "pdf_export_verified":   {"en": "Verified lossless: no raster image in this PDF was recompressed.",
+                              "zh": "已验证为无损：此 PDF 中没有任何栅格图像被重新压缩。"},
+    "pdf_issue_pass_skipped": {"en": "PDF image pass skipped: {error}", "zh": "已跳过 PDF 图像处理：{error}"},
+    "pdf_issue_pass_failed": {"en": "PDF image pass failed; kept Qt's images: {error}",
+                              "zh": "PDF 图像处理失败，保留 Qt 生成的图像：{error}"},
+    "pdf_issue_no_match":    {"en": "{size} px raster {source} was not matched to a PDF image; left as Qt wrote it.",
+                              "zh": "{size} 像素的栅格图{source}未能匹配到 PDF 图像，保留 Qt 写入的版本。"},
+    "pdf_issue_still_jpeg":  {"en": "{size} px image at ({x:.1f}, {y:.1f}) mm {owner} is still JPEG-compressed by Qt (not the original source file).{svg_hint}",
+                              "zh": "{size} 像素图像位于（{x:.1f}, {y:.1f}）毫米处{owner}，仍被 Qt 进行了 JPEG 压缩（非原始源文件）。{svg_hint}"},
+    "pdf_issue_still_jpeg_nopos": {"en": "{size} px image (position unknown) is still JPEG-compressed by Qt (not the original source file).{svg_hint}",
+                                   "zh": "{size} 像素图像（位置未知）仍被 Qt 进行了 JPEG 压缩（非原始源文件）。{svg_hint}"},
+    "pdf_issue_svg_raster":  {"en": " This SVG embeds a raster image.", "zh": "该 SVG 内嵌了位图。"},
+    "pdf_issue_audit_failed": {"en": "lossless audit failed: {error}", "zh": "无损检查失败：{error}"},
+    "pdf_owner_src_where":   {"en": "in '{source}' ({where})", "zh": "，来自“{source}”（{where}）"},
+    "pdf_owner_src":         {"en": "in '{source}'", "zh": "，来自“{source}”"},
+    "pdf_owner_where":       {"en": "in {where}", "zh": "，位于{where}"},
+    "pdf_owner_none":        {"en": "(not inside any cell)", "zh": "（不在任何单元格内）"},
+    "pdf_where_cell":        {"en": "row {row}, column {col}", "zh": "第 {row} 行第 {col} 列"},
+    "pdf_where_pip":         {"en": "inset {index} of {cell}", "zh": "插图 {index}（{cell}）"},
+    "pdf_src_named":         {"en": "from '{source}'", "zh": "（来自“{source}”）"},
+    "pdf_src_unknown":       {"en": "of unknown source", "zh": "（来源未知）"},
+    "pdf_issue_more":        {"en": "(+{n} more)", "zh": "（另有 {n} 项）"},
 }
+
+
+def translate(key: str, lang: str) -> str:
+    """Return the translation for *key* in *lang*, falling back to English."""
+    return _T.get(key, {}).get(lang) or _T.get(key, {}).get("en") or key
 
 
 def tr(key: str) -> str:
     """Return the translation for *key* in the current language, falling back to English."""
-    return _T.get(key, {}).get(_lang) or _T.get(key, {}).get("en") or key
+    return translate(key, _lang)
 
 
 def set_language(lang: str) -> None:

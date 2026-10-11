@@ -677,7 +677,12 @@ class ImageExporter:
                 if svg_override_bytes is None:
                     with open(path, 'rb') as source:
                         svg_override_bytes = source.read()
-                renderer = QSvgRenderer(QByteArray(sanitize_svg_bytes(svg_override_bytes)))
+                svg_bytes = sanitize_svg_bytes(svg_override_bytes)
+                log = getattr(painter, '_pdf_raster_log', None)
+                if log is not None:
+                    from src.export.pdf_images import log_svg_images
+                    log_svg_images(log, svg_bytes, os.path.basename(path))
+                renderer = QSvgRenderer(QByteArray(svg_bytes))
                 if renderer.isValid():
                     full_w, full_h = width / (cr - cl), height / (cb - ct)
                     renderer.render(painter, QRectF(-width / 2 - cl * full_w,
@@ -696,6 +701,19 @@ class ImageExporter:
                     raster = load_raster_with_overrides(path, raster_override)
                     data = raster.tobytes('raw', 'RGBA')
                     image = QImage(data, raster.width, raster.height, QImage.Format.Format_RGBA8888)
+                    log = getattr(painter, '_pdf_raster_log', None)
+                    # Qt's PDF engine writes only the source sub-rect of a cropped drawImage.
+                    box = QRectF(cl * raster.width, ct * raster.height,
+                                 (cr - cl) * raster.width, (cb - ct) * raster.height).toRect()
+                    if log is not None and box.width() > 0 and box.height() > 0:
+                        from src.export.pdf_images import is_passthrough_jpeg
+                        box_px = (box.x(), box.y(), box.x() + box.width(), box.y() + box.height())
+                        whole = box_px == (0, 0, raster.width, raster.height)
+                        drawn = (lambda img: img) if whole else (lambda img: img.crop(box_px))
+                        jpeg_path = path if whole and not raster_override and is_passthrough_jpeg(path) else None
+                        log.record(image, drawn(raster),
+                                   lambda: drawn(load_raster_with_overrides(path, raster_override)), jpeg_path,
+                                   source=os.path.basename(path))
                 source = QRectF(cl * image.width(), ct * image.height(),
                                 (cr - cl) * image.width(), (cb - ct) * image.height())
                 if getattr(painter, '_svg_full_source', False):

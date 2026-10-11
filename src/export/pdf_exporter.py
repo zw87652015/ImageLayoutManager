@@ -4,16 +4,72 @@ from PyQt6.QtWidgets import QGraphicsTextItem, QStyleOptionGraphicsItem
 from PyQt6.QtSvg import QSvgRenderer
 from PIL import Image
 import os
+from typing import Optional
 from src.model.data_model import Project, Cell
 from src.model.enums import FitMode
 from src.model.layout_engine import LayoutEngine
 from src.export.image_exporter import ImageExporter
 from src.utils.plot_alignment import resolve_image_placements, content_rect as cell_content_rect, clipped_source
+from src.export.pdf_images import PdfRasterLog, PdfExportReport, is_passthrough_jpeg, validate_image_settings
 from dataclasses import replace
+
+_FULL_CROP = (0.0, 0.0, 1.0, 1.0)
+
+
+def _load_rgba(path: str) -> Image.Image:
+    with Image.open(path) as img:
+        return img.convert('RGBA')
+
+
+def _pdf_owners(project: Project, layout_result) -> list:
+    """(rect_mm, owner) for each leaf cell's content rect and each PiP inset, in project page mm."""
+    owners = []
+    for cell in project.get_all_leaf_cells():
+        if cell.id not in layout_result.cell_rects:
+            continue
+        cx, cy, cw, ch = cell_content_rect(cell, layout_result.cell_rects[cell.id], project.layout_mode)
+        cell_owner = {"kind": "cell", "row": cell.row_index + 1, "col": cell.col_index + 1,
+                      "source": os.path.basename(cell.image_path) if cell.image_path else None,
+                      "path": cell.image_path}
+        owners.append(((cx, cy, cw, ch), cell_owner))
+        for index, pip in enumerate(getattr(cell, 'pip_items', None) or [], 1):
+            path = cell.image_path if pip.pip_type == 'zoom' else pip.image_path
+            owners.append(((cx + pip.x * cw, cy + pip.y * ch, pip.w * cw, pip.h * ch),
+                           {"kind": "pip", "index": index, "cell": cell_owner,
+                            "source": os.path.basename(path) if path else None, "path": path}))
+    return owners
+
+
+def _qimage_to_pil_rgba(img: QImage) -> Image.Image:
+    img = img.convertToFormat(QImage.Format.Format_RGBA8888)
+    bits = img.constBits()
+    bits.setsize(img.sizeInBytes())
+    return Image.frombuffer("RGBA", (img.width(), img.height()), bytes(bits), "raw", "RGBA",
+                            img.bytesPerLine(), 1)
+
 
 class PdfExporter:
     @staticmethod
-    def export(project: Project, output_path: str):
+    def _crop_source(img: Image.Image, crop: tuple) -> Image.Image:
+        cl, ct, cr, cb = crop
+        fw, fh = img.width, img.height
+        cx0, cy0 = int(cl * fw), int(ct * fh)
+        cx1, cy1 = max(cx0 + 1, int(cr * fw)), max(cy0 + 1, int(cb * fh))
+        if cx0 != 0 or cy0 != 0 or cx1 != fw or cy1 != fh:
+            img = img.crop((cx0, cy0, cx1, cy1))
+        return img
+
+    @staticmethod
+    def export(project: Project, output_path: str, image_mode: str = "lossless",
+               jpeg_quality: int = 90) -> PdfExportReport:
+        """Render ``project`` to a PDF.
+
+        ``image_mode`` ("lossless" or "lossy") and ``jpeg_quality`` (1-100, used by
+        "lossy") control how Qt's raster images are re-encoded after drawing; see
+        ``pdf_images``. ``report.lossless_verified`` is set only for "lossless" when the
+        audit finds no JPEG/JPX image left besides byte-identical source passthroughs.
+        """
+        validate_image_settings(image_mode, jpeg_quality)
         layout_result = LayoutEngine.calculate_layout(project)
         layout_result._image_placements = resolve_image_placements(project, layout_result, strict=True)
         writer = QPdfWriter(output_path)
@@ -74,6 +130,8 @@ class PdfExporter:
         math_stamps = []
 
         painter = QPainter(writer)
+        raster_log = PdfRasterLog()
+        painter._pdf_raster_log = raster_log
         
         try:
             # Coordinate Conversion Factor: mm -> dots
@@ -154,6 +212,10 @@ class PdfExporter:
         finally:
             painter.end()
 
+        report = raster_log.apply(output_path, image_mode, jpeg_quality,
+                                  owners=_pdf_owners(project, layout_result),
+                                  offset_mm=(region_dx_mm, region_dy_mm))
+
         # Pass 2: stamp PDF/EPS source cells as true vector XObjects.
         # Shift source cell mm coords so they match the (possibly-cropped) PDF page origin.
         if pdf_source_cells:
@@ -180,6 +242,8 @@ class PdfExporter:
             else:
                 shifted_math = math_stamps
             PdfExporter._stamp_math(output_path, shifted_math, page_w_mm, page_h_mm)
+
+        return report
 
     @staticmethod
     def _stamp_math(output_path: str, math_stamps: list, page_w_mm: float, page_h_mm: float):
@@ -425,6 +489,10 @@ class PdfExporter:
             else:
                 with open(path, "rb") as _f:
                     svg_bytes = sanitize_svg_bytes(_f.read())
+            log = getattr(painter, '_pdf_raster_log', None)
+            if log is not None:
+                from src.export.pdf_images import log_svg_images
+                log_svg_images(log, svg_bytes, os.path.basename(path))
             renderer = QSvgRenderer(QByteArray(svg_bytes))
             if not renderer.isValid():
                 print(f"Invalid SVG file: {path}")
@@ -486,14 +554,15 @@ class PdfExporter:
             with Image.open(path) as img:
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
-                cl, ct, cr, cb = crop
-                fw, fh = img.width, img.height
-                cx0, cy0 = int(cl * fw), int(ct * fh)
-                cx1, cy1 = max(cx0 + 1, int(cr * fw)), max(cy0 + 1, int(cb * fh))
-                if cx0 != 0 or cy0 != 0 or cx1 != fw or cy1 != fh:
-                    img = img.crop((cx0, cy0, cx1, cy1))
+                img = PdfExporter._crop_source(img, crop)
                 data = img.tobytes("raw", "RGBA")
                 qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+                log = getattr(painter, '_pdf_raster_log', None)
+                if log is not None:
+                    log.record(qimage, img,
+                               lambda: PdfExporter._crop_source(_load_rgba(path), crop),
+                               path if crop == _FULL_CROP and is_passthrough_jpeg(path) else None,
+                               source=os.path.basename(path))
                 fit_mode = FitMode(fit_mode_str)
                 iw, ih = qimage.width(), qimage.height()
                 is_sideways = rotation in [90, 270]
@@ -521,17 +590,17 @@ class PdfExporter:
         try:
             from src.utils.raster_text_utils import load_raster_with_overrides
             with load_raster_with_overrides(path, raster_override) as img:
-                cl, ct, cr, cb = crop
-                full_w, full_h = img.width, img.height
-                cx0 = int(cl * full_w)
-                cy0 = int(ct * full_h)
-                cx1 = max(cx0 + 1, int(cr * full_w))
-                cy1 = max(cy0 + 1, int(cb * full_h))
-                if cx0 != 0 or cy0 != 0 or cx1 != full_w or cy1 != full_h:
-                    img = img.crop((cx0, cy0, cx1, cy1))
-
+                img = PdfExporter._crop_source(img, crop)
                 data = img.tobytes("raw", "RGBA")
                 qimage = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+                log = getattr(painter, '_pdf_raster_log', None)
+                if log is not None:
+                    log.record(qimage, img,
+                               lambda: PdfExporter._crop_source(
+                                   load_raster_with_overrides(path, raster_override), crop),
+                               path if crop == _FULL_CROP and not raster_override
+                               and is_passthrough_jpeg(path) else None,
+                               source=os.path.basename(path))
 
                 fit_mode = FitMode(fit_mode_str)
                 img_w = qimage.width()
@@ -569,23 +638,16 @@ class PdfExporter:
             print(f"Failed to export image {path}: {e}")
 
     @staticmethod
-    def _draw_pdf(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
-                  crop: tuple = (0.0, 0.0, 1.0, 1.0)):
-        """Draw PDF/EPS first page as high-res raster via PyMuPDF.
+    def _rasterize_pdf(path: str, rect: QRectF, fit_mode_str: str, crop: tuple) -> Optional[Image.Image]:
+        """First page of a PDF/EPS as a cropped RGBA image sized for ``rect``.
 
-        True vector passthrough into a QPdfWriter stream is not supported by
-        Qt/PyMuPDF APIs. Instead we rasterise at a zoom that exactly matches
-        the output rect's pixel size, so the embedded raster is at the full
-        export DPI (e.g. 600 DPI) — indistinguishable from vector in print.
+        Shared by ``_draw_pdf`` and its PDF-image log loader so both see the same pixels.
         """
-        try:
-            import fitz  # PyMuPDF
+        import fitz  # PyMuPDF
 
-            doc = fitz.open(path)
+        with fitz.open(path) as doc:
             if doc.page_count == 0:
-                doc.close()
-                return
-
+                return None
             page = doc[0]
             # PDF natural size is in points (72 dpi). Zoom to match rect in dots.
             page_rect = page.rect  # in points
@@ -597,20 +659,36 @@ class PdfExporter:
             zoom = max(zoom_x, zoom_y) if FitMode(fit_mode_str) == FitMode.COVER \
                 else min(zoom_x, zoom_y)
             zoom = max(zoom, 1.0)  # never render below 1× (72 dpi)
-            matrix = fitz.Matrix(zoom, zoom)
-            pix = page.get_pixmap(matrix=matrix, alpha=True)
-            doc.close()
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=True)
 
-            qimage = QImage(pix.samples, pix.width, pix.height, pix.stride,
+        img = Image.frombuffer("RGBA", (pix.width, pix.height), pix.samples, "raw", "RGBA", pix.stride, 1)
+        iw, ih = img.size
+        cx0, cy0 = int(cl * iw), int(ct * ih)
+        cx1, cy1 = max(cx0 + 1, int(cr * iw)), max(cy0 + 1, int(cb * ih))
+        if cx0 != 0 or cy0 != 0 or cx1 != iw or cy1 != ih:
+            img = img.crop((cx0, cy0, cx1, cy1))
+        return img
+
+    @staticmethod
+    def _draw_pdf(painter: QPainter, path: str, rect: QRectF, fit_mode_str: str, rotation: int = 0,
+                  crop: tuple = (0.0, 0.0, 1.0, 1.0)):
+        """Draw PDF/EPS first page as high-res raster via PyMuPDF.
+
+        True vector passthrough into a QPdfWriter stream is not supported by
+        Qt/PyMuPDF APIs. Instead we rasterise at a zoom that exactly matches
+        the output rect's pixel size, so the embedded raster is at the full
+        export DPI (e.g. 600 DPI) — indistinguishable from vector in print.
+        """
+        try:
+            img = PdfExporter._rasterize_pdf(path, rect, fit_mode_str, crop)
+            if img is None:
+                return
+            qimage = QImage(img.tobytes("raw", "RGBA"), img.width, img.height,
                             QImage.Format.Format_RGBA8888).copy()
-
-            # Apply crop
-            cl, ct, cr, cb = crop
-            iw, ih = qimage.width(), qimage.height()
-            cx0, cy0 = int(cl * iw), int(ct * ih)
-            cx1, cy1 = max(cx0 + 1, int(cr * iw)), max(cy0 + 1, int(cb * ih))
-            if cx0 != 0 or cy0 != 0 or cx1 != iw or cy1 != ih:
-                qimage = qimage.copy(cx0, cy0, cx1 - cx0, cy1 - cy0)
+            log = getattr(painter, '_pdf_raster_log', None)
+            if log is not None:
+                log.record(qimage, img, lambda: PdfExporter._rasterize_pdf(path, rect, fit_mode_str, crop),
+                           source=os.path.basename(path))
 
             fit_mode = FitMode(fit_mode_str)
             img_w, img_h = qimage.width(), qimage.height()
@@ -734,6 +812,10 @@ class PdfExporter:
                     painter.rotate(rotation_deg)
                     painter.translate(-tw_mm * scale / 2.0, -th_mm * scale / 2.0)
                 painter.drawImage(target, img)
+                log = getattr(painter, '_pdf_raster_log', None)
+                if log is not None:
+                    pil = _qimage_to_pil_rgba(img)
+                    log.record(img, pil, pil.copy)
                 painter.restore()
                 return
 

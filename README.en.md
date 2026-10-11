@@ -117,6 +117,9 @@ A headless CLI tool (`imagelayout-cli.exe`) is included with the Windows install
 # Pixel-perfect PDF render at the project's saved DPI
 imagelayout-cli.exe render figure_4.figpack -f pdf -o figure_4.pdf
 
+# Smaller PDF: re-encode raster images as JPEG at quality 85 (default is lossless)
+imagelayout-cli.exe render figure_4.figpack -f pdf --pdf-images lossy --pdf-quality 85 -o figure_4_small.pdf
+
 # Override DPI for a fast preview PNG
 imagelayout-cli.exe render figure_4.figlayout -f png --dpi 150
 

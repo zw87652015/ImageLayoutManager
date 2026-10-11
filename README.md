@@ -115,6 +115,9 @@ Windows 安装包中包含无头 CLI 工具（`imagelayout-cli.exe`），用于�
 # 按项目保存的 DPI 进行像素级精确的 PDF 渲染
 imagelayout-cli.exe render figure_4.figpack -f pdf -o figure_4.pdf
 
+# 体积更小的 PDF：栅格图以 JPEG 质量 85 重新编码（默认无损）
+imagelayout-cli.exe render figure_4.figpack -f pdf --pdf-images lossy --pdf-quality 85 -o figure_4_small.pdf
+
 # 覆盖 DPI 以生成快速预览 PNG
 imagelayout-cli.exe render figure_4.figlayout -f png --dpi 150
 

@@ -170,10 +170,12 @@ def _cmd_render(args: argparse.Namespace) -> int:
         debug_buf: "io.StringIO" = io.StringIO()
         capture = contextlib.redirect_stdout(debug_buf) if not args.verbose \
             else contextlib.nullcontext()
+        report = None
         with capture:
             if fmt == "pdf":
                 from src.export.pdf_exporter import PdfExporter
-                PdfExporter.export(project, out)
+                report = PdfExporter.export(project, out, image_mode=args.pdf_images,
+                                            jpeg_quality=args.pdf_quality)
             else:
                 # Normalise to the format string the exporter expects.
                 fmt_kw = {"tif": "TIFF", "tiff": "TIFF",
@@ -189,6 +191,11 @@ def _cmd_render(args: argparse.Namespace) -> int:
 
         if args.verbose and debug_buf.getvalue():
             sys.stderr.write(debug_buf.getvalue())
+        if report is not None:
+            for warning in report.warnings:
+                sys.stderr.write(f"warning: {warning}\n")
+            if args.verbose and report.lossless_verified:
+                sys.stderr.write("lossless: verified\n")
 
         sys.stdout.write(f"{out}\n")
         sys.stdout.flush()
@@ -594,6 +601,16 @@ def _cmd_mcp(args: argparse.Namespace) -> int:
 # argparse wiring
 # ---------------------------------------------------------------------------
 
+def _pdf_quality(value: str) -> int:
+    try:
+        quality = int(value)
+    except ValueError:
+        quality = 0
+    if not 1 <= quality <= 100:
+        raise argparse.ArgumentTypeError(f"must be an integer 1..100 (got {value!r})")
+    return quality
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="imagelayout-cli",
@@ -621,6 +638,11 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--icc-intent", type=int, default=1,
                    help="(TIFF+CMYK) PIL.ImageCms intent: 0=Perc, 1=RelCol, "
                         "2=Sat, 3=AbsCol (default 1).")
+    r.add_argument("--pdf-images", choices=("lossless", "lossy"), default="lossless",
+                   help="(PDF only) lossless: original pixels, JPEG sources embedded "
+                        "unchanged; lossy: re-encode rasters as JPEG (default lossless).")
+    r.add_argument("--pdf-quality", type=_pdf_quality, default=90, metavar="N",
+                   help="(PDF+lossy) JPEG quality 1-100 (default 90).")
     r.add_argument("-v", "--verbose", action="store_true",
                    help="Replay exporter DEBUG lines + Qt warnings to stderr.")
     r.set_defaults(func=_cmd_render)

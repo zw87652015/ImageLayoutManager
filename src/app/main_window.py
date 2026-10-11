@@ -41,7 +41,9 @@ from src.app.about_dialog import AboutDialog, StartupUpdateChecker
 from src.app.help_dialog import HelpDialog
 from src.model.enums import PageSizePreset
 from src.export.pdf_exporter import PdfExporter
+from src.export.pdf_images import coerce_image_settings, format_issue
 from src.export.image_exporter import ImageExporter
+from src.app.pdf_export_dialog import PdfExportOptionsDialog
 from src.utils.auto_label import AutoLabel
 from src.app.commands import (
     PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, MultiSwapCellsCommand,
@@ -5731,11 +5733,30 @@ class MainWindow(QMainWindow):
     def _on_export_pdf(self):
         if not self._check_plot_alignment_for_export():
             return
+        mode, quality = coerce_image_settings(self._settings.value("pdf_image_mode", "lossless"),
+                                              self._settings.value("pdf_jpeg_quality", 90))
+        options = PdfExportOptionsDialog(self, mode, quality)
+        if options.exec() != QDialog.DialogCode.Accepted:
+            return
+        mode, quality = options.selected_mode(), options.selected_quality()
+        self._settings.setValue("pdf_image_mode", mode)
+        self._settings.setValue("pdf_jpeg_quality", quality)
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_pdf"), default_dir, "PDF Files (*.pdf)")
         if path:
-            PdfExporter.export(self.project, path)
-            QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
+            report = PdfExporter.export(self.project, path, image_mode=mode, jpeg_quality=quality)
+            message = tr("msg_exported_to").format(path=path)
+            lines = [format_issue(issue, current_language()) for issue in report.issues]
+            if lines:
+                shown = lines[:8] + ([tr("pdf_issue_more").format(n=len(lines) - 8)] if len(lines) > 8 else [])
+                message += "\n\n" + tr("pdf_export_warnings").format(warnings="\n".join("• " + line for line in shown))
+            if report.lossless_verified:
+                message += "\n\n" + tr("pdf_export_verified")
+            box = QMessageBox(QMessageBox.Icon.Information, tr("msg_export_done_title"), message,
+                              QMessageBox.StandardButton.Ok, self)
+            if lines:
+                box.setDetailedText("\n".join(lines))
+            box.exec()
 
     def _on_export_tiff(self):
         if not self._check_plot_alignment_for_export():
