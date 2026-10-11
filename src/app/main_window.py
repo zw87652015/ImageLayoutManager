@@ -1329,6 +1329,7 @@ class MainWindow(QMainWindow):
         """Connect once-only signals: inspector, layers panel."""
         self.inspector.cell_property_changed.connect(self._on_cell_property_changed)
         self.inspector.match_text_size_requested.connect(self._on_inspector_match_text_size)
+        self.inspector.plot_text_size_edited.connect(self._on_plot_text_size_edited)
         self.inspector.text_property_changed.connect(self._on_text_property_changed)
         self.inspector.row_property_changed.connect(self._on_row_property_changed)
         self.inspector.project_property_changed.connect(self._on_project_property_changed)
@@ -5959,6 +5960,21 @@ class MainWindow(QMainWindow):
         cell = self._leaf_cell_for_id(cell_id)
         if cell is not None and cell.image_path:
             self._on_open_svg_text_inspector(cell.image_path, cell)
+
+    def _on_plot_text_size_edited(self, cell_id: str, role: str, keys: list, new_pt: float):
+        """In-situ edit of a native plot's role size: sets the matching text group."""
+        cell = self._leaf_cell_for_id(cell_id)
+        if cell is None or not cell.image_path:
+            return
+        from src.utils.svg_text_utils import apply_plot_text_size, format_text_size
+
+        def make_name(pt):
+            return tr("svgtxt_role_group_name").format(
+                role=tr(f"plot_text_role_{role}"), pt=format_text_size(pt))
+
+        apply_plot_text_size(self.project, cell.image_path, keys, new_pt, make_name)
+        self._on_svg_text_groups_changed()
+        self._on_selection_changed()
 
     def _on_open_svg_text_inspector(self, svg_path: str, cell=None):
         """Open a stand-alone SVG text inspector for the given SVG file."""

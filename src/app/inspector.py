@@ -4,8 +4,8 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QToolButton, QButtonGroup, QCheckBox,
     QScrollArea, QColorDialog, QFrame, QSizePolicy
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF, QVariantAnimation
-from PyQt6.QtGui import QColor, QPainter, QPalette, QFont, QFontMetrics, QPen
+from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF, QVariantAnimation, QLocale
+from PyQt6.QtGui import QColor, QPainter, QPalette, QFont, QFontMetrics, QPen, QDoubleValidator
 import os
 from typing import Optional
 from src.app.motion import start_animation, MotionTween
@@ -746,10 +746,101 @@ class ReflowCard(QFrame):
         painter.end()
 
 
+class _PlotTextSizeEditor(QLineEdit):
+    """Inline size editor: Escape cancels; Enter and focus-out commit via editingFinished."""
+
+    def __init__(self, chip):
+        super().__init__()
+        self._chip = chip
+        validator = QDoubleValidator(1.0, 200.0, 2, self)
+        validator.setLocale(QLocale.c())
+        self.setValidator(validator)
+        self.setFixedWidth(56)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self._chip.cancel_edit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class _PlotTextSizeChip(QWidget):
+    """One plot-text size: plain text, double-click to edit."""
+
+    committed = pyqtSignal(str, list, float)  # (role, element keys, new size_pt)
+
+    def __init__(self, role, size, keys, tooltip):
+        super().__init__()
+        self._role = role
+        self._size = size
+        self._keys = tuple(keys)
+        self._editing = False
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        self._label = QLabel(format_text_size(size))
+        self._label.setObjectName("plotTextSizeValue")
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setMinimumWidth(34)
+        self._label.setStyleSheet(
+            "QLabel#plotTextSizeValue { background: palette(base);"
+            " border: 1px solid palette(mid); border-radius: 3px;"
+            " padding: 0 6px; }"
+            "QLabel#plotTextSizeValue:hover { border-color: palette(highlight); }")
+        self.setCursor(Qt.CursorShape.IBeamCursor)
+        self._editor = _PlotTextSizeEditor(self)
+        self._editor.hide()
+        self._editor.editingFinished.connect(self._commit)
+        row.addWidget(self._label)
+        row.addWidget(self._editor)
+        self.setToolTip(tooltip)
+
+    def mouseDoubleClickEvent(self, event):
+        self._begin_edit()
+        event.accept()
+
+    def _begin_edit(self):
+        if self._editing:
+            return
+        self._editing = True
+        self._label.hide()
+        self._editor.setText(format_text_size(self._size))
+        self._editor.show()
+        self._editor.setFocus()
+        self._editor.selectAll()
+
+    def _end_edit(self):
+        self._editing = False
+        self._editor.hide()
+        self._label.show()
+
+    def cancel_edit(self):
+        if self._editing:
+            self._end_edit()
+
+    def dismiss(self):
+        """Forget any open edit without applying it (used before rebuilding)."""
+        self._editing = False
+
+    def _commit(self):
+        if not self._editing:
+            return
+        self._end_edit()
+        try:
+            value = round(float(self._editor.text().strip()), 2)
+        except ValueError:
+            return
+        if not 1.0 <= value <= 200.0 or value == round(self._size, 2):
+            return
+        self.committed.emit(self._role, list(self._keys), value)
+
+
 class Inspector(QWidget):
     # Signals for property changes
     cell_property_changed = pyqtSignal(dict) # {property: value}
     match_text_size_requested = pyqtSignal(str)  # cell id
+    plot_text_size_edited = pyqtSignal(str, str, list, float)  # (cell id, role, element keys, new size_pt)
     text_property_changed = pyqtSignal(dict) # {property: value}
     row_property_changed = pyqtSignal(dict) # {property: value}
     project_property_changed = pyqtSignal(dict) # {property: value}
@@ -1324,10 +1415,12 @@ class Inspector(QWidget):
         )
         _svg_norm_layout.addRow(self._fl("lbl_svg_normalize_pt"), self.svg_normalize_pt)
 
-        self.reflow_text_label = QLabel()
-        self.reflow_text_label.setWordWrap(True)
-        self.reflow_text_label.hide()
-        _svg_norm_layout.addRow(self.reflow_text_label)
+        self.plot_text_box = QWidget()
+        self._plot_text_layout = QVBoxLayout(self.plot_text_box)
+        self._plot_text_layout.setContentsMargins(0, 0, 0, 0)
+        self._plot_text_layout.setSpacing(2)
+        self.plot_text_box.hide()
+        _svg_norm_layout.addRow(self.plot_text_box)
         self.reflow_text_btn = QPushButton(tr("btn_match_text_size"))
         self.reflow_text_btn.setToolTip(tr("tip_match_text_size"))
         self.reflow_text_btn.clicked.connect(self._on_match_text_size_clicked)
@@ -3668,26 +3761,57 @@ class Inspector(QWidget):
         self._plot_text_cell_id = None
         self._refresh_plot_text()
 
+    def _clear_plot_text_rows(self):
+        layout = self._plot_text_layout
+        while layout.count():
+            widget = layout.takeAt(0).widget()
+            if widget is None:
+                continue
+            for chip in widget.findChildren(_PlotTextSizeChip):
+                chip.dismiss()
+            widget.hide()
+            widget.deleteLater()
+
     def _refresh_plot_text(self):
+        self._clear_plot_text_rows()
         summary = self._plot_text_summary
         if not summary:
-            self.reflow_text_label.hide()
+            self.plot_text_box.hide()
             return
-        sizes_by_role = {}
-        for role, size, _count, _example in summary:
-            sizes_by_role.setdefault(role, []).append(size)
-        lines = [tr("plot_text_sizes_header")]
-        for role, sizes in sizes_by_role.items():
-            lines.append(tr("plot_text_role_line").format(
-                role=tr(f"plot_text_role_{role}"),
-                sizes=' / '.join(format_text_size(s) for s in sizes)))
-        self.reflow_text_label.setText('\n'.join(lines))
-        self.reflow_text_label.setToolTip('\n'.join(
-            tr("plot_text_role_tip_line").format(
-                role=tr(f"plot_text_role_{role}"), pt=format_text_size(size),
-                count=count, example=example)
-            for role, size, count, example in summary))
-        self.reflow_text_label.show()
+        role_entries = {}
+        for entry in summary:
+            role_entries.setdefault(entry[0], []).append(entry)
+        self._plot_text_layout.addWidget(QLabel(tr("plot_text_sizes_header")))
+        for role, entries in role_entries.items():
+            role_name = tr(f"plot_text_role_{role}")
+            tips = [tr("plot_text_role_tip_line").format(
+                        role=role_name, pt=format_text_size(size),
+                        count=count, example=example)
+                    for _role, size, count, example, _keys in entries]
+            role_tip = '\n'.join(tips)
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(3)
+            prefix = QLabel(tr("plot_text_role_prefix").format(role=role_name))
+            prefix.setToolTip(role_tip)
+            line.addWidget(prefix)
+            for index, (_role, size, _count, _example, keys) in enumerate(entries):
+                if index:
+                    line.addWidget(QLabel(" / "))
+                chip = _PlotTextSizeChip(
+                    role, size, keys,
+                    '\n'.join((tr("plot_text_size_edit_tip"), tips[index])))
+                chip.committed.connect(self._on_plot_text_chip_committed)
+                line.addWidget(chip)
+            line.addWidget(QLabel("pt"))
+            line.addStretch(1)
+            row.setToolTip(role_tip)
+            self._plot_text_layout.addWidget(row)
+        self.plot_text_box.show()
+
+    def _on_plot_text_chip_committed(self, role, keys, value):
+        self.plot_text_size_edited.emit(self._plot_text_cell_id or "", role, keys, value)
 
     def _on_match_text_size_clicked(self):
         if self._plot_text_cell_id:

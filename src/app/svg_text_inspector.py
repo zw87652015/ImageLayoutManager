@@ -19,12 +19,12 @@ from PyQt6.QtWidgets import (
     QSplitter, QWidget, QScrollArea, QFrame, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QByteArray
-from PyQt6.QtGui import QPixmap, QPainter, QImage
+from PyQt6.QtGui import QPixmap, QPainter, QImage, QColor, QPen
 from PyQt6.QtSvg import QSvgRenderer
 
 from src.utils.svg_text_utils import (format_text_size, get_svg_text_elements,
-                                      get_svg_override_bytes_for_cell,
-                                      svg_text_rows)
+                                      svg_text_preview_source, svg_text_rows,
+                                      text_preview_rects)
 from src.utils.editable_plot import plot_reflows
 from ilmplot.document import has_plot_metadata
 from src.model.data_model import SvgTextMember
@@ -44,6 +44,8 @@ class SvgTextInspectorWindow(QDialog):
         self.project = project
         self._cell = cell
         self._sizes = {}
+        self._preview_base = None
+        self._preview_rects = {}
 
         self.setWindowTitle(tr("svgtxt_inspector_title"))
         self.setWindowFlags(
@@ -110,6 +112,7 @@ class SvgTextInspectorWindow(QDialog):
         self._elem_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self._elem_list.setMinimumHeight(120)
         self._elem_list.itemSelectionChanged.connect(self._update_size_button)
+        self._elem_list.itemSelectionChanged.connect(self._update_highlight)
         rv.addWidget(self._elem_list, 2)
 
         # Assignment row (below elements): [combo] [Assign] [Remove]
@@ -188,8 +191,19 @@ class SvgTextInspectorWindow(QDialog):
         self._btn_size_group.setEnabled(
             bool(keys) and self._sizes.get(keys[0]) is not None)
 
+    def _svg_file_bytes(self):
+        try:
+            with open(self.svg_path, 'rb') as fh:
+                return fh.read()
+        except OSError:
+            return None
+
     def _refresh_preview(self):
-        processed = get_svg_override_bytes_for_cell(self.project, self._cell) if self._cell else None
+        source = svg_text_preview_source(self.project, self._cell) if self._cell else None
+        if source is not None:
+            key_bytes, positioned, processed = source
+        else:
+            key_bytes, positioned, processed = self._svg_file_bytes(), False, None
 
         if self._cell and getattr(self._cell, 'svg_normalize_text', False):
             pt = getattr(self._cell, 'svg_normalize_text_pt', 8.0)
@@ -200,6 +214,8 @@ class SvgTextInspectorWindow(QDialog):
         renderer = QSvgRenderer(QByteArray(processed)) if processed else QSvgRenderer(self.svg_path)
         if not renderer.isValid():
             self._preview_label.setText(tr("svgtxt_preview_failed"))
+            self._preview_base = None
+            self._preview_rects = {}
             return
         sz = renderer.defaultSize()
         if sz.isEmpty():
@@ -211,8 +227,32 @@ class SvgTextInspectorWindow(QDialog):
         p = QPainter(img)
         renderer.render(p)
         p.end()
-        self._preview_label.setPixmap(QPixmap.fromImage(img))
+        self._preview_base = img
+        self._preview_rects = (text_preview_rects(key_bytes, None, w, h, positioned)
+                               if key_bytes else {})
+        self._update_highlight()
         self._preview_label.resize(w, h)
+
+    def _update_highlight(self):
+        """Repaint the cached preview with the selected texts outlined.
+
+        Uses the base image and element rects from the last ``_refresh_preview``,
+        so selection changes never re-render the SVG.
+        """
+        if self._preview_base is None:
+            return
+        img = self._preview_base.copy()
+        keys = self._selected_keys()
+        if keys:
+            painter = QPainter(img)
+            painter.setPen(QPen(QColor(217, 72, 15), 2))
+            painter.setBrush(QColor(255, 120, 0, 90))
+            for key in keys:
+                rect = self._preview_rects.get(key)
+                if rect is not None:
+                    painter.drawRect(rect.adjusted(-2, -2, 2, 2))
+            painter.end()
+        self._preview_label.setPixmap(QPixmap.fromImage(img))
 
     def _refresh_elements(self):
         sel_keys = {item.data(Qt.ItemDataRole.UserRole) for item in self._elem_list.selectedItems()}
@@ -239,6 +279,7 @@ class SvgTextInspectorWindow(QDialog):
                 item.setSelected(True)
         self._elem_list.blockSignals(False)
         self._update_size_button()
+        self._update_highlight()
 
     def _refresh_group_combo(self):
         self._groups_widget.fill_combo(self._group_combo)

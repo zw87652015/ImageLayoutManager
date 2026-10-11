@@ -325,8 +325,9 @@ class StringTests(unittest.TestCase):
 
     NEW_KEYS = ('svgtxt_size_reflow_on', 'svgtxt_size_reflow_off',
                 'svgtxt_new_group_size_btn', 'svgtxt_plot_group_name',
-                'plot_text_sizes_header', 'plot_text_role_line',
+                'plot_text_sizes_header', 'plot_text_role_prefix',
                 'plot_text_role_tip_line', 'plot_text_role_other',
+                'plot_text_size_edit_tip', 'svgtxt_role_group_name',
                 'btn_match_text_size', 'tip_match_text_size')
 
     def test_new_keys_are_bilingual(self):
@@ -342,8 +343,8 @@ class StringTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_placeholders_match_between_languages(self):
-        for key in ('svgtxt_plot_group_name', 'plot_text_role_line',
-                    'plot_text_role_tip_line'):
+        for key in ('svgtxt_plot_group_name', 'plot_text_role_prefix',
+                    'plot_text_role_tip_line', 'svgtxt_role_group_name'):
             en = set(re.findall(r'\{(\w+)\}', _STRINGS[key]['en']))
             zh = set(re.findall(r'\{(\w+)\}', _STRINGS[key]['zh']))
             self.assertEqual(en, zh, key)

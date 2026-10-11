@@ -771,23 +771,161 @@ def describe_text_sizes(rows) -> list:
 
 
 def describe_text_roles(rows) -> list:
-    """``[(role, size_pt, count, example_text)]`` in ``_TEXT_ROLE_ORDER``, then
-    by size; sizes rounded to 0.1 pt, rows without a size skipped."""
+    """``[(role, size_pt, count, example_text, keys)]`` in ``_TEXT_ROLE_ORDER``,
+    then by size; sizes rounded to 0.1 pt, rows without a size skipped.
+    ``keys`` is the tuple of element keys (``svg_text_rows`` order)."""
     groups = {}
     for row in rows:
         size = row.get('size_pt')
         if size is None:
             continue
         key = (row.get('role') or 'other', round(size, 1))
-        count, example = groups.get(key, (0, row.get('text', '')))
-        groups[key] = (count + 1, example)
+        entry = groups.setdefault(key, [0, row.get('text', ''), []])
+        entry[0] += 1
+        entry[2].append(row.get('key'))
     order = {role: i for i, role in enumerate(_TEXT_ROLE_ORDER)}
-    return [(role, size, count, example) for (role, size), (count, example)
+    return [(role, size, count, example, tuple(keys)) for (role, size), (count, example, keys)
             in sorted(groups.items(),
                       key=lambda item: (order.get(item[0][0], len(order)),
                                         item[0][1]))]
 
 
+def apply_plot_text_size(project, svg_path, keys, new_pt, make_name) -> str:
+    """Set the final-figure size of the SVG text elements *keys* of *svg_path*.
+
+    Reuses the group when it is exactly this element set (and holds no members
+    of other files), renaming it only while it still carries the name
+    ``make_name`` would have given its old size. Otherwise *keys* are removed
+    from every group of *svg_path*, groups emptied by that are dropped, and a
+    new group named ``make_name(new_pt)`` is created. Returns the group id.
+    Members of other SVG files are never touched.
+    """
+    from src.model.data_model import SvgTextGroup, SvgTextMember
+
+    keys = list(dict.fromkeys(keys))
+    wanted = set(keys)
+    groups = project.svg_text_groups
+    owners = [g for g in groups if any(m.svg_path == svg_path and m.element_key in wanted
+                                       for m in g.members)]
+    if len(owners) == 1:
+        group = owners[0]
+        mine = {m.element_key for m in group.members if m.svg_path == svg_path}
+        exclusive = mine == wanted and all(m.svg_path == svg_path for m in group.members)
+        if exclusive:
+            if group.name == make_name(group.font_size_pt):
+                group.name = make_name(new_pt)
+            group.font_size_pt = new_pt
+            return group.id
+
+    emptied = []
+    for group in groups:
+        before = len(group.members)
+        group.members = [m for m in group.members
+                         if not (m.svg_path == svg_path and m.element_key in wanted)]
+        if before and not group.members:
+            emptied.append(group.id)
+    project.svg_text_groups = [g for g in groups if g.id not in emptied]
+
+    group = SvgTextGroup(name=make_name(new_pt), font_size_pt=new_pt,
+                         members=[SvgTextMember(svg_path=svg_path, element_key=k)
+                                  for k in keys])
+    project.svg_text_groups.append(group)
+    return group.id
+
+
 def format_text_size(size_pt) -> str:
     """Display form of a point size: at most two decimals, no trailing zeros."""
     return f'{round(size_pt, 2):g}'
+
+
+def svg_text_preview_source(project, cell):
+    """``(source, positioned, rendered)`` for the SVG a cell's text preview draws.
+
+    ``source`` is the stage output before ``_positioned_text_runs`` — the bytes
+    ``svg_text_rows`` takes its keys from — and ``rendered`` is what
+    ``get_svg_override_bytes_for_cell`` returns for the same stage. ``None``
+    when the cell needs no SVG change (the raw file is drawn instead).
+    """
+    stage = _svg_text_stage(project, cell)
+    if stage is None:
+        return None
+    source, positioned = stage
+    rendered = _positioned_text_runs(source) if positioned else source
+    return source, positioned, rendered
+
+
+def text_preview_rects(svg_bytes, keys, width_px, height_px, positioned=False) -> dict:
+    """``{key: QRectF}`` of the ``<text>`` elements *keys* (all when ``None``)
+    in pixels of a *width_px* × *height_px* render of *svg_bytes* (viewBox
+    stretched over the image, as ``QSvgRenderer.render`` draws it).
+
+    *svg_bytes* must be the pre-positioning source (keys come from it).
+    ``positioned`` replays ``_positioned_text_runs`` on the id-tagged copy
+    so tspan-based text measures its real extent; ids survive that rewrite.
+    ``boundsOnElement`` includes the element's own transform but not its
+    ancestors', so the ancestor chain is applied here. Keys that cannot be
+    placed are omitted.
+    """
+    from PyQt6.QtCore import QByteArray, QRectF
+    from PyQt6.QtGui import QTransform
+    from PyQt6.QtSvg import QSvgRenderer
+
+    try:
+        root = ET.fromstring(svg_bytes)
+    except ET.ParseError:
+        return {}
+    wanted = None if keys is None else set(keys)
+    taken = {elem.get('id') for elem in root.iter() if elem.get('id')}
+    targets = {}
+    for elem, key, idx in _iter_text_elements(root):
+        if wanted is not None and key not in wanted:
+            continue
+        if elem.get('id') is None:
+            tag_id = f'_ilm_hl_{idx}'
+            while tag_id in taken:
+                tag_id += '_'
+            taken.add(tag_id)
+            elem.set('id', tag_id)
+        targets[key] = elem.get('id')
+    if not targets:
+        return {}
+    data = ET.tostring(root, encoding='unicode').encode('utf-8')
+    if positioned:
+        data = _positioned_text_runs(data)
+    renderer = QSvgRenderer(QByteArray(data))
+    if not renderer.isValid():
+        return {}
+    view_box = renderer.viewBoxF()
+    if view_box.isEmpty():
+        view_box = QRectF(0, 0, renderer.defaultSize().width(),
+                          renderer.defaultSize().height())
+    if view_box.isEmpty():
+        return {}
+    sx, sy = width_px / view_box.width(), height_px / view_box.height()
+
+    doc = ET.fromstring(data)
+    parents = {child: parent for parent in doc.iter() for child in parent}
+    by_id = {}
+    for elem in doc.iter():
+        if elem.get('id') is not None:
+            by_id.setdefault(elem.get('id'), elem)
+
+    rects = {}
+    for key, elem_id in targets.items():
+        elem = by_id.get(elem_id)
+        if elem is None or not renderer.elementExists(elem_id):
+            continue
+        bounds = renderer.boundsOnElement(elem_id)
+        if bounds.isEmpty():
+            continue
+        chain = []
+        node = parents.get(elem)
+        while node is not None:
+            chain.append(node.get('transform', ''))
+            node = parents.get(node)
+        ctm = QTransform(*_parse_transform_matrix(' '.join(reversed(chain))))
+        mapped = ctm.mapRect(bounds)
+        rects[key] = QRectF((mapped.left() - view_box.left()) * sx,
+                            (mapped.top() - view_box.top()) * sy,
+                            mapped.width() * sx, mapped.height() * sy)
+    return rects
