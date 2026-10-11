@@ -18,7 +18,7 @@ from .document import (
     SCHEMA_VERSION, PlotDocument, PlotDocumentError, load_document,
 )
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 _LAZY = {
     'save_document': '.render',

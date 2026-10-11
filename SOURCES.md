@@ -1,12 +1,12 @@
-# Corresponding source for Image Layout Manager 3.5.2
+# Corresponding source for Image Layout Manager 3.5.3
 
 The application source in this repository is licensed under Apache-2.0. The distributed Windows builds also bundle components under the GNU GPL v3 and AGPL v3, so this page records where to obtain the source of every third-party component inside those builds, at the exact versions shipped.
 
-- Application version: **3.5.2**
+- Application version: **3.5.3**
 - Python runtime: **3.13.15**
 - Components covered: **86**
 - Components with no open-source counterpart: **1** (see the exceptions section)
-- Application source archive: `ImageLayoutManager-3.5.2-application-source.zip`
+- Application source archive: `ImageLayoutManager-3.5.3-application-source.zip`
 
 ## How to rebuild
 
@@ -78,7 +78,7 @@ Each archive below is identified by its SHA-256 where the upstream project publi
 | referencing | 0.37.0 | MIT | [sdist](https://files.pythonhosted.org/packages/22/f5/df4e9027acead3ecc63e50fe1e36aca1523e1719559c499951bb4b53188f/referencing-0.37.0.tar.gz)<br>`44aefc3142c5b842538163acb373e24cce6632bd54bdb01b21ad5863489f50d8` | `sdist_downloaded_not_correspondence_verified` |
 | requests | 2.34.2 | Apache-2.0 | [sdist](https://files.pythonhosted.org/packages/ac/c3/e2a2b89f2d3e2179abd6d00ebd70bff6273f37fb3e0cc209f48b39d00cbf/requests-2.34.2.tar.gz)<br>`f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed` | `sdist_downloaded_not_correspondence_verified` |
 | rpds-py | 2026.6.3 | MIT | [sdist](https://files.pythonhosted.org/packages/aa/2a/9618a122aeb2a169a28b03889a2995fe297588964333d4a7d67bdf46e147/rpds_py-2026.6.3.tar.gz)<br>`1cebd1337c242e4ec2293e541f712b2da849b29f48f0c293684b71c0632625d4` | `sdist_downloaded_not_correspondence_verified` |
-| setuptools | 83.0.0 | MIT | [sdist](https://files.pythonhosted.org/packages/34/26/f5d29e25ffdb535afef2d35cdb55b325298f96debd670da4c325e08d70f4/setuptools-83.0.0.tar.gz)<br>`025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef` | `sdist_downloaded_not_correspondence_verified` |
+| setuptools | 84.0.0 | MIT | [sdist](https://files.pythonhosted.org/packages/6d/44/f5da03a8ef95d369145c5bb53050e7877c9f3d312e128605fd9504829143/setuptools-84.0.0.tar.gz)<br>`f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73` | `sdist_downloaded_not_correspondence_verified` |
 | shapely | 2.1.2 | BSD 3-Clause | [sdist](https://files.pythonhosted.org/packages/4d/bc/0989043118a27cccb4e906a46b7565ce36ca7b57f5a18b78f4f1b0f72d9d/shapely-2.1.2.tar.gz)<br>`2ed4ecb28320a433db18a5bf029986aa8afcfd740745e78847e330d5d94922a9` | `sdist_downloaded_not_correspondence_verified` |
 | six | 1.17.0 | MIT | [sdist](https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz)<br>`ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81` | `sdist_downloaded_not_correspondence_verified` |
 | sse-starlette | 3.4.8 | BSD-3-Clause | [sdist](https://files.pythonhosted.org/packages/f8/00/b42a44342a054d58cb1115d7c8aa9cb4290dd9442f9c1b91a4b8173dba22/sse_starlette-3.4.8.tar.gz)<br>`ed89ffbb75cbf78a5fe2f2109cd584792ee7f9dfac96f791db546df8f15f3f9c` | `sdist_downloaded_not_correspondence_verified` |
