@@ -258,6 +258,8 @@ def worksheet_from_document(doc):
     column. Violin: one Y column per group. Stacked: a Label column of
     bar names plus one Y per category.
     """
+    if doc.kind == 'heatmap':
+        return Worksheet()
     if doc.kind in ('violin', 'histogram'):
         # Histograms carry the value title on x (y is the count axis).
         v_name, v_units = split_axis_title(
@@ -358,6 +360,8 @@ def items_from_document(doc):
 
 
 def chart_from_document(doc):
+    if doc.kind == 'heatmap':
+        return None
     if doc.kind == 'violin':
         body = doc.violin.body if doc.violin is not None else 'violin'
         return {'none': 'box', 'bar': 'column_points'}.get(

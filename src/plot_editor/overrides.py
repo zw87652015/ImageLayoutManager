@@ -628,6 +628,33 @@ def clear_palette(overrides):
     overrides.baked_item_colors = None
 
 
+def _heatmap_effective_document(base_doc, title, overrides, figure_size):
+    """Heatmap documents keep their cell grid: no worksheet regeneration.
+
+    Only the generic text/limit/style overrides apply on top of the base.
+    """
+    doc = base_doc.clone()
+    doc.title = title
+    if overrides.xlabel is not None:
+        doc.xlabel = overrides.xlabel
+    if overrides.ylabel is not None:
+        doc.ylabel = overrides.ylabel
+    if overrides.grid is not None:
+        doc.grid = overrides.grid
+    if overrides.xlim is not None:
+        doc.xlim = list(overrides.xlim)
+    if overrides.ylim is not None:
+        doc.ylim = list(overrides.ylim)
+    if overrides.annotations:
+        doc.annotations = copy.deepcopy(overrides.annotations)
+    if overrides.style is not None:
+        doc.style = copy.deepcopy(overrides.style)
+    if figure_size is not None:
+        doc.width_mm = figure_size.width_mm
+        doc.height_mm = figure_size.height_mm
+    return doc.validate()
+
+
 def effective_document(base_doc, items, chart_key, title, overrides, *,
                        figure_size=None):
     """Build the validated ``PlotDocument`` shown/saved by the editor.
@@ -641,6 +668,9 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
                          HORIZONTAL_CHARTS, VIOLIN_BODY,
                          default_axis_titles, document_from_plot)
     from .plot_data import tick_label_map
+    if base_doc is not None and base_doc.kind == 'heatmap':
+        return _heatmap_effective_document(base_doc, title, overrides,
+                                           figure_size)
     kind, percent = CHART_KIND.get(chart_key, ('line', None))
     if kind in ('line', 'ridgeline') and base_doc is not None \
             and len(base_doc.series) == len(items) \

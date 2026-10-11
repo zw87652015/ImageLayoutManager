@@ -208,7 +208,10 @@ class PlotTab(QSplitter):
         """The styled ``PlotDocument`` for preview/save/export, or None."""
         if self.plot is None:
             return None
-        base = self.plot.document if self.plot.legacy_base else None
+        keeps_base = self.plot.legacy_base or (
+            self.plot.document is not None
+            and self.plot.document.kind == 'heatmap')
+        base = self.plot.document if keeps_base else None
         return effective_document(base, self.plot.series,
                                   self.plot.chart_key, self.plot_title,
                                   self.overrides,
@@ -789,6 +792,9 @@ class PlotTab(QSplitter):
             series = items_from_document(pf.document)
         self.plot = PlotState(series, chart, columns, pf.document,
                               legacy_base=not pf.has_worksheet)
+        if pf.document.kind == 'heatmap':
+            self.worksheet_view.setEnabled(False)
+            self.worksheet_view.setToolTip(tr('sheet_heatmap_readonly'))
         # Node v2 carries the overrides; older/ILM files seed them from
         # the document (style cloned; only fields differing from defaults).
         self.overrides = pf.overrides if pf.overrides is not None \

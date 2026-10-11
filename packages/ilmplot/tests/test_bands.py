@@ -254,16 +254,27 @@ class TestBandBridge(unittest.TestCase):
         self.assertTrue(any('band outlines dropped' in s
                             for s in r.notes), r.notes)
 
-    def test_histogram_reason(self):
+    def test_histogram_converts(self):
         rng = np.random.default_rng(0)
         fig, ax = plt.subplots(figsize=(4, 3))
         ax.hist(rng.normal(size=500), bins=30)
         r = bridge.convert(fig)
         plt.close(fig)
-        self.assertTrue(any(
-            'histogram-style bars (touching bars on a numeric axis) '
-            'are not supported' in s for s in r.reasons), r.reasons)
-        self.assertIsNone(r.document)
+        self.assertFalse(r.reasons, r.reasons)
+        self.assertEqual(r.document.kind, 'histogram')
+        self.assertEqual(r.document.histogram.bins, 30)
+
+    def test_area_constant_baseline(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        ax.plot([0, 1, 2, 3], [1, 3, 2, 4])
+        ax.fill_between([0, 1, 2, 3], [1, 3, 2, 4], 0, alpha=0.4)
+        r = bridge.convert(fig)
+        plt.close(fig)
+        self.assertFalse(r.reasons, r.reasons)
+        self.assertEqual(len(r.document.bands), 1)
+        band = r.document.bands[0]
+        self.assertEqual(list(band.y1), [1., 3., 2., 4.])
+        self.assertEqual(set(band.y2), {0.})
 
     def test_categorical_bars_native(self):
         fig, ax = plt.subplots(figsize=(4, 3))

@@ -23,9 +23,10 @@ from dataclasses import dataclass, field
 
 from .document import (
     MARKERS, MAX_ANNOTATIONS, MAX_SERIES, MAX_TOTAL_POINTS, Annotation,
-    AxisStyle, Band, FrameStyle, GridStyle, LegendStyle, LineSeries,
-    MAX_SPANS, PlotDocument, PlotDocumentError, Span, StackCategory,
-    StackOptions, TextStyle, TitleStyle, LINESTYLES,
+    AxisStyle, Band, FrameStyle, GridStyle, HEATMAP_CMAPS, HistOptions,
+    LegendStyle, LineSeries, MAX_SPANS, PlotDocument, PlotDocumentError,
+    Span, StackCategory, StackOptions, TextStyle, TitleStyle, ViolinGroup,
+    LINESTYLES, LINE_DRAWSTYLES,
 )
 
 
@@ -65,6 +66,8 @@ _LEGEND_LOC_CODES = {
 _MARKER_MAP = {None: '', 'None': '', '': '',
                'o': 'o', 's': 's', '^': '^', 'v': 'v',
                'D': 'D', '+': '+', 'x': 'x', '.': '.'}
+
+_DRAWSTYLE_ALIASES = {'steps': 'steps-pre'}
 
 _REL_TOL = 1e-9
 
@@ -212,6 +215,8 @@ class _Converter:
         self._bar_yerr = {}              # id(BarContainer) -> (lo, hi)
         self._bar_containers = []
         self._errbar_containers = []
+        self._image = None               # AxesImage / QuadMesh (heatmap)
+        self._cbar = None
 
     def reason(self, msg):
         self.reasons.append(msg)
@@ -226,13 +231,10 @@ class _Converter:
         except Exception:
             pass
         self._check_figure_level()
-        axes = list(fig.get_axes())
-        if len(axes) != 1:
-            self.reason(
-                f"{len(axes)} axes (subplots/twin/inset/colorbar "
-                "not supported)")
+        picked = self._select_axes(list(fig.get_axes()))
+        if picked is None:
             return ConversionResult(None, self.reasons, self.notes)
-        ax = axes[0]
+        ax, self._image = picked
         import matplotlib.axes
         if type(ax) is not matplotlib.axes.Axes:
             self.reason(
@@ -247,10 +249,13 @@ class _Converter:
         self._map_scales_ticks()
         self._map_spines_grid()
         self._map_misc()
-        self._map_lines()
-        self._map_scatter()
-        self._map_bars()
-        self._map_patches()
+        if self._image is not None:
+            self._map_heatmap()
+        else:
+            self._map_lines()
+            self._map_scatter()
+            self._map_bars()
+            self._map_patches()
         self._map_texts()
         self._map_legend()
         self._map_limits()
@@ -262,6 +267,50 @@ class _Converter:
             self.reason(f"the mapped document is invalid: {e}")
             return ConversionResult(None, self.reasons, self.notes)
         return ConversionResult(self.doc, [], self.notes)
+
+    def _select_axes(self, axes):
+        """``(ax, mappable)`` for the plotted axes, or ``None`` (reason set).
+
+        ``mappable`` is the single imshow ``AxesImage`` or pcolormesh
+        ``QuadMesh`` on the axes, ``None`` for ordinary plots. Colorbar
+        axes (which hold their own QuadMesh) are never candidates.
+        """
+        from matplotlib.collections import QuadMesh
+
+        def mappables(a):
+            return list(a.images) + [c for c in a.collections
+                                     if isinstance(c, QuadMesh)]
+        cbar_axes = {id(a) for a in axes
+                     if getattr(a, '_colorbar', None) is not None}
+        found = [(a, m) for a in axes if id(a) not in cbar_axes
+                 for m in mappables(a)]
+        if not found:
+            if len(axes) != 1:
+                self.reason(
+                    f"{len(axes)} axes (subplots/twin/inset/colorbar "
+                    "not supported)")
+                return None
+            return axes[0], None
+        if len(found) > 1:
+            self.reason("multiple images or pcolormesh grids are not "
+                        "supported")
+            return None
+        ax, im = found[0]
+        cbar = getattr(im, 'colorbar', None)
+        others = [a for a in axes if a is not ax]
+        if others and (cbar is None or others != [cbar.ax]):
+            self.reason("axes other than the image's own colorbar are "
+                        "not supported")
+            return None
+        if cbar is not None and others:
+            if cbar.orientation != 'vertical':
+                self.reason("horizontal colorbars are not supported")
+                return None
+            if cbar.extend != 'neither':
+                self.reason("colorbar extensions are not supported")
+                return None
+            self._cbar = cbar
+        return ax, im
 
     # ── top-level rejection checks ───────────────────────────────────
     def _check_figure_level(self):
@@ -276,7 +325,7 @@ class _Converter:
 
     def _check_axes_level(self):
         ax = self.ax
-        if ax.images:
+        if ax.images and self._image is None:
             self.reason("axes images (imshow/pcolormesh) are not "
                         "supported")
         if ax.artists:
@@ -294,11 +343,15 @@ class _Converter:
         conv_x = _axis_converter(ax.xaxis)
         conv_y = _axis_converter(ax.yaxis)
         self._categorical = type(conv_x).__name__ == 'StrCategoryConverter'
+        horizontal_bars = any(getattr(c, 'orientation', None) == 'horizontal'
+                              for c in ax.containers)
+        self._categorical_y = horizontal_bars and \
+            type(conv_y).__name__ == 'StrCategoryConverter'
         if conv_x is not None and not self._categorical:
             self.reason(
                 f"x-axis unit/date converter "
                 f"{type(conv_x).__name__} is not supported")
-        if conv_y is not None:
+        if conv_y is not None and not self._categorical_y:
             self.reason(
                 f"y-axis unit/date converter "
                 f"{type(conv_y).__name__} is not supported")
@@ -688,7 +741,9 @@ class _Converter:
             raise _BridgeError(
                 "non-data transforms (axhline/axvline/…) are not "
                 "supported")
-        if line.get_drawstyle() != 'default':
+        drawstyle = _DRAWSTYLE_ALIASES.get(line.get_drawstyle(),
+                                           line.get_drawstyle())
+        if drawstyle not in LINE_DRAWSTYLES:
             raise _BridgeError(
                 f"drawstyle {line.get_drawstyle()!r} is not supported")
         if line.get_markevery() not in (None, 1):
@@ -734,6 +789,7 @@ class _Converter:
             linewidth_pt=float(line.get_linewidth()),
             linestyle=ls, marker=mk,
             markersize_pt=float(line.get_markersize()),
+            drawstyle=drawstyle,
         )
         s.color = _to_hex(line.get_color(), ctx)
         bounds = self._line_yerr.get(id(line))
@@ -981,19 +1037,26 @@ class _Converter:
             self.reason("bars cannot be mixed with line/scatter "
                         "series or bands")
             return
-        doc.kind = 'stacked_column'
+        orientations = {getattr(c, 'orientation', 'vertical')
+                        for c in containers}
+        if len(orientations) > 1:
+            self.reason("vertical and horizontal bars cannot be mixed")
+            return
+        horizontal = orientations == {'horizontal'}
         rects = []
         for k, c in enumerate(containers):
             ctx = f"bars[{k}]"
-            if getattr(c, 'orientation', 'vertical') != 'vertical':
-                self.reason(f"{ctx}: horizontal bars (barh) are not "
-                            "supported")
-                continue
             rs = list(c.patches)
-            xs = [float(p.get_x()) for p in rs]
-            ws = [float(p.get_width()) for p in rs]
-            bs = [float(p.get_y()) for p in rs]
-            hs = [float(p.get_height()) for p in rs]
+            if horizontal:
+                xs = [float(p.get_y()) for p in rs]
+                ws = [float(p.get_height()) for p in rs]
+                bs = [float(p.get_x()) for p in rs]
+                hs = [float(p.get_width()) for p in rs]
+            else:
+                xs = [float(p.get_x()) for p in rs]
+                ws = [float(p.get_width()) for p in rs]
+                bs = [float(p.get_y()) for p in rs]
+                hs = [float(p.get_height()) for p in rs]
             if not rs:
                 self.reason(f"{ctx}: empty bar container")
                 continue
@@ -1019,14 +1082,17 @@ class _Converter:
                 self.reason(f"{ctx}: per-bar colours are not "
                             "supported")
                 continue
-            label = c.get_label() or ''
-            if label.startswith('_'):
-                label = ''
+            label = next((l for l in (c.get_label(), rs[0].get_label())
+                          if l and not l.startswith('_')), '')
             rects.append(dict(c=c, ctx=ctx, xs=xs, ws=ws, bs=bs, hs=hs,
                               color=colors.pop(), label=label,
                               n=len(rs)))
         if self.reasons or not rects:
             return
+        if not horizontal and self._histogram_like(rects):
+            self._map_histogram(rects)
+            return
+        doc.kind = 'stacked_column'
         n = rects[0]['n']
         if any(r['n'] != n for r in rects):
             self.reason("bar groups with different bar counts are not "
@@ -1036,7 +1102,8 @@ class _Converter:
         if layout is None:
             return
         grouped, spacing, span, centres = layout
-        if n > 1 and not self._categorical \
+        categorical = self._categorical_y if horizontal else self._categorical
+        if n > 1 and not categorical \
                 and span / spacing >= 0.999:
             self.reason("histogram-style bars (touching bars on a "
                         "numeric axis) are not supported")
@@ -1054,7 +1121,7 @@ class _Converter:
                           "the bar layout is normalised")
         doc.stacked = StackOptions(
             grouped=grouped, percent=False,
-            bar_width=span / spacing)
+            bar_width=span / spacing, horizontal=horizontal)
         edges, ewidths = set(), set()
         for r in rects:
             for p in r['c'].patches:
@@ -1079,7 +1146,104 @@ class _Converter:
                     self.note("error bars on stacked bars are ignored "
                               "by the renderer")
             doc.categories.append(cat)
-        doc.x_tick_labels = self._bar_tick_labels(centres)
+        doc.x_tick_labels = self._bar_tick_labels(centres, horizontal)
+
+    def _histogram_like(self, rects):
+        """True when every container is a touching run of unstacked bars."""
+        if self._categorical:
+            return False
+        for r in rects:
+            if r['n'] < 2 or any(not _close(b, 0.0) for b in r['bs']):
+                return False
+            spacing = _spacing(r['xs'], r['n'])
+            if spacing is None or not _close(spacing, r['ws'][0]):
+                return False
+        return True
+
+    def _map_histogram(self, rects):
+        """Map ``ax.hist`` bar containers onto a native histogram.
+
+        Only exact reproductions are accepted: shared uniform bin edges,
+        integer counts, and first/last bins that hold data, so the
+        document's data-driven ``bins=N`` range yields the same edges.
+        Samples are synthesised at the bin edges (``bins[i]``), which
+        lands each one in its own bin.
+        """
+        import numpy as np
+        doc = self.doc
+        if len({r['n'] for r in rects}) > 1:
+            self.reason("histogram containers with different bin counts "
+                        "are not supported")
+            return
+        n = rects[0]['n']
+        ref = rects[0]
+        edges = ref['xs'] + [ref['xs'][-1] + ref['ws'][-1]]
+        lin = np.linspace(edges[0], edges[-1], n + 1)
+        tol = 1e-9 * max(1.0, abs(edges[0]), abs(edges[-1]))
+        if not np.allclose(lin, edges, rtol=0, atol=tol):
+            self.reason("histogram bins are not uniform (only equal-width "
+                        "bins can be reproduced)")
+            return
+        counts, colors, styles = [], [], set()
+        for r in rects:
+            r_edges = r['xs'] + [r['xs'][-1] + r['ws'][-1]]
+            if not np.allclose(r_edges, edges, rtol=0, atol=tol):
+                self.reason("histogram containers with different bin "
+                            "edges are not supported")
+                return
+            ks = []
+            for h in r['hs']:
+                k = round(h)
+                if abs(h - k) > 1e-9 * max(1.0, h):
+                    self.reason("histogram heights are not integer counts "
+                                "(density or weighted histograms are not "
+                                "supported)")
+                    return
+                ks.append(int(k))
+            counts.append(ks)
+            patches = r['c'].patches
+            edge = patches[0].get_edgecolor()
+            lw = float(patches[0].get_linewidth())
+            if any(tuple(p.get_edgecolor()) != tuple(edge)
+                   or float(p.get_linewidth()) != lw for p in patches):
+                self.reason("per-bar edge styles are not supported")
+                return
+            face = patches[0].get_facecolor()
+            colors.append(_to_hex(face[:3]))
+            styles.add((round(float(face[3]), 9),
+                        None if edge[3] == 0 or lw == 0 else _to_hex(edge),
+                        0.0 if edge[3] == 0 or lw == 0 else lw))
+        total = sum(sum(ks) for ks in counts)
+        if total > MAX_TOTAL_POINTS:
+            self.reason(f"histogram has {total} samples (more than "
+                        f"{MAX_TOTAL_POINTS})")
+            return
+        if any(sum(ks) == 0 for ks in counts):
+            self.reason("empty histogram containers are not supported")
+            return
+        if not any(ks[0] for ks in counts) or not any(ks[-1] for ks in counts):
+            self.reason("the first or last histogram bin is empty, so the "
+                        "bin range cannot be reproduced")
+            return
+        if len(styles) > 1:
+            self.reason("histograms with different fill alphas or edges "
+                        "are not supported")
+            return
+        fill_alpha, edge_color, edge_width = styles.pop()
+        top = next(j for j, ks in enumerate(counts) if ks[-1])
+        for j, (r, ks) in enumerate(zip(rects, counts)):
+            values = []
+            for i, k in enumerate(ks):
+                values += [float(lin[i])] * k
+            if j == top:
+                values[-1] = float(lin[n])
+            doc.groups.append(ViolinGroup(
+                id='g%d' % j, label=r['label'] or f'Histogram {j + 1}',
+                values=values, color=colors[j]))
+        doc.kind = 'histogram'
+        doc.histogram = HistOptions(
+            bins=n, fill_alpha=fill_alpha, edge_color=edge_color,
+            edge_width_pt=edge_width)
 
     def _bar_layout(self, rects, n):
         """Detect single/grouped/stacked bar layout.
@@ -1144,21 +1308,25 @@ class _Converter:
         centres = [left + span / 2.0 + i * spacing for i in range(n)]
         return True, spacing, span, centres
 
-    def _bar_tick_labels(self, centres):
+    def _bar_tick_labels(self, centres, horizontal=False):
         ax = self.ax
-        if self._categorical:
-            labels = self._category_labels()
+        axis = 'y' if horizontal else 'x'
+        ticklabels = ax.get_yticklabels() if horizontal \
+            else ax.get_xticklabels()
+        if self._categorical_y if horizontal else self._categorical:
+            labels = self._category_labels(axis)
             if labels is not None and len(labels) == len(centres):
                 return [[float(i), labels[i]]
                         for i in range(len(centres))]
-            ticks = [(t.get_position()[0], t.get_text())
-                     for t in ax.get_xticklabels() if t.get_text()]
+            ticks = [(t.get_position()[horizontal], t.get_text())
+                     for t in ticklabels if t.get_text()]
             if len(ticks) == len(centres):
                 return [[float(i), lbl]
                         for i, (_p, lbl) in enumerate(ticks)]
-        fmt = ax.xaxis.get_major_formatter()
-        locs = [float(v) for v in ax.xaxis.get_majorticklocs()]
-        tick_labels = [t.get_text() for t in ax.get_xticklabels()]
+        axis_obj = getattr(ax, axis + 'axis')
+        fmt = axis_obj.get_major_formatter()
+        locs = [float(v) for v in axis_obj.get_majorticklocs()]
+        tick_labels = [t.get_text() for t in ticklabels]
         out = []
         for i, c in enumerate(centres):
             label = None
@@ -1246,8 +1414,8 @@ class _Converter:
         self.doc.spans.append(
             Span(axis=axis, lo=lo, hi=hi, color=color, label=label))
 
-    def _category_labels(self):
-        units = getattr(self.ax.xaxis, 'units', None)
+    def _category_labels(self, axis='x'):
+        units = getattr(getattr(self.ax, axis + 'axis'), 'units', None)
         mapping = getattr(units, '_mapping', None)
         if not mapping:
             return None
@@ -1256,6 +1424,159 @@ class _Converter:
             return [str(k) for k, _v in ordered]
         except Exception:
             return None
+
+    # ── heatmaps (imshow / pcolormesh) ───────────────────────────────
+    def _map_heatmap(self):
+        import matplotlib.ticker as mt
+        from matplotlib.colors import Normalize
+        from .document import HeatmapOptions
+        ax, im, doc = self.ax, self._image, self.doc
+        if self._categorical or self._categorical_y:
+            self.reason("categorical axes cannot hold an image")
+            return
+        if ax.get_lines() or ax.patches or ax.containers \
+                or any(c is not im for c in ax.collections):
+            self.reason("images cannot be mixed with lines, scatter, "
+                        "bars, bands or patches")
+            return
+        if ax.get_legend() is not None:
+            self.reason("legends cannot be combined with an image")
+            return
+        for axis in (ax.xaxis, ax.yaxis):
+            if isinstance(axis.get_major_locator(), mt.FixedLocator):
+                self.reason("custom tick positions on an image are not "
+                            "supported")
+                return
+        if type(im.norm) is not Normalize:
+            self.reason(f"colour normalisation {type(im.norm).__name__} "
+                        "is not supported (linear only)")
+            return
+        if im.get_alpha() not in (None, 1):
+            self.reason(f"image alpha {im.get_alpha()} is not supported")
+            return
+        cmap = im.get_cmap()
+        base = cmap.name[:-2] if cmap.name.endswith('_r') else cmap.name
+        if base not in HEATMAP_CMAPS:
+            self.reason(f"colormap {cmap.name!r} is not supported")
+            return
+        if cmap.N != 256:
+            self.reason(f"colormap resolution {cmap.N} is not supported "
+                        "(256 only)")
+            return
+        aspect = {'auto': 'auto', 1.0: 'equal'}.get(ax.get_aspect())
+        if aspect is None:
+            self.reason(f"aspect ratio {ax.get_aspect()} is not supported "
+                        "(auto or equal only)")
+            return
+        grid = self._heatmap_grid(im)
+        if grid is None:
+            return
+        rows, extent = grid
+        valid = [v for row in rows for v in row if v is not None]
+        if not valid:
+            self.reason("an image without any finite cell cannot be "
+                        "converted")
+            return
+        lo, hi = im.norm.vmin, im.norm.vmax
+        if lo is None or hi is None:
+            self.reason("image colour limits are not set")
+            return
+        lo, hi = float(lo), float(hi)
+        if not lo < hi:
+            self.reason("constant or inverted colour limits are not "
+                        "supported")
+            return
+        vmin = None if math.isclose(lo, min(valid), rel_tol=_REL_TOL,
+                                    abs_tol=1e-12) else lo
+        vmax = None if math.isclose(hi, max(valid), rel_tol=_REL_TOL,
+                                    abs_tol=1e-12) else hi
+        cbar = self._cbar
+        doc.kind = 'heatmap'
+        doc.heatmap = HeatmapOptions(
+            values=rows, extent=extent, cmap=cmap.name, vmin=vmin,
+            vmax=vmax, aspect=aspect, colorbar=cbar is not None,
+            colorbar_label=cbar.ax.get_ylabel() if cbar is not None
+            else '',
+            mask_color=_to_hex(cmap.get_bad()))
+
+    def _resampled_nearest(self, im, arr):
+        """True when matplotlib's 'antialiased'/'auto' resample is nearest.
+
+        Mirrors matplotlib's ``_resample``: the displayed image must be
+        more than 3x the cell count along both axes (exactly 3x already
+        resamples as hanning there).
+        """
+        bb = im.get_window_extent()
+        return abs(bb.width) > 3 * arr.shape[1] \
+            and abs(bb.height) > 3 * arr.shape[0]
+
+    def _heatmap_grid(self, im):
+        """``(rows top-down with None for blank cells, extent)`` or None.
+
+        ``extent`` is matplotlib's ``(left, right, bottom, top)`` for the
+        top-down rows; ``origin='lower'`` images and ascending pcolormesh
+        rows are flipped so the document's top-to-bottom order holds.
+        """
+        import numpy as np
+        from matplotlib.collections import QuadMesh
+        if isinstance(im, QuadMesh):
+            coords = np.asarray(im.get_coordinates(), dtype=float)
+            arr = np.ma.asarray(im.get_array())
+            ny, nx = coords.shape[0] - 1, coords.shape[1] - 1
+            if arr.shape != (ny, nx):
+                self.reason("only flat pcolormesh shading is supported")
+                return None
+            xs, ys = coords[0, :, 0], coords[:, 0, 1]
+            if not (np.allclose(coords[..., 0], xs[None, :])
+                    and np.allclose(coords[..., 1], ys[:, None])):
+                self.reason("non-rectilinear pcolormesh grids are not "
+                            "supported")
+                return None
+            dx, dy = np.diff(xs), np.diff(ys)
+            if not np.all(dx > 0) or not (np.all(dy > 0)
+                                          or np.all(dy < 0)):
+                self.reason("pcolormesh edges must be monotonic in x and y "
+                            "(descending x is not supported)")
+                return None
+            if not (np.allclose(dx, dx[0], rtol=1e-9, atol=0)
+                    and np.allclose(dy, dy[0], rtol=1e-9, atol=0)):
+                self.reason("non-uniform pcolormesh edges are not "
+                            "supported")
+                return None
+            if dy[0] > 0:
+                top_down = arr[::-1]
+                extent = (xs[0], xs[-1], ys[0], ys[-1])
+            else:
+                top_down = arr
+                extent = (xs[0], xs[-1], ys[-1], ys[0])
+        else:
+            arr = np.ma.asarray(im.get_array())
+            if arr.ndim != 2:
+                self.reason("RGB(A) images are not supported")
+                return None
+            interp = im.get_interpolation()
+            if interp in ('auto', 'antialiased'):
+                if not self._resampled_nearest(im, arr):
+                    self.reason(f"image interpolation {interp!r} is only "
+                                "converted when upsampled more than 3x "
+                                "(nearest-neighbour); use "
+                                "interpolation='nearest'")
+                    return None
+                self.note(f"{interp} interpolation was rendered as nearest "
+                          "(>3x upsampled)")
+            elif interp not in ('nearest', 'none'):
+                self.reason(f"image interpolation {interp!r} is not "
+                            "supported (nearest only)")
+                return None
+            top_down = arr[::-1] if im.origin == 'lower' else arr
+            extent = im.get_extent()
+        data = np.ma.filled(top_down.astype(float), np.nan)
+        if np.isinf(data).any():
+            self.reason("non-finite image values are not supported")
+            return None
+        rows = [[None if np.isnan(v) else float(v) for v in row]
+                for row in data]
+        return rows, [float(v) for v in extent]
 
     # ── annotations / legend / limits ────────────────────────────────
     def _map_texts(self):
@@ -1314,6 +1635,7 @@ class _Converter:
                        or getattr(leg, 'legendHandles', []))
         expected = [s.label for s in doc.series if s.label] + \
             [c.label for c in doc.categories] + \
+            [g.label for g in doc.groups] + \
             [b.label for b in doc.bands if b.label] + \
             [sp.label for sp in doc.spans if sp.label]
         labelled = [h for h in handles
@@ -1344,6 +1666,7 @@ class _Converter:
             self.reason(f"more than {MAX_SERIES} series/categories")
         total = sum(len(s.x) for s in doc.series) + \
             sum(len(c.values) for c in doc.categories) + \
+            sum(len(g.values) for g in doc.groups) + \
             sum(len(b.x) for b in doc.bands)
         if total > MAX_TOTAL_POINTS:
             self.reason(f"more than {MAX_TOTAL_POINTS} data points")
@@ -1351,7 +1674,8 @@ class _Converter:
             self.reason("bands need at least one line or scatter "
                         "series (band-only figures such as a bare "
                         "stackplot are not supported)")
-        if not doc.series and not doc.categories and not doc.bands:
+        if not doc.series and not doc.categories and not doc.bands \
+                and not doc.groups and doc.heatmap is None:
             self.reason("the figure has no supported data to capture")
 
 

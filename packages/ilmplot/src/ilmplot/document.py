@@ -32,7 +32,8 @@ FORMAT_NAME = 'ilm-plot'
 # ``requires`` whenever the field is emitted.
 CAPABILITIES = frozenset({'bands', 'error_band', 'spans', 'box_plot',
                           'column_points', 'histogram',
-                          'horizontal_bars', 'sample_counts'})
+                          'horizontal_bars', 'sample_counts',
+                          'step_lines', 'heatmap'})
 
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_SERIES = 100
@@ -40,6 +41,7 @@ MAX_TOTAL_POINTS = 100_000
 MAX_DIMENSION_MM = 1000.0
 
 LINESTYLES = ('-', '--', '-.', ':', '')
+LINE_DRAWSTYLES = ('default', 'steps-pre', 'steps-mid', 'steps-post')
 MARKERS = ('', 'o', 's', '^', 'v', 'D', '+', 'x', '.')
 LEGEND_LOCATIONS = (
     'best', 'upper right', 'upper left', 'lower left', 'lower right',
@@ -51,7 +53,8 @@ LEGEND_LOCATIONS = (
 # and 'histogram' plot ``groups`` (ViolinGroup), 'stacked_column' plots
 # ``categories`` (StackCategory). Schema stays 1 — older builds reject
 # the new kinds.
-KINDS = ('line', 'violin', 'ridgeline', 'stacked_column', 'histogram')
+KINDS = ('line', 'violin', 'ridgeline', 'stacked_column', 'histogram',
+         'heatmap')
 
 ANNOTATION_ANCHORS = _ANCHORS = (
     'upper left', 'upper center', 'upper right',
@@ -217,8 +220,13 @@ def required_capabilities(document) -> list:
             req.append('column_points')
         if any(k in d for k in _N_OPTION_KEYS):
             req.append('sample_counts')
+    if any(getattr(s, 'drawstyle', 'default') != 'default'
+           for s in getattr(document, 'series', None) or ()):
+        req.append('step_lines')
     if getattr(document, 'kind', None) == 'histogram':
         req.append('histogram')
+    if getattr(document, 'kind', None) == 'heatmap':
+        req.append('heatmap')
     h = getattr(document, 'histogram', None)
     if h is not None:
         d = h.to_dict()
@@ -1036,6 +1044,163 @@ class HistOptions:
         return o
 
 
+HEATMAP_CMAPS = (
+    'viridis', 'plasma', 'inferno', 'magma', 'cividis', 'gray', 'Greys',
+    'Blues', 'Reds', 'Greens', 'Oranges', 'Purples', 'YlOrRd', 'YlGnBu',
+    'RdBu', 'coolwarm', 'bwr', 'seismic', 'Spectral', 'PiYG', 'PRGn',
+    'BrBG', 'hot', 'turbo', 'jet',
+)
+_HEATMAP_CMAP_NAMES = frozenset(HEATMAP_CMAPS) | frozenset(
+    c + '_r' for c in HEATMAP_CMAPS)
+MAX_HEATMAP_DIM = 500
+_HEATMAP_ASPECTS = ('auto', 'equal')
+
+
+def _check_heatmap_values(value, ctx: str) -> list:
+    """Rectangular 1..500 x 1..500 grid of finite floats or ``None``."""
+    if not isinstance(value, list) or not value \
+            or len(value) > MAX_HEATMAP_DIM:
+        raise _err(f"{ctx}: expected 1..{MAX_HEATMAP_DIM} rows of values")
+    ncols = None
+    rows = []
+    for i, row in enumerate(value):
+        if not isinstance(row, list) or not row \
+                or len(row) > MAX_HEATMAP_DIM:
+            raise _err(f"{ctx}[{i}]: expected 1..{MAX_HEATMAP_DIM} values")
+        if ncols is None:
+            ncols = len(row)
+        elif len(row) != ncols:
+            raise _err(f"{ctx}[{i}]: ragged row ({len(row)} values, "
+                       f"expected {ncols})")
+        out = []
+        for j, v in enumerate(row):
+            if v is None:
+                out.append(None)
+            elif not _is_num(v) or not math.isfinite(v):
+                raise _err(f"{ctx}[{i}][{j}]: expected a finite number "
+                           f"or null, got {v!r}")
+            else:
+                out.append(float(v))
+        rows.append(out)
+    return rows
+
+
+def _check_cell_labels(value, count: int, ctx: str):
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != count:
+        raise _err(f"{ctx}: expected a list of {count} labels")
+    for i, lbl in enumerate(value):
+        if not isinstance(lbl, str) or len(lbl) > MAX_TICK_LABEL:
+            raise _err(f"{ctx}[{i}]: expected a string of at most "
+                       f"{MAX_TICK_LABEL} characters")
+    return list(value)
+
+
+@dataclass
+class HeatmapOptions:
+    """Rectangular value grid drawn with ``imshow`` (kind 'heatmap').
+
+    ``values`` lists rows top to bottom as displayed; ``None`` marks a
+    blank cell. ``extent`` is ``[x0, x1, bottom, top]`` (matplotlib's
+    imshow convention, row 0 at ``top``); ``None`` uses cell indices.
+    """
+    values: list = field(default_factory=list)
+    extent: 'list | None' = None
+    cmap: str = 'viridis'
+    vmin: 'float | None' = None
+    vmax: 'float | None' = None
+    aspect: str = 'auto'
+    colorbar: bool = True
+    colorbar_label: str = ''
+    mask_color: str = '#ffffff00'
+    x_cell_labels: 'list | None' = None
+    y_cell_labels: 'list | None' = None
+
+    _KEYS = ('values', 'extent', 'cmap', 'vmin', 'vmax', 'aspect',
+             'colorbar', 'colorbar_label', 'mask_color',
+             'x_cell_labels', 'y_cell_labels')
+
+    def to_dict(self) -> dict:
+        d = {'values': [list(row) for row in self.values]}
+        if self.extent is not None:
+            d['extent'] = list(self.extent)
+        if self.cmap != 'viridis':
+            d['cmap'] = self.cmap
+        if self.vmin is not None:
+            d['vmin'] = self.vmin
+        if self.vmax is not None:
+            d['vmax'] = self.vmax
+        if self.aspect != 'auto':
+            d['aspect'] = self.aspect
+        if not self.colorbar:
+            d['colorbar'] = False
+        if self.colorbar_label:
+            d['colorbar_label'] = self.colorbar_label
+        if self.mask_color != '#ffffff00':
+            d['mask_color'] = self.mask_color
+        if self.x_cell_labels is not None:
+            d['x_cell_labels'] = list(self.x_cell_labels)
+        if self.y_cell_labels is not None:
+            d['y_cell_labels'] = list(self.y_cell_labels)
+        return d
+
+    @classmethod
+    def from_dict(cls, data, ctx='document.heatmap'):
+        data = _style_dict(data, ctx)
+        _unknown_style_keys(data, set(cls._KEYS), ctx)
+        if 'values' not in data:
+            raise _err(f"{ctx}.values: required")
+        values = _check_heatmap_values(data['values'], f"{ctx}.values")
+        o = cls(values=values)
+        ext = data.get('extent')
+        if ext is not None:
+            if not isinstance(ext, list) or len(ext) != 4 \
+                    or any(not _is_num(v) or not math.isfinite(v)
+                           for v in ext):
+                raise _err(f"{ctx}.extent: expected [x0, x1, bottom, top] "
+                           "of finite numbers")
+            x0, x1, y0, y1 = (float(v) for v in ext)
+            if x0 == x1 or y0 == y1:
+                raise _err(f"{ctx}.extent: x0/x1 and bottom/top must differ")
+            o.extent = [x0, x1, y0, y1]
+        cmap = data.get('cmap')
+        if cmap is not None:
+            if cmap not in _HEATMAP_CMAP_NAMES:
+                raise _err(f"{ctx}.cmap: unsupported {cmap!r}")
+            o.cmap = cmap
+        o.vmin = _style_num(data, 'vmin', ctx)
+        o.vmax = _style_num(data, 'vmax', ctx)
+        if o.vmin is not None and o.vmax is not None and o.vmin >= o.vmax:
+            raise _err(f"{ctx}: vmin must be less than vmax")
+        v = _style_choice(data, 'aspect', ctx, _HEATMAP_ASPECTS)
+        if v is not None:
+            o.aspect = v
+        v = data.get('colorbar')
+        if v is not None:
+            if not isinstance(v, bool):
+                raise _err(f"{ctx}.colorbar: expected true/false, "
+                           f"got {v!r}")
+            o.colorbar = v
+        v = _style_str(data, 'colorbar_label', ctx, MAX_TICK_LABEL)
+        if v is not None:
+            o.colorbar_label = v
+        if data.get('mask_color') is not None:
+            o.mask_color = _check_color(data['mask_color'],
+                                        f"{ctx}.mask_color")
+        ncols = len(values[0])
+        nrows = len(values)
+        xl = data.get('x_cell_labels')
+        yl = data.get('y_cell_labels')
+        if (xl is not None or yl is not None) and o.extent is not None:
+            raise _err(f"{ctx}: cell labels require extent to be null")
+        o.x_cell_labels = _check_cell_labels(
+            xl, ncols, f"{ctx}.x_cell_labels")
+        o.y_cell_labels = _check_cell_labels(
+            yl, nrows, f"{ctx}.y_cell_labels")
+        return o
+
+
 # ── annotations / brackets ──────────────────────────────────────────
 
 @dataclass
@@ -1425,6 +1590,7 @@ class LineSeries:
     # 'bars' draws capless error bars; 'band' a shaded y±err band.
     error_style: str = 'bars'
     error_alpha: float = 0.3
+    drawstyle: str = 'default'
 
     def to_dict(self) -> dict:
         d = {
@@ -1434,6 +1600,8 @@ class LineSeries:
             'linestyle': self.linestyle, 'marker': self.marker,
             'markersize_pt': self.markersize_pt,
         }
+        if self.drawstyle != 'default':
+            d['drawstyle'] = self.drawstyle
         if self.yerr is not None:
             d['yerr'] = [float(v) for v in self.yerr]
         if self.yerr_minus is not None:
@@ -1502,6 +1670,14 @@ class LineSeries:
             raise _err(f"{ctx}.error_alpha: expected 0 < value <= 1, "
                        f"got {ea!r}")
         s.error_alpha = float(ea)
+        ds = data.get('drawstyle', 'default')
+        if ds not in LINE_DRAWSTYLES:
+            raise _err(f"{ctx}.drawstyle: unsupported {ds!r}; one of "
+                       f"{LINE_DRAWSTYLES}")
+        if ds != 'default' and es == 'band':
+            raise _err(f"{ctx}.drawstyle: step lines cannot be combined "
+                       "with error_style 'band'")
+        s.drawstyle = ds
         return s
 
 
@@ -1534,6 +1710,7 @@ class PlotDocument:
     ridgeline: 'RidgeOptions | None' = None
     stacked: 'StackOptions | None' = None
     histogram: 'HistOptions | None' = None
+    heatmap: 'HeatmapOptions | None' = None
     annotations: list = field(default_factory=list)
     brackets: list = field(default_factory=list)
     bands: list = field(default_factory=list)
@@ -1590,7 +1767,8 @@ class PlotDocument:
             raise _err(f"{ctx}.legend_location: unsupported "
                        f"{self.legend_location!r}")
         owners = {'violin': 'violin', 'stacked': 'stacked_column',
-                  'ridgeline': 'ridgeline', 'histogram': 'histogram'}
+                  'ridgeline': 'ridgeline', 'histogram': 'histogram',
+                  'heatmap': 'heatmap'}
         if self.kind in ('line', 'ridgeline'):
             if not isinstance(self.series, list) or not self.series:
                 raise _err(f"{ctx}.series: at least one series is "
@@ -1600,9 +1778,10 @@ class PlotDocument:
                 if coll:
                     raise _err(f"{ctx}.{coll_name}: must be empty for "
                                f"kind {self.kind!r}")
-            blocked = ('violin', 'stacked', 'histogram') \
+            blocked = ('violin', 'stacked', 'histogram', 'heatmap') \
                 if self.kind == 'ridgeline' \
-                else ('violin', 'stacked', 'ridgeline', 'histogram')
+                else ('violin', 'stacked', 'ridgeline', 'histogram',
+                      'heatmap')
             for name in blocked:
                 if getattr(self, name) is not None:
                     raise _err(f"{ctx}.{name}: options only apply to "
@@ -1624,6 +1803,23 @@ class PlotDocument:
             if self.histogram is not None:
                 raise _err(f"{ctx}.histogram: options only apply to "
                            "kind 'histogram'")
+        if self.kind == 'heatmap':
+            if self.heatmap is None:
+                raise _err(f"{ctx}.heatmap: required for kind 'heatmap'")
+            for name in ('groups', 'categories', 'brackets'):
+                if getattr(self, name):
+                    raise _err(f"{ctx}.{name}: must be empty for kind "
+                               "'heatmap'")
+            if self.x_tick_labels is not None:
+                raise _err(f"{ctx}.x_tick_labels: use x_cell_labels in "
+                           "heatmap options")
+            for name in ('violin', 'ridgeline', 'stacked', 'histogram'):
+                if getattr(self, name) is not None:
+                    raise _err(f"{ctx}.{name}: options only apply to "
+                               f"kind '{owners[name]}'")
+        elif self.heatmap is not None:
+            raise _err(f"{ctx}.heatmap: options only apply to kind "
+                       "'heatmap'")
         if self.kind == 'stacked_column':
             if not self.categories:
                 raise _err(f"{ctx}.categories: at least one category "
@@ -1671,6 +1867,9 @@ class PlotDocument:
             if s.id in ids:
                 raise _err(f"{ctx}.series[{i}]: duplicate id {s.id!r}")
             ids.add(s.id)
+            if s.drawstyle != 'default' and self.kind != 'line':
+                raise _err(f"{ctx}.series[{i}].drawstyle: step lines "
+                           "only apply to kind 'line'")
             total += len(s.x)
         for i, g in enumerate(self.groups):
             if not isinstance(g, ViolinGroup):
@@ -1734,15 +1933,19 @@ class PlotDocument:
             if sp.id in span_ids:
                 raise _err(f"{ctx}.spans[{i}]: duplicate id {sp.id!r}")
             span_ids.add(sp.id)
+        if self.heatmap is not None:
+            total += sum(len(row) for row in self.heatmap.values)
         if total > MAX_TOTAL_POINTS:
             raise _err(f"{ctx}: too many data points ({total} > {MAX_TOTAL_POINTS})")
-        for name in ('violin', 'ridgeline', 'stacked', 'histogram'):
+        for name in ('violin', 'ridgeline', 'stacked', 'histogram',
+                     'heatmap'):
             opt = getattr(self, name)
             if opt is not None:
                 typ = {'violin': ViolinOptions,
                        'ridgeline': RidgeOptions,
                        'stacked': StackOptions,
-                       'histogram': HistOptions}[name]
+                       'histogram': HistOptions,
+                       'heatmap': HeatmapOptions}[name]
                 if not isinstance(opt, typ):
                     raise _err(f"{ctx}.{name}: expected {typ.__name__}"
                                f" or None")
@@ -1814,7 +2017,8 @@ class PlotDocument:
             d['groups'] = [g.to_dict() for g in self.groups]
         if self.categories:
             d['categories'] = [c.to_dict() for c in self.categories]
-        for name in ('violin', 'ridgeline', 'stacked', 'histogram'):
+        for name in ('violin', 'ridgeline', 'stacked', 'histogram',
+                     'heatmap'):
             opt = getattr(self, name)
             if opt is not None:
                 od = opt.to_dict()
@@ -1922,7 +2126,8 @@ class PlotDocument:
         for name, typ in (('violin', ViolinOptions),
                           ('ridgeline', RidgeOptions),
                           ('stacked', StackOptions),
-                          ('histogram', HistOptions)):
+                          ('histogram', HistOptions),
+                          ('heatmap', HeatmapOptions)):
             opt = data.get(name)
             if opt is not None:
                 setattr(d, name,

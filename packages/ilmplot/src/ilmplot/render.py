@@ -1391,6 +1391,49 @@ def _draw_histogram(document, ax, s):
                 line.set_gid(gid)
 
 
+def _heatmap_extent(opt):
+    if opt.extent is not None:
+        return tuple(opt.extent)
+    return (0.0, float(len(opt.values[0])), float(len(opt.values)), 0.0)
+
+
+def _draw_heatmap(document, ax, s):
+    """imshow grid of cells with an optional inset colorbar (kind 'heatmap').
+
+    The colorbar is a child of the image axes, so the plot frame stays the
+    image box and ``_fit_axes`` measures it with the other decorations.
+    """
+    import numpy as np
+    import matplotlib
+    opt = document.heatmap
+    data = np.ma.masked_invalid(np.array(
+        [[np.nan if v is None else v for v in row] for row in opt.values],
+        dtype=float))
+    cmap = matplotlib.colormaps[opt.cmap].copy()
+    cmap.set_bad(opt.mask_color)
+    im = ax.imshow(data, cmap=cmap, vmin=opt.vmin, vmax=opt.vmax,
+                   extent=_heatmap_extent(opt), origin='upper',
+                   interpolation='nearest', aspect=opt.aspect)
+    im.set_gid('ilmplot-heatmap')
+    if opt.extent is None:
+        if opt.x_cell_labels is not None:
+            ax.set_xticks([j + 0.5 for j in range(len(opt.x_cell_labels))],
+                          [safe_text(l) for l in opt.x_cell_labels])
+        if opt.y_cell_labels is not None:
+            ax.set_yticks([i + 0.5 for i in range(len(opt.y_cell_labels))],
+                          [safe_text(l) for l in opt.y_cell_labels])
+    if opt.colorbar:
+        cax = ax.inset_axes([1.03, 0.0, 0.04, 1.0])
+        cbar = ax.figure.colorbar(im, cax=cax)
+        cbar.ax.tick_params(labelsize=document.font_size_pt * s,
+                            length=3.5 * s, width=0.8 * s, pad=3.5 * s)
+        cbar.outline.set_linewidth(0.8 * s)
+        if opt.colorbar_label:
+            cbar.set_label(safe_text(opt.colorbar_label),
+                           **_text_kwargs(None, document.font_family,
+                                          document.font_size_pt, s))
+
+
 _ANCHOR_XY = {
     'upper left': (0.02, 0.98, 'left', 'top'),
     'upper center': (0.5, 0.98, 'center', 'top'),
@@ -1554,6 +1597,8 @@ def _build_figure(document: PlotDocument, s: float,
         _draw_stacked(document, ax, s)
     elif kind == 'histogram':
         _draw_histogram(document, ax, s)
+    elif kind == 'heatmap':
+        _draw_heatmap(document, ax, s)
     else:
         for sp_ in document.spans:
             # Full-height/width strips sit below everything (zorder 0.9):
@@ -1605,6 +1650,7 @@ def _build_figure(document: PlotDocument, s: float,
                 color=s_.color,
                 linewidth=max(s_.linewidth_pt * s, 1e-3),
                 linestyle='None' if s_.linewidth_pt == 0 else ls,
+                drawstyle=s_.drawstyle,
                 marker=s_.marker or None,
                 markersize=max(s_.markersize_pt * s, 0.0),
                 markeredgewidth=1.0 * s,
@@ -2405,6 +2451,7 @@ def _fit_axes(fig, ax, pad_px: float, fixed_y=None) -> None:
                 < 0.05:
             break
         ax.set_position([x0 / W, y0 / H, (x1 - x0) / W, (y1 - y0) / H])
+    ax.apply_aspect()
 
 
 def _fixed_y_px(fig, v_span_mm):

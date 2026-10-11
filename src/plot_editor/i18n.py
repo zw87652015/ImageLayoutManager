@@ -251,6 +251,10 @@ _STRINGS = {
                         'zh': '是否在关闭之前保存对“{name}”的更改？'},
     'msg_no_plot':     {'en': 'Create a plot before saving.',
                         'zh': '请先创建图表再保存。'},
+    'sheet_heatmap_readonly': {
+        'en': 'Heatmap data comes from the source image; the sheet is '
+              'read-only for this plot.',
+        'zh': '热力图数据来自源图像；此图的数据表为只读。'},
     'msg_launch_failed': {'en': 'Unable to launch Plot Editor.',
                           'zh': '无法启动图表编辑器。'},
     'msg_handoff_failed': {'en': 'Unable to pass the plot to Plot '

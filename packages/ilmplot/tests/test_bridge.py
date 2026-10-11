@@ -21,6 +21,8 @@ from matplotlib.ticker import (          # noqa: E402
 import ilmplot                           # noqa: E402
 from ilmplot import bridge               # noqa: E402
 from ilmplot import messages             # noqa: E402
+from ilmplot import render               # noqa: E402
+from ilmplot.render import _hist_bins    # noqa: E402
 from ilmplot.document import (           # noqa: E402
     PlotDocument, document_from_svg)
 
@@ -285,13 +287,156 @@ class ConvertTests(unittest.TestCase):
         fig, ax = plt.subplots()
         ax.barh([0, 1], [1, 2])
         res = bridge.convert(fig)
-        self.assertTrue(any('horizontal' in r for r in res.reasons))
+        self.assertFalse(res.reasons, res.reasons)
+        self.assertTrue(res.document.stacked.horizontal)
         plt.close(fig)
         fig, ax = plt.subplots()
         ax.bar([0, 1], [1, -2])
         res = bridge.convert(fig)
         self.assertTrue(any('negative' in r for r in res.reasons))
         plt.close(fig)
+
+    def test_barh_categorical_render_parity(self):
+        fig, ax = plt.subplots(figsize=(4, 3))
+        ax.barh(['a', 'b', 'c'], [1, 2, 3], height=0.5, color='#336699')
+        ax.set_xlabel('value')
+        ax.set_ylabel('group')
+        res = bridge.convert(fig)
+        self.assertFalse(res.reasons, res.reasons)
+        doc = res.document
+        self.assertEqual(doc.kind, 'stacked_column')
+        self.assertTrue(doc.stacked.horizontal)
+        self.assertEqual([l for _p, l in doc.x_tick_labels],
+                         ['a', 'b', 'c'])
+        self.assertEqual((doc.xlabel, doc.ylabel), ('value', 'group'))
+        _rfig, rax = render._build_figure(doc, 1.0, doc.width_mm,
+                                          doc.height_mm)
+        want = sorted((p.get_x(), p.get_x() + p.get_width(),
+                       p.get_y(), p.get_y() + p.get_height())
+                      for p in ax.containers[0].patches)
+        got = []
+        for patch in rax.patches:
+            if patch.get_gid() and patch.get_gid().startswith(
+                    'ilmplot-stack-'):
+                xy = patch.get_xy()
+                got.append((xy[:, 0].min(), xy[:, 0].max(),
+                            xy[:, 1].min(), xy[:, 1].max()))
+        np.testing.assert_allclose(sorted(got), want, rtol=1e-9,
+                                   atol=1e-9)
+        plt.close(fig)
+
+    def test_barh_xerr_reason(self):
+        fig, ax = plt.subplots()
+        ax.barh([0, 1], [1, 2], xerr=0.1)
+        res = bridge.convert(fig)
+        self.assertIsNone(res.document)
+        self.assertTrue(any('xerr' in r for r in res.reasons), res.reasons)
+        plt.close(fig)
+
+    def test_mixed_orientation_reason(self):
+        fig, ax = plt.subplots()
+        ax.bar([0, 1], [1, 2])
+        ax.barh([0, 1], [1, 2])
+        res = bridge.convert(fig)
+        self.assertIsNone(res.document)
+        self.assertTrue(any('cannot be mixed' in r for r in res.reasons),
+                        res.reasons)
+        plt.close(fig)
+
+    def test_step_drawstyles(self):
+        fig, ax = plt.subplots()
+        ax.step([0, 1, 2], [1, 3, 2], where='mid', label='m')
+        ax.plot([0, 1, 2], [1, 3, 2], drawstyle='steps-post')
+        ax.plot([0, 1, 2], [1, 3, 2], drawstyle='steps')
+        res = bridge.convert(fig)
+        self.assertFalse(res.reasons, res.reasons)
+        self.assertEqual([s.drawstyle for s in res.document.series],
+                         ['steps-mid', 'steps-post', 'steps-pre'])
+        plt.close(fig)
+
+    def test_hist_exact_counts(self):
+        rng = np.random.default_rng(3)
+        fig, ax = plt.subplots(figsize=(4, 3))
+        ax.hist(rng.normal(size=400), bins=12, color='#336699', label='g')
+        res = bridge.convert(fig)
+        self.assertFalse(res.reasons, res.reasons)
+        doc = res.document
+        self.assertEqual(doc.kind, 'histogram')
+        self.assertEqual(doc.histogram.bins, 12)
+        self.assertEqual(doc.groups[0].label, 'g')
+        rect = ax.containers[0].patches
+        edges, counts = _hist_bins(doc)
+        np.testing.assert_allclose(
+            edges, [p.get_x() for p in rect]
+            + [rect[-1].get_x() + rect[-1].get_width()], rtol=1e-12)
+        np.testing.assert_array_equal(counts[0],
+                                      [p.get_height() for p in rect])
+        plt.close(fig)
+
+    def test_hist_overlay_colours(self):
+        rng = np.random.default_rng(5)
+        edges = np.linspace(-3, 3, 7)
+        fig, ax = plt.subplots(figsize=(4, 3))
+        ax.hist(np.concatenate([[-2.9, 2.9], rng.normal(size=100)]),
+                bins=edges, alpha=0.5, color='#ff0000', label='a')
+        ax.hist(np.concatenate([[-2.9, 2.9], rng.normal(size=60)]),
+                bins=edges, alpha=0.5, color='#0000ff', label='b')
+        ax.legend()
+        res = bridge.convert(fig)
+        self.assertFalse(res.reasons, res.reasons)
+        doc = res.document
+        self.assertEqual([g.label for g in doc.groups], ['a', 'b'])
+        self.assertEqual([g.color for g in doc.groups],
+                         ['#ff0000', '#0000ff'])
+        self.assertEqual(doc.histogram.fill_alpha, 0.5)
+        _edges, counts = _hist_bins(doc)
+        for c, cont in zip(counts, ax.containers):
+            np.testing.assert_array_equal(
+                c, [p.get_height() for p in cont.patches])
+        plt.close(fig)
+
+    def test_hist_density_and_range_fallbacks(self):
+        rng = np.random.default_rng(7)
+        cases = (
+            (dict(bins=10, density=True), 'integer counts'),
+            (dict(bins=10, range=(-5, 5)), 'first or last histogram bin'),
+        )
+        for kw, text in cases:
+            fig, ax = plt.subplots()
+            ax.hist(rng.normal(size=200), **kw)
+            res = bridge.convert(fig)
+            plt.close(fig)
+            self.assertIsNone(res.document, kw)
+            self.assertTrue(any(text in r for r in res.reasons),
+                            (kw, res.reasons))
+
+    def test_hist_sample_cap_reason(self):
+        fig, ax = plt.subplots()
+        ax.hist(np.linspace(0, 1, 100_001), bins=2)
+        res = bridge.convert(fig)
+        plt.close(fig)
+        self.assertIsNone(res.document)
+        self.assertTrue(any('more than 100000' in r for r in res.reasons),
+                        res.reasons)
+
+    def test_hist_step_type_falls_back(self):
+        rng = np.random.default_rng(9)
+        fig, ax = plt.subplots()
+        ax.hist(rng.normal(size=100), bins=8, histtype='step')
+        res = bridge.convert(fig)
+        plt.close(fig)
+        self.assertIsNone(res.document)
+        self.assertTrue(res.reasons)
+
+    def test_boxplot_and_violinplot_reasons(self):
+        rng = np.random.default_rng(11)
+        for plot in ('boxplot', 'violinplot'):
+            fig, ax = plt.subplots()
+            getattr(ax, plot)([rng.normal(size=50), rng.normal(size=50)])
+            res = bridge.convert(fig)
+            plt.close(fig)
+            self.assertIsNone(res.document, plot)
+            self.assertTrue(res.reasons, plot)
 
     def test_bars_plus_line_reason(self):
         fig, ax = plt.subplots()

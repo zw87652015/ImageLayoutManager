@@ -1,14 +1,18 @@
 """Box/column+points/histogram/horizontal-bar chart-type tests."""
+import json
 import unittest
+from unittest import mock
 
 import matplotlib
 matplotlib.use('Agg')
 
-from ilmplot.document import (HistOptions, PlotDocument,
-                              PlotDocumentError, StackCategory,
-                              StackOptions, ViolinGroup, ViolinOptions,
-                              required_capabilities)
-from ilmplot.render import _hist_bins, element_regions, render_document
+from ilmplot import document as document_module
+from ilmplot.document import (HistOptions, LineSeries, PlotDocument,
+                              PlotDocumentError, PlotVersionError,
+                              StackCategory, StackOptions, ViolinGroup,
+                              ViolinOptions, required_capabilities)
+from ilmplot.render import (_build_figure, _hist_bins, element_regions,
+                            render_document)
 
 
 def _groups():
@@ -135,6 +139,63 @@ class CapabilityTests(unittest.TestCase):
     def test_histogram_kind(self):
         doc = _hist_doc(histogram=HistOptions(kde=True))
         self.assertIn('histogram', doc.to_dict()['requires'])
+
+    def test_step_lines(self):
+        doc = _step_doc()
+        self.assertEqual(required_capabilities(doc), ['step_lines'])
+        self.assertIn('step_lines', doc.to_dict()['requires'])
+        self.assertEqual(required_capabilities(PlotDocument()), [])
+
+
+def _step_doc(drawstyle='steps-pre'):
+    return PlotDocument(series=[LineSeries(
+        id='s0', label='s', x=[0., 1., 2.], y=[1., 3., 2.],
+        drawstyle=drawstyle)])
+
+
+class StepLineTests(unittest.TestCase):
+
+    def test_round_trip(self):
+        d = json.loads(json.dumps(_step_doc('steps-post').to_dict()))
+        self.assertEqual(d['series'][0]['drawstyle'], 'steps-post')
+        self.assertEqual(d['requires'], ['step_lines'])
+        back = PlotDocument.from_dict(d)
+        self.assertEqual(back.series[0].drawstyle, 'steps-post')
+        self.assertEqual(back.to_dict(), d)
+
+    def test_default_emits_nothing(self):
+        d = _step_doc('default').to_dict()
+        self.assertNotIn('drawstyle', d['series'][0])
+        self.assertNotIn('requires', d)
+
+    def test_old_reader_rejects(self):
+        d = _step_doc().to_dict()
+        old = document_module.CAPABILITIES - {'step_lines'}
+        with mock.patch.object(document_module, 'CAPABILITIES', old):
+            with self.assertRaises(PlotVersionError) as cm:
+                PlotDocument.from_dict(d)
+        self.assertEqual(cm.exception.missing, ['step_lines'])
+
+    def test_strict_values(self):
+        d = _step_doc().to_dict()
+        for bad in ('steps', 'linear', None):
+            d['series'][0]['drawstyle'] = bad
+            with self.assertRaises(PlotDocumentError, msg=repr(bad)):
+                PlotDocument.from_dict(d)
+
+    def test_kind_and_band_rules(self):
+        with self.assertRaises(PlotDocumentError):
+            PlotDocument(kind='ridgeline',
+                         series=_step_doc().series).validate()
+        banded = LineSeries(id='b', label='b', x=[0., 1.], y=[1., 2.],
+                            yerr=[.1, .1], error_style='band',
+                            drawstyle='steps-pre')
+        with self.assertRaises(PlotDocumentError):
+            PlotDocument(series=[banded]).validate()
+
+    def test_render_drawstyle(self):
+        _fig, ax = _build_figure(_step_doc('steps-mid'), 1.0, 90., 65.)
+        self.assertEqual(ax.lines[0].get_drawstyle(), 'steps-mid')
 
 
 class ValidateTests(unittest.TestCase):
