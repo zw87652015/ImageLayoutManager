@@ -2,12 +2,10 @@ from PyQt6.QtCore import QRectF
 from PyQt6.QtGui import QColor, QFont, QTextCursor, QTextFormat
 from PyQt6.QtWidgets import QGraphicsTextItem, QStyleOptionGraphicsItem
 
+from src.utils.typography_mode import uses_points  # noqa: F401
+
 PT_TO_MM = 25.4 / 72.0
 REFERENCE_PX = 96
-
-
-def uses_points(project):
-    return getattr(project, 'typography_mode', 'legacy') == 'points'
 
 
 def reference_font(family, weight='normal'):

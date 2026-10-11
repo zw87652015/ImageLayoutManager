@@ -13,9 +13,11 @@ from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
                        MAX_ANNOTATIONS, MAX_BANDS, MAX_BRACKETS,
                        MAX_SERIES, MAX_SPANS,
                        Annotation, Band, Bracket, HistOptions,
+                       LINE_DRAWSTYLES, MAX_TICK_LABEL,
                        PlotDocument, PlotStyle, RidgeOptions, Span,
                        StackOptions, ViolinOptions,
-                       _check_color, _check_limit, _is_num)
+                       _HEATMAP_CMAP_NAMES, _check_color, _check_limit,
+                       _is_num)
 
 
 class OverridesError(ValueError):
@@ -71,12 +73,12 @@ class SeriesOverride:
     """Per-series overrides keyed by Y column index; all None = unset."""
 
     __slots__ = ('label', 'color', 'linewidth_pt', 'linestyle', 'marker',
-                 'markersize_pt', 'error_style', 'error_alpha')
+                 'markersize_pt', 'error_style', 'error_alpha', 'drawstyle')
     _KEYS = __slots__
 
     def __init__(self, label=None, color=None, linewidth_pt=None,
                  linestyle=None, marker=None, markersize_pt=None,
-                 error_style=None, error_alpha=None):
+                 error_style=None, error_alpha=None, drawstyle=None):
         self.label = label
         self.color = color
         self.linewidth_pt = linewidth_pt
@@ -85,6 +87,7 @@ class SeriesOverride:
         self.markersize_pt = markersize_pt
         self.error_style = error_style
         self.error_alpha = error_alpha
+        self.drawstyle = drawstyle
 
     def is_empty(self):
         return all(getattr(self, k) is None for k in self._KEYS)
@@ -119,7 +122,55 @@ class SeriesOverride:
                                     ('bars', 'band'))
         s.error_alpha = _opt_num(data, 'error_alpha', ctx,
                                  lo=0, hi=1, lo_exclusive=True)
+        s.drawstyle = _opt_choice(data, 'drawstyle', ctx, LINE_DRAWSTYLES)
         return s
+
+
+class HeatmapOverride:
+    """Heatmap look overrides; ``None`` keeps the document's value."""
+
+    __slots__ = ('cmap', 'vmin', 'vmax', 'colorbar', 'colorbar_label',
+                 'aspect', 'mask_color')
+    _KEYS = __slots__
+
+    def __init__(self):
+        for name in self._KEYS:
+            setattr(self, name, None)
+
+    def is_empty(self):
+        return all(getattr(self, k) is None for k in self._KEYS)
+
+    def to_dict(self):
+        return {k: getattr(self, k) for k in self._KEYS
+                if getattr(self, k) is not None}
+
+    @classmethod
+    def from_dict(cls, data, ctx='overrides.heatmap'):
+        if not isinstance(data, dict):
+            raise _err(f"{ctx}: expected an object")
+        _unknown(data, set(cls._KEYS), ctx)
+        o = cls()
+        o.cmap = _opt_str(data, 'cmap', ctx)
+        if o.cmap is not None and o.cmap not in _HEATMAP_CMAP_NAMES:
+            raise _err(f"{ctx}.cmap: unsupported {o.cmap!r}")
+        o.vmin = _opt_num(data, 'vmin', ctx)
+        o.vmax = _opt_num(data, 'vmax', ctx)
+        if o.vmin is not None and o.vmax is not None \
+                and o.vmin >= o.vmax:
+            raise _err(f"{ctx}: vmin must be less than vmax")
+        o.colorbar = _opt_bool(data, 'colorbar', ctx)
+        o.colorbar_label = _opt_str(data, 'colorbar_label', ctx)
+        if o.colorbar_label is not None \
+                and len(o.colorbar_label) > MAX_TICK_LABEL:
+            raise _err(f"{ctx}.colorbar_label: too long")
+        o.aspect = _opt_choice(data, 'aspect', ctx, ('auto', 'equal'))
+        if data.get('mask_color') is not None:
+            try:
+                o.mask_color = _check_color(data['mask_color'],
+                                            f"{ctx}.mask_color")
+            except ValueError as e:
+                raise _err(str(e))
+        return o
 
 
 class PlotOverrides:
@@ -130,13 +181,13 @@ class PlotOverrides:
                  'palette_reverse', 'palette_colors', 'baked_item_colors',
                  'violin', 'ridgeline', 'stacked',
                  'histogram', 'annotations', 'brackets', 'bands',
-                 'bar_labels', 'spans', 'fills')
+                 'bar_labels', 'spans', 'fills', 'heatmap')
     _KEYS = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
              'xlim', 'ylim', 'style', 'series', 'palette',
              'palette_reverse', 'palette_colors', 'baked_item_colors',
              'violin', 'ridgeline', 'stacked',
              'histogram', 'annotations', 'brackets', 'bands',
-             'bar_labels', 'spans', 'fills')
+             'bar_labels', 'spans', 'fills', 'heatmap')
 
     def __init__(self):
         self.xlabel = None
@@ -167,6 +218,7 @@ class PlotOverrides:
         self.bar_labels = None
         self.spans = None
         self.fills = None
+        self.heatmap = None
 
     def is_empty(self):
         return (self.xlabel is None and self.ylabel is None
@@ -181,7 +233,7 @@ class PlotOverrides:
                 and not self.annotations
                 and not self.brackets and not self.bands
                 and not self.bar_labels and not self.spans
-                and not self.fills)
+                and not self.fills and self.heatmap is None)
 
     def to_dict(self):
         d = {}
@@ -220,6 +272,8 @@ class PlotOverrides:
             d['spans'] = [s.to_dict() for s in self.spans]
         if self.fills:
             d['fills'] = [f.to_dict() for f in self.fills]
+        if self.heatmap is not None and not self.heatmap.is_empty():
+            d['heatmap'] = self.heatmap.to_dict()
         return d
 
     @classmethod
@@ -338,6 +392,13 @@ class PlotOverrides:
                 if f.id in ids:
                     raise _err(f"{ctx}.fills: duplicate id {f.id!r}")
                 ids.add(f.id)
+        heat = data.get('heatmap')
+        if heat is not None:
+            try:
+                o.heatmap = HeatmapOverride.from_dict(
+                    heat, f"{ctx}.heatmap")
+            except ValueError as e:
+                raise _err(str(e))
         return o
 
 
@@ -370,6 +431,8 @@ def reset_element(overrides, key, y_column=None):
         overrides.palette_reverse = None
         overrides.palette_colors = None
         overrides.baked_item_colors = None
+    elif key == 'heatmap':
+        overrides.heatmap = None
     elif key.startswith(('series:', 'violin:', 'stack:', 'hist:')):
         if y_column is not None:
             overrides.series.pop(y_column, None)
@@ -505,7 +568,8 @@ def record_overrides_edit(worksheet, overrides, fn, commit,
 
 
 _SERIES_SEED_FIELDS = ('color', 'linewidth_pt', 'linestyle', 'marker',
-                       'markersize_pt', 'error_style', 'error_alpha')
+                       'markersize_pt', 'error_style', 'error_alpha',
+                       'drawstyle')
 
 
 def overrides_from_document(doc, items=None, chart_key=None):
@@ -649,10 +713,19 @@ def _heatmap_effective_document(base_doc, title, overrides, figure_size):
         doc.annotations = copy.deepcopy(overrides.annotations)
     if overrides.style is not None:
         doc.style = copy.deepcopy(overrides.style)
+    if overrides.heatmap is not None:
+        _apply_heatmap_override(doc, overrides.heatmap)
     if figure_size is not None:
         doc.width_mm = figure_size.width_mm
         doc.height_mm = figure_size.height_mm
     return doc.validate()
+
+
+def _apply_heatmap_override(doc, heatmap):
+    for name in HeatmapOverride._KEYS:
+        value = getattr(heatmap, name)
+        if value is not None:
+            setattr(doc.heatmap, name, value)
 
 
 def effective_document(base_doc, items, chart_key, title, overrides, *,
@@ -762,6 +835,8 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
                     doc.bands.append(band)
     doc.style = copy.deepcopy(overrides.style) \
         if overrides.style is not None else PlotStyle()
+    if overrides.heatmap is not None and doc.kind == 'heatmap':
+        _apply_heatmap_override(doc, overrides.heatmap)
     # Per-item label/colour overrides, keyed by Y column (the other
     # SeriesOverride fields only apply to line-kind series).
     from .palettes import custom_theme_missing, theme_colors
@@ -805,6 +880,10 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
                     entry.error_style = so.error_style
                 if so.error_alpha is not None:
                     entry.error_alpha = so.error_alpha
+                if entry.error_style == 'band':
+                    entry.drawstyle = 'default'
+                elif so.drawstyle is not None and kind == 'line':
+                    entry.drawstyle = so.drawstyle
     if figure_size is not None:
         doc.width_mm = figure_size.width_mm
         doc.height_mm = figure_size.height_mm

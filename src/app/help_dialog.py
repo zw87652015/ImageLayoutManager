@@ -163,7 +163,7 @@ Use a new tab (<code>Ctrl+T</code>) if you want to keep both layouts open.</p>
 <h3>Finding Your Way Around</h3>
 <ul>
   <li><b>Layers, left:</b> select cells and inspect the layout hierarchy.</li>
-  <li><b>Canvas, centre:</b> arrange the figure. Ctrl+wheel zooms; middle-button or Space+drag pans.</li>
+  <li><b>Canvas, centre:</b> arrange the figure. Ctrl+wheel or a two-finger pinch zooms; middle-button or Space+drag pans. The status bar's − / percentage / + / Fit controls zoom the current tab's canvas without a keyboard.</li>
   <li><b>Inspector, right:</b> edit project settings or the properties of the selected item.</li>
 </ul>
 <p>Canvas zoom and interface font zoom are separate. Neither changes the figure's physical dimensions.</p>
@@ -201,7 +201,7 @@ _GETTING_STARTED_HTML_ZH = """
 <h3>认识界面</h3>
 <ul>
   <li><b>左侧图层：</b>选择单元格、查看布局层级。</li>
-  <li><b>中间画布：</b>安排组合图。Ctrl+滚轮缩放；中键拖动或空格+拖动平移。</li>
+  <li><b>中间画布：</b>安排组合图。Ctrl+滚轮或双指捏合缩放；中键拖动或空格+拖动平移。状态栏的 − / 百分比 / + / 适合 按钮无需键盘即可缩放当前标签页的画布。</li>
   <li><b>右侧检查器：</b>编辑全局设置或所选对象的属性。</li>
 </ul>
 <p>画布缩放与界面字体缩放相互独立，都不会改变图的实际物理尺寸。</p>
@@ -496,6 +496,7 @@ _TYPOGRAPHY_HTML_EN = """
 <h2 style="margin-top:0">Match Text Sizes Across Panels</h2>
 <p>When charts come from different tools, matching the image sizes may still leave their lettering inconsistent. A <b>text-size group</b> links text that should use one size, such as the axis titles across several panels. Groups are shared across the <b>whole project</b>, including SVG and raster images. Assign matching text to the same group; use separate groups for roles that need different sizes.</p>
 <p>The group's target is in <b>points (pt) in the final figure</b>, not source pixels or screen pixels. ILM compensates for each panel's scale. Choose targets for your final figure size and submission requirements, not from a universal preset.</p>
+<p>With Reflow ON, a native plot's text keeps its Plot Editor point sizes; <b>Match Text Size…</b> shows them and can create a group at that size for other panels.</p>
 <h3>SVG Panels</h3>
 <ol>
   <li>Right-click an SVG image cell → <b>Match Text Size…</b>.</li>
@@ -541,6 +542,7 @@ _TYPOGRAPHY_HTML_ZH = """
 <h2 style="margin-top:0">统一各面板的文字大小</h2>
 <p>不同软件导出的图表，即使图片大小已经一致，文字仍可能大小不一。<b>文字大小组</b>用于关联需要采用同一字号的文字，例如几张图中的坐标轴标题。组在<b>整个工程</b>中共享，可包含 SVG 和位图。应统一的文字放入同一组；需要不同大小的文字分别建组。</p>
 <p>组目标字号是<b>最终成图中的磅值（pt）</b>，不是源图片像素或屏幕像素，ILM 会补偿面板缩放。请按最终成图尺寸和投稿要求选择目标，而不是套用一个通用数值。</p>
+<p>开启重排时，原生图表的文字保持绘图编辑器中的磅值；<b>匹配文字大小…</b>会显示这些字号，并可按该字号为其他面板新建一个组。</p>
 <h3>SVG 面板</h3>
 <ol>
   <li>右键 SVG 图片单元格 → <b>匹配文字大小…</b>。</li>

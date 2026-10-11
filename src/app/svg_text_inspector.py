@@ -22,7 +22,11 @@ from PyQt6.QtCore import Qt, pyqtSignal, QByteArray
 from PyQt6.QtGui import QPixmap, QPainter, QImage
 from PyQt6.QtSvg import QSvgRenderer
 
-from src.utils.svg_text_utils import get_svg_text_elements, get_svg_override_bytes_for_cell
+from src.utils.svg_text_utils import (format_text_size, get_svg_text_elements,
+                                      get_svg_override_bytes_for_cell,
+                                      svg_text_rows)
+from src.utils.editable_plot import plot_reflows
+from ilmplot.document import has_plot_metadata
 from src.model.data_model import SvgTextMember
 from src.app.i18n import tr
 from src.app.text_groups_widget import TextGroupsWidget, section_label
@@ -39,6 +43,7 @@ class SvgTextInspectorWindow(QDialog):
         self.svg_path = svg_path
         self.project = project
         self._cell = cell
+        self._sizes = {}
 
         self.setWindowTitle(tr("svgtxt_inspector_title"))
         self.setWindowFlags(
@@ -96,9 +101,15 @@ class SvgTextInspectorWindow(QDialog):
         # Section 1 — Elements list
         rv.addWidget(self._section_label(tr("svgtxt_elements_label")))
 
+        self._size_hint = QLabel()
+        self._size_hint.setWordWrap(True)
+        self._size_hint.setStyleSheet("color: #666;")
+        rv.addWidget(self._size_hint)
+
         self._elem_list = QListWidget()
         self._elem_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self._elem_list.setMinimumHeight(120)
+        self._elem_list.itemSelectionChanged.connect(self._update_size_button)
         rv.addWidget(self._elem_list, 2)
 
         # Assignment row (below elements): [combo] [Assign] [Remove]
@@ -107,14 +118,23 @@ class SvgTextInspectorWindow(QDialog):
         assign_row.addWidget(QLabel(tr("svgtxt_assign_to") + ":"))
         self._group_combo = QComboBox()
         self._group_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._group_combo.setMinimumContentsLength(8)
+        self._group_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         assign_row.addWidget(self._group_combo, 1)
         self._btn_assign = QPushButton(tr("svgtxt_assign_btn"))
         self._btn_assign.clicked.connect(self._on_assign)
         assign_row.addWidget(self._btn_assign)
+        rv.addLayout(assign_row)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(6)
         self._btn_ungroup = QPushButton(tr("svgtxt_remove_from_group_btn"))
         self._btn_ungroup.clicked.connect(self._on_ungroup)
-        assign_row.addWidget(self._btn_ungroup)
-        rv.addLayout(assign_row)
+        action_row.addWidget(self._btn_ungroup)
+        self._btn_size_group = QPushButton(tr("svgtxt_new_group_size_btn"))
+        self._btn_size_group.clicked.connect(self._on_new_group_at_size)
+        action_row.addWidget(self._btn_size_group)
+        action_row.addStretch(1)
+        rv.addLayout(action_row)
 
         # Divider
         div = QFrame()
@@ -129,7 +149,12 @@ class SvgTextInspectorWindow(QDialog):
         rv.addWidget(self._groups_widget, 1)
 
         splitter.addWidget(right)
-        splitter.setSizes([380, 500])
+        splitter.setChildrenCollapsible(False)
+        left.setMinimumWidth(300)
+        right.setMinimumWidth(380)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([480, 500])
 
     _section_label = staticmethod(section_label)
 
@@ -139,9 +164,29 @@ class SvgTextInspectorWindow(QDialog):
 
     def _refresh_all(self):
         self._refresh_preview()
+        self._refresh_size_hint()
         self._refresh_elements()
         self._refresh_group_combo()
         self._rebuild_group_rows()
+
+    def _refresh_size_hint(self):
+        native = self._cell is not None and has_plot_metadata(self.svg_path)
+        self._size_hint.setVisible(native)
+        if native:
+            on = plot_reflows(self.project, self._cell)
+            self._size_hint.setText(tr("svgtxt_size_reflow_on" if on
+                                       else "svgtxt_size_reflow_off"))
+
+    def _element_rows(self):
+        if self._cell is None:
+            return [{'key': e['key'], 'text': e['text'], 'size_pt': None}
+                    for e in get_svg_text_elements(self.svg_path)]
+        return svg_text_rows(self.project, self._cell)
+
+    def _update_size_button(self):
+        keys = self._selected_keys()
+        self._btn_size_group.setEnabled(
+            bool(keys) and self._sizes.get(keys[0]) is not None)
 
     def _refresh_preview(self):
         processed = get_svg_override_bytes_for_cell(self.project, self._cell) if self._cell else None
@@ -173,15 +218,18 @@ class SvgTextInspectorWindow(QDialog):
         sel_keys = {item.data(Qt.ItemDataRole.UserRole) for item in self._elem_list.selectedItems()}
         self._elem_list.blockSignals(True)
         self._elem_list.clear()
-        elements = get_svg_text_elements(self.svg_path)
         key_to_group = {
             m.element_key: g.name
             for g in self.project.svg_text_groups
             for m in g.members
             if m.svg_path == self.svg_path
         }
-        for el in elements:
+        self._sizes = {}
+        for el in self._element_rows():
             label = el['text'][:60]
+            if el['size_pt'] is not None:
+                self._sizes[el['key']] = round(el['size_pt'], 1)
+                label = f"{label} · {format_text_size(el['size_pt'])} pt"
             grp = key_to_group.get(el['key'])
             suffix = f"  [{grp}]" if grp else ""
             item = QListWidgetItem(f"{label}{suffix}")
@@ -190,6 +238,7 @@ class SvgTextInspectorWindow(QDialog):
             if el['key'] in sel_keys:
                 item.setSelected(True)
         self._elem_list.blockSignals(False)
+        self._update_size_button()
 
     def _refresh_group_combo(self):
         self._groups_widget.fill_combo(self._group_combo)
@@ -237,6 +286,16 @@ class SvgTextInspectorWindow(QDialog):
         self._refresh_elements()
         self._refresh_preview()
         self.groups_changed.emit()
+
+    def _on_new_group_at_size(self):
+        keys = self._selected_keys()
+        size = self._sizes.get(keys[0]) if keys else None
+        if size is None:
+            return
+        self._groups_widget.add_group(
+            name=tr("svgtxt_plot_group_name").format(
+                pt=format_text_size(size)),
+            font_size_pt=size)
 
     def _on_ungroup(self):
         keys = self._selected_keys()

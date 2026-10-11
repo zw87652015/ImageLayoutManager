@@ -9,6 +9,28 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.5.3", "2026-10-11", [
+        {"en": "Plot Editor: new Heatmap chart (Matrix group) built from the worksheet — each selected Y column becomes a matrix column — with colormap, reverse, value range, aspect, colour bar and blank-cell colour settings.",
+         "zh": "图表编辑器：新增热力图（“矩阵”分组），由工作表生成——每个所选 Y 列对应矩阵的一列——可设置配色、反转、数值范围、纵横比、色标和空白单元格颜色。"},
+        {"en": "Plot Editor: new Step Line chart in the Line group, with Pre, Mid or Post step style.",
+         "zh": "图表编辑器：“折线”分组新增阶梯线，可选前、中、后三种阶梯样式。"},
+        {"en": "Native plots now come in from matplotlib more often: histograms, step lines, horizontal bars and imshow/pcolormesh heatmaps stay editable instead of falling back to plain SVG.",
+         "zh": "从 matplotlib 导入的原生图表支持更多类型：直方图、阶梯线、条形图以及 imshow/pcolormesh 热力图可保持可编辑，不再退回为普通 SVG。"},
+        {"en": "Match Text Size now shows the final point size of every text in an SVG, and can create a group at a chosen size. With Reflow ON, a native plot's text keeps its Plot Editor point sizes.",
+         "zh": "“匹配文字大小”现在会显示 SVG 中每段文字的最终磅值，并可按所选字号新建组。开启重排时，原生图表文字保持绘图编辑器中的磅值。"},
+        {"en": "The Inspector lists a reflowing plot's text sizes by role (title, axis labels, ticks, legend…) and opens Match Text Size… from there.",
+         "zh": "检查器按角色（标题、坐标轴标签、刻度、图例等）列出重排图表的文字字号，并可从这里打开“匹配文字大小…”。"},
+        {"en": "PDF export lets you choose Lossless (original pixels; JPEG sources are embedded as-is) or Compressed JPEG at an adjustable quality, and reports anything that could not be kept lossless. The command line has matching --pdf-images and --pdf-quality options.",
+         "zh": "导出 PDF 时可选择无损（原始像素，JPEG 源文件原样嵌入）或可调质量的 JPEG 压缩，并会提示未能保持无损的内容。命令行新增对应的 --pdf-images 和 --pdf-quality 选项。"},
+        {"en": "PNG export (and Plot Editor export) can now save with a transparent background; pick it in the save dialog's file type.",
+         "zh": "PNG 导出（含图表编辑器导出）现在可保存为透明背景，在保存对话框的文件类型中选择即可。"},
+        {"en": "The status bar has touch-friendly zoom controls (−, percentage presets, +, Fit), the View menu gained zoom commands, and the canvas zooms with a two-finger pinch.",
+         "zh": "状态栏新增适合触控的缩放控件（−、百分比预设、+、适合），“视图”菜单新增缩放命令，画布支持双指捏合缩放。"},
+        {"en": "Colour themes you save now travel with the plot file, so a plot keeps its colours when opened on another computer.",
+         "zh": "保存的颜色主题现在会随图表文件一同保存，在其他电脑上打开时图表颜色保持不变。"},
+        {"en": "Plots that use Heatmap or Step Line need 3.5.3 or later to edit; older versions still show them as saved and say that an update is needed.",
+         "zh": "使用热力图或阶梯线的图表需要 3.5.3 或更高版本才能编辑；旧版本仍按保存时的样子显示，并提示需要更新。"},
+    ]),
     ("3.5.2", "2026-10-07", [
         {"en": "Plot Editor: new Box plot and Column + Points charts (bars of the mean with SD or SEM error bars and every data point) in the Distribution group, alongside Violin.",
          "zh": "图表编辑器：“分布”分组新增箱线图和“柱状 + 散点”（均值柱 + SD/SEM 误差线 + 全部数据点），与小提琴图并列。"},

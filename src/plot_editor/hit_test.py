@@ -76,7 +76,24 @@ def pick(regions, fx, fy):
     hit = _pick_map(regions.get('stacks'), fx, fy, 'stack:')
     if hit:
         return hit
-    return _pick_map(regions.get('hists'), fx, fy, 'hist:')
+    hit = _pick_map(regions.get('hists'), fx, fy, 'hist:')
+    if hit:
+        return hit
+    if any(rect_hit(entry.get('bbox'), fx, fy)
+           for entry in (regions.get('heatmaps') or {}).values()):
+        return 'heatmap'
+    return None
+
+
+def heatmap_bbox(regions):
+    """Union of the heatmap image and colour bar boxes, or None."""
+    boxes = [entry.get('bbox') for entry in
+             (regions or {}).get('heatmaps', {}).values()]
+    boxes = [b for b in boxes if b]
+    if not boxes:
+        return None
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
 
 
 def pick_series(series, x, y, tol):

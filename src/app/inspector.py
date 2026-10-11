@@ -14,6 +14,7 @@ from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
 from src.app.wheel_guard import install_wheel_guard
 from src.utils import mark_geometry
+from src.utils.svg_text_utils import format_text_size
 
 
 # Sentinel for "mixed values across a multi-selection". Inspector helpers
@@ -748,6 +749,7 @@ class ReflowCard(QFrame):
 class Inspector(QWidget):
     # Signals for property changes
     cell_property_changed = pyqtSignal(dict) # {property: value}
+    match_text_size_requested = pyqtSignal(str)  # cell id
     text_property_changed = pyqtSignal(dict) # {property: value}
     row_property_changed = pyqtSignal(dict) # {property: value}
     project_property_changed = pyqtSignal(dict) # {property: value}
@@ -1293,6 +1295,8 @@ class Inspector(QWidget):
         )
         self.layout.addWidget(self.reflow_card)
         self.reflow_card.hide()
+        self._plot_text_summary = None
+        self._plot_text_cell_id = None
 
         self.layout.addWidget(self.cell_group)
         self.layout.addWidget(self.scale_bar_group)
@@ -1319,6 +1323,15 @@ class Inspector(QWidget):
             lambda v: self.cell_property_changed.emit({"svg_normalize_text_pt": v})
         )
         _svg_norm_layout.addRow(self._fl("lbl_svg_normalize_pt"), self.svg_normalize_pt)
+
+        self.reflow_text_label = QLabel()
+        self.reflow_text_label.setWordWrap(True)
+        self.reflow_text_label.hide()
+        _svg_norm_layout.addRow(self.reflow_text_label)
+        self.reflow_text_btn = QPushButton(tr("btn_match_text_size"))
+        self.reflow_text_btn.setToolTip(tr("tip_match_text_size"))
+        self.reflow_text_btn.clicked.connect(self._on_match_text_size_clicked)
+        _svg_norm_layout.addRow(self.reflow_text_btn)
 
         self.layout.addWidget(self.svg_normalize_group)
         self.svg_normalize_group.hide()
@@ -2206,6 +2219,9 @@ class Inspector(QWidget):
         self.scale_bar_group.set_title(tr("grp_scale_bar"))
         self.svg_normalize_group.set_title(tr("grp_svg_normalize"))
         self.reflow_card.retranslate()
+        self.reflow_text_btn.setText(tr("btn_match_text_size"))
+        self.reflow_text_btn.setToolTip(tr("tip_match_text_size"))
+        self._refresh_plot_text()
         self.svg_normalize_chk.setText(tr("chk_svg_normalize"))
         self.svg_normalize_chk.setToolTip(tr("tip_svg_normalize"))
 
@@ -3086,6 +3102,7 @@ class Inspector(QWidget):
         self.multi_label.hide()
         # The reflow hero card only lives in the 'cell' branch.
         self.reflow_card.hide()
+        self._reset_plot_text()
 
         if item_type == 'multi_cell':
             self.no_selection_label.hide()
@@ -3618,16 +3635,21 @@ class Inspector(QWidget):
     def _populate_svg_normalize_section(self, data: dict) -> None:
         """Show/populate the SVG text normalization group; hide it for non-SVG cells."""
         if not data:
+            self._reset_plot_text()
             self.svg_normalize_group.hide()
             return
         img_path = data.get("image_path") or ""
         if not img_path.lower().endswith(".svg"):
+            self._reset_plot_text()
             self.svg_normalize_group.hide()
             return
         self.blockSignals(True)
         self.svg_normalize_chk.setChecked(bool(data.get("svg_normalize_text", False)))
         self.svg_normalize_pt.setValue(float(data.get("svg_normalize_text_pt", 8.0)))
         self.blockSignals(False)
+        self._plot_text_summary = data.get("_plot_text_sizes")
+        self._plot_text_cell_id = data.get("id")
+        self._refresh_plot_text()
         self.svg_normalize_group.show()
 
     def _populate_reflow_card(self, data: dict) -> None:
@@ -3640,6 +3662,36 @@ class Inspector(QWidget):
         self.reflow_card.set_state(bool(data.get("plot_reflow", False)),
                                    blocked)
         self.reflow_card.show()
+
+    def _reset_plot_text(self):
+        self._plot_text_summary = None
+        self._plot_text_cell_id = None
+        self._refresh_plot_text()
+
+    def _refresh_plot_text(self):
+        summary = self._plot_text_summary
+        if not summary:
+            self.reflow_text_label.hide()
+            return
+        sizes_by_role = {}
+        for role, size, _count, _example in summary:
+            sizes_by_role.setdefault(role, []).append(size)
+        lines = [tr("plot_text_sizes_header")]
+        for role, sizes in sizes_by_role.items():
+            lines.append(tr("plot_text_role_line").format(
+                role=tr(f"plot_text_role_{role}"),
+                sizes=' / '.join(format_text_size(s) for s in sizes)))
+        self.reflow_text_label.setText('\n'.join(lines))
+        self.reflow_text_label.setToolTip('\n'.join(
+            tr("plot_text_role_tip_line").format(
+                role=tr(f"plot_text_role_{role}"), pt=format_text_size(size),
+                count=count, example=example)
+            for role, size, count, example in summary))
+        self.reflow_text_label.show()
+
+    def _on_match_text_size_clicked(self):
+        if self._plot_text_cell_id:
+            self.match_text_size_requested.emit(self._plot_text_cell_id)
 
     def _populate_scale_bar_section(self, data: dict):
         """Populate the collapsible scale bar group with data from a Cell or PiPItem."""

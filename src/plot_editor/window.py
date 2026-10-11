@@ -200,6 +200,8 @@ class PlotEditorWindow(QMainWindow):
         self.editor_actions['add_fill'].setEnabled(
             ready and CHART_KIND.get(tab.plot.chart_key,
                                      ('line', None))[0] == 'line')
+        self._theme_menu.menuAction().setEnabled(
+            ready and not tab.is_heatmap())
         self._export_button.setEnabled(ready)
         self._export_button.setIcon(chrome.themed_icon(
             'export', self._theme, 'on_accent' if ready else 'text_tert'))

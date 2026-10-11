@@ -21,7 +21,7 @@ from .overrides import (PlotOverrides, assign_palette,
 from .plot_canvas import PlotCanvas
 from .export import CHART_KIND
 from .plot_data import (PlotSelectionError, build_categories,
-                        build_groups, build_series)
+                        build_groups, build_matrix, build_series)
 from .plot_file import (PlotFileError, chart_from_document,
                         items_from_document, save_plot_file)
 from ilmplot.document import PlotDocumentError
@@ -42,6 +42,8 @@ def _build_items(worksheet, columns, chart_key):
         return build_groups(worksheet, columns)
     if kind == 'stacked_column':
         return build_categories(worksheet, columns)
+    if kind == 'heatmap':
+        return [build_matrix(worksheet, columns)]
     return build_series(worksheet, columns)
 
 
@@ -208,10 +210,7 @@ class PlotTab(QSplitter):
         """The styled ``PlotDocument`` for preview/save/export, or None."""
         if self.plot is None:
             return None
-        keeps_base = self.plot.legacy_base or (
-            self.plot.document is not None
-            and self.plot.document.kind == 'heatmap')
-        base = self.plot.document if keeps_base else None
+        base = self.plot.document if self.plot.legacy_base else None
         return effective_document(base, self.plot.series,
                                   self.plot.chart_key, self.plot_title,
                                   self.overrides,
@@ -514,9 +513,10 @@ class PlotTab(QSplitter):
                 self.plot.chart_key, ('line', None))[0] == 'line':
             menu.addAction(tr('act_add_fill'), self.add_fill)
         menu.addSeparator()
-        theme_menu = menu.addMenu(tr('menu_colour_theme'))
-        self.fill_theme_menu(theme_menu)
-        menu.addSeparator()
+        if not self.is_heatmap():
+            theme_menu = menu.addMenu(tr('menu_colour_theme'))
+            self.fill_theme_menu(theme_menu)
+            menu.addSeparator()
         if key and key != 'frame':
             menu.addAction(
                 tr('ctx_edit'),
@@ -530,6 +530,13 @@ class PlotTab(QSplitter):
         menu.exec(global_pos)
 
     # ── colour themes ─────────────────────────────────────────────────
+
+    def is_heatmap(self):
+        if self.plot is None:
+            return False
+        doc = self.plot.document
+        return CHART_KIND.get(self.plot.chart_key, ('line', None))[0] \
+            == 'heatmap' or (doc is not None and doc.kind == 'heatmap')
 
     def effective_theme(self):
         """The palette ref in force: override, else the chart default."""
@@ -546,7 +553,7 @@ class PlotTab(QSplitter):
             theme_display_name
         from .style_icons import palette_strip
         menu.clear()
-        if self.plot is None:
+        if self.plot is None or self.is_heatmap():
             return
         current = self.effective_theme()
         for name in list(THEMES):
@@ -713,6 +720,7 @@ class PlotTab(QSplitter):
         target.brackets = source.brackets
         target.bands = source.bands
         target.bar_labels = source.bar_labels
+        target.heatmap = source.heatmap
 
     def _on_worksheet_event(self, event):
         if event == ('history',):
@@ -792,7 +800,7 @@ class PlotTab(QSplitter):
             series = items_from_document(pf.document)
         self.plot = PlotState(series, chart, columns, pf.document,
                               legacy_base=not pf.has_worksheet)
-        if pf.document.kind == 'heatmap':
+        if pf.document.kind == 'heatmap' and not pf.has_worksheet:
             self.worksheet_view.setEnabled(False)
             self.worksheet_view.setToolTip(tr('sheet_heatmap_readonly'))
         # Node v2 carries the overrides; older/ILM files seed them from

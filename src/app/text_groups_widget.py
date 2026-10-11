@@ -139,9 +139,22 @@ class TextGroupsWidget(QWidget):
         install_button_feedback(row)
         return row
 
-    def _on_add_group(self):
-        g = SvgTextGroup(name=tr("svgtxt_default_group_name"), font_size_pt=12.0)
+    def add_group(self, name=None, font_size_pt=12.0) -> str:
+        """Append a group and return its id; a given *name* is made unique."""
+        if name is None:
+            name = tr("svgtxt_default_group_name")
+        else:
+            taken = {x.name for x in self.project.svg_text_groups}
+            base, n = name, 2
+            while name in taken:
+                name = f"{base} {n}"
+                n += 1
+        g = SvgTextGroup(name=name, font_size_pt=font_size_pt)
         self.project.svg_text_groups.append(g)
         self.refresh()
         self.group_added.emit(g.id)
         self.groups_changed.emit()
+        return g.id
+
+    def _on_add_group(self):
+        self.add_group()

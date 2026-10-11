@@ -33,12 +33,12 @@ from .i18n import tr
 from .style_icons import palette_strip, style_icon
 from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
                        ANNOTATION_ANCHORS, AxisStyle, FrameStyle,
-                       GridStyle, HistOptions, LegendStyle,
-                       RidgeOptions, StackOptions, TextStyle,
-                       TitleStyle, ViolinOptions)
+                       GridStyle, HEATMAP_CMAPS, HistOptions,
+                       LegendStyle, RidgeOptions, StackOptions,
+                       TextStyle, TitleStyle, ViolinOptions)
 from . import palettes
 from .palettes import THEMES, theme_display_key
-from .overrides import (SeriesOverride, assign_palette,
+from .overrides import (HeatmapOverride, SeriesOverride, assign_palette,
                         assign_palette_reverse, clear_palette,
                         parse_axis_limits, reset_element, static_bands)
 from .note_text import MAX_NOTE_TEXT, expand_newline_escapes
@@ -75,7 +75,7 @@ def violin_panel_keys(body):
 _TITLES = {'title': 'panel_title', 'xlabel': 'panel_xlabel',
            'ylabel': 'panel_ylabel', 'xticks': 'panel_xticks',
            'yticks': 'panel_yticks', 'legend': 'panel_legend',
-           'frame': 'panel_frame'}
+           'frame': 'panel_frame', 'heatmap': 'panel_heatmap'}
 _ANCHOR_KEYS = {a: 'anchor_' + a.replace(' ', '_')
                 for a in ANNOTATION_ANCHORS}
 
@@ -764,6 +764,8 @@ class ElementPanel(QFrame):
             self._build_legend(form)
         elif key == 'frame':
             self._build_frame(form)
+        elif key == 'heatmap':
+            self._build_heatmap(form)
         elif key.startswith('series:'):
             self._build_series(form, key[7:])
         elif key.startswith('violin:'):
@@ -1112,6 +1114,40 @@ class ElementPanel(QFrame):
                            so().markersize_pt is not None
                            else (ds.markersize_pt if ds else 6.0))))
 
+        if doc is not None and doc.kind == 'line':
+            step_vals = ['default', 'steps-pre', 'steps-mid', 'steps-post']
+
+            def eff_ds():
+                if so() is not None and so().drawstyle is not None:
+                    return so().drawstyle
+                return ds.drawstyle if ds is not None else 'default'
+
+            def eff_es():
+                if so() is not None and so().error_style is not None:
+                    return so().error_style
+                return ds.error_style if ds is not None else 'bars'
+
+            step_combo = self._combo(
+                [tr('step_off'), tr('step_pre'), tr('step_mid'),
+                 tr('step_post')],
+                step_vals, eff_ds(),
+                lambda o, v: setattr(get(o), 'drawstyle', v))
+
+            def sync_step():
+                step_combo.blockSignals(True)
+                step_combo.setCurrentIndex(step_vals.index(eff_ds()))
+                step_combo.blockSignals(False)
+                banded = eff_es() == 'band'
+                step_combo.setEnabled(not banded)
+                step_combo.setToolTip(tr('tip_step_band') if banded else '')
+
+            self._row(form, tr('row_step_style'), step_combo,
+                      is_set=lambda: so() is not None
+                      and so().drawstyle is not None,
+                      reset=lambda o: setattr(get(o), 'drawstyle', None),
+                      sync=sync_step)
+            sync_step()
+
         if ds is not None and doc is not None and doc.kind == 'line' \
                 and (ds.yerr is not None
                      or ds.yerr_minus is not None):
@@ -1160,6 +1196,91 @@ class ElementPanel(QFrame):
 
         if doc is not None and doc.kind == 'ridgeline':
             self._build_ridgeline_section(form)
+
+    def _build_heatmap(self, form):
+        tab = self._tab
+        doc = self._doc()
+        base = doc.heatmap if doc is not None else None
+        if base is None:
+            return
+        def cur(name):
+            hm = tab.overrides.heatmap
+            v = getattr(hm, name, None) if hm is not None else None
+            return v if v is not None else getattr(base, name)
+
+        def ho(o):
+            if o.heatmap is None:
+                o.heatmap = HeatmapOverride()
+            return o.heatmap
+
+        values = [v for row in base.values for v in row if v is not None]
+        auto_lo = min(values) if values else 0.0
+        auto_hi = max(values) if values else 1.0
+        lo_now = cur('vmin') if cur('vmin') is not None else auto_lo
+        hi_now = cur('vmax') if cur('vmax') is not None else auto_hi
+        is_auto = cur('vmin') is None and cur('vmax') is None
+
+        name = cur('cmap')
+        reverse = name.endswith('_r')
+        rev = None
+        combo = self._combo(
+            list(HEATMAP_CMAPS), list(HEATMAP_CMAPS),
+            name[:-2] if reverse else name,
+            lambda o, v: setattr(ho(o), 'cmap',
+                                 v + ('_r' if rev.isChecked() else '')))
+        rev = self._checkbox(tr('row_reverse'), reverse,
+                             lambda o, on: setattr(
+                                 ho(o), 'cmap',
+                                 combo.currentData()
+                                 + ('_r' if on else '')))
+        form.addRow(tr('row_colormap'), combo)
+        form.addRow('', rev)
+
+        lo = self._spin(lo_now, -1e9, 1e9, step=0.1, decimals=3)
+        hi = self._spin(hi_now, -1e9, 1e9, step=0.1, decimals=3)
+
+        def set_range(o, a, b):
+            ov = ho(o)
+            ov.vmin = a
+            ov.vmax = b
+
+        def range_changed():
+            a, b = lo.value(), hi.value()
+            bad = not a < b
+            self._set_invalid(lo, bad)
+            self._set_invalid(hi, bad)
+            if not bad:
+                self._apply_now(lambda o: set_range(o, a, b))
+
+        lo.valueChanged.connect(lambda _v: range_changed())
+        hi.valueChanged.connect(lambda _v: range_changed())
+        auto = self._checkbox(
+            tr('row_auto_range'), is_auto,
+            lambda o, on: (setattr(ho(o), 'vmin', None),
+                           setattr(ho(o), 'vmax', None)) if on
+            else set_range(o, lo.value(), hi.value()))
+        form.addRow(tr('row_value_min'), lo)
+        form.addRow(tr('row_value_max'), hi)
+        form.addRow('', auto)
+
+        form.addRow(tr('row_aspect'), self._combo(
+            [tr('aspect_fill'), tr('aspect_equal')], ['auto', 'equal'],
+            cur('aspect'), lambda o, v: setattr(ho(o), 'aspect', v)))
+        form.addRow('', self._checkbox(
+            tr('row_colorbar'), cur('colorbar'),
+            lambda o, on: setattr(ho(o), 'colorbar', on)))
+
+        label = QLineEdit(cur('colorbar_label'))
+        label.editingFinished.connect(lambda: self._apply_now(
+            lambda o: setattr(ho(o), 'colorbar_label', label.text())))
+        form.addRow(tr('row_colorbar_label'), label)
+
+        mask_rgb = self._split_alpha(cur('mask_color'))[0]
+        self._color_row(
+            tr('row_blank_colour'), mask_rgb,
+            lambda o, c: setattr(ho(o), 'mask_color', self._join_alpha(
+                c, self._split_alpha(cur('mask_color'))[1])),
+            None, form=form)
 
     def _build_ridgeline_section(self, form):
         """Ridgeline option rows bound to ``overrides.ridgeline``."""

@@ -34,7 +34,7 @@ WORKSHEET_SCHEMA_VERSION = 2
 WORKSHEET_CAPABILITIES = frozenset(
     {'bands', 'error_band', 'spans', 'fills', 'box_plot',
      'column_points', 'histogram', 'horizontal_bars',
-     'sample_counts'})
+     'sample_counts', 'step_lines', 'heatmap'})
 
 _CHART_KEYS = {c.key for g in CHART_GROUPS for c in g.charts}
 _COLUMN_KEYS = ('designation', 'long_name', 'units', 'comments', 'values')
@@ -120,6 +120,13 @@ def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None,
         req.append('column_points')
     if chart_key in HORIZONTAL_CHARTS:
         req.append('horizontal_bars')
+    if chart_key == 'step_line' or any(
+            getattr(so, 'drawstyle', None) is not None
+            for so in getattr(overrides, 'series', {}).values()):
+        req.append('step_lines')
+    if chart_key == 'heatmap' \
+            or getattr(overrides, 'heatmap', None) is not None:
+        req.append('heatmap')
     hd_ = {}
     if overrides is not None and overrides.histogram is not None:
         hd_ = overrides.histogram.to_dict()
@@ -378,6 +385,9 @@ def chart_from_document(doc):
         if horizontal:
             return 'stacked_bar_pct' if pct else 'stacked_bar'
         return 'stacked_column_pct' if pct else 'stacked_column'
+    if doc.series and all(s.drawstyle != 'default' and not s.marker
+                          for s in doc.series):
+        return 'step_line'
     s = doc.series[0]
     if not s.linestyle:
         return 'pure_scatters'

@@ -3,6 +3,8 @@
 import math
 from dataclasses import dataclass
 
+from ilmplot.document import MAX_HEATMAP_DIM, MAX_TOTAL_POINTS
+
 from .i18n import tr
 from .worksheet import column_name, format_cell
 
@@ -187,6 +189,51 @@ class Category:
     yerr: tuple | None = None
     yerr_minus: tuple | None = None
     yerr_plus: tuple | None = None
+
+
+@dataclass(frozen=True)
+class Matrix:
+    """Heatmap grid: one row per sheet row, one column per Y column.
+
+    ``rows[i][j]`` is None for a blank or non-numeric cell.
+    """
+    rows: tuple
+    row_labels: tuple
+    col_labels: tuple
+    x_label: str
+    y_label: str
+    y_columns: tuple
+
+
+def build_matrix(worksheet, selected_columns):
+    cols, ys = _selected_ys(worksheet, selected_columns)
+    lc = _label_column(worksheet, cols, ys[0])
+    rows = [r for r in range(worksheet.row_count)
+            if any(isinstance(worksheet.value(yc, r), float)
+                   for yc in ys)]
+    if not rows:
+        raise PlotSelectionError(tr('err_no_numeric'))
+    if len(rows) > MAX_HEATMAP_DIM or len(ys) > MAX_HEATMAP_DIM:
+        raise PlotSelectionError(tr('err_matrix_size', rows=len(rows),
+                                    cols=len(ys), limit=MAX_HEATMAP_DIM))
+    if len(rows) * len(ys) > MAX_TOTAL_POINTS:
+        raise PlotSelectionError(tr('err_matrix_cells',
+                                    cells=len(rows) * len(ys),
+                                    limit=MAX_TOTAL_POINTS))
+    cells = tuple(
+        tuple(v if isinstance(v, float) and math.isfinite(v) else None
+              for v in (worksheet.value(yc, r) for yc in ys))
+        for r in rows)
+    if lc is not None:
+        row_labels = tuple(format_cell(worksheet.value(lc, r))
+                           for r in rows)
+        y_label = _axis_title(worksheet.column(lc), lc)
+    else:
+        row_labels = tuple(str(i + 1) for i in range(len(rows)))
+        y_label = ''
+    col_labels = tuple(_group_label(worksheet.column(yc), yc)
+                       for yc in ys)
+    return Matrix(cells, row_labels, col_labels, '', y_label, tuple(ys))
 
 
 def _selected_ys(worksheet, selected_columns):

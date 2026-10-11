@@ -654,6 +654,24 @@ class MainWindow(QMainWindow):
         self._lang_action.triggered.connect(self._on_toggle_language)
         self._view_menu.addAction(self._lang_action)
 
+        # ── Canvas zoom (menu only; no shortcuts, Ctrl +/- stay on the canvas and UI font zoom) ──
+        self._view_menu.addSeparator()
+        self._act_canvas_zoom_in = QAction(tr("action_canvas_zoom_in"), self)
+        self._act_canvas_zoom_in.triggered.connect(lambda: self._zoom_current_view(CanvasView.zoom_in))
+        self._view_menu.addAction(self._act_canvas_zoom_in)
+
+        self._act_canvas_zoom_out = QAction(tr("action_canvas_zoom_out"), self)
+        self._act_canvas_zoom_out.triggered.connect(lambda: self._zoom_current_view(CanvasView.zoom_out))
+        self._view_menu.addAction(self._act_canvas_zoom_out)
+
+        self._act_canvas_fit_page = QAction(tr("action_canvas_fit_page"), self)
+        self._act_canvas_fit_page.triggered.connect(lambda: self._zoom_current_view(CanvasView.zoom_to_fit))
+        self._view_menu.addAction(self._act_canvas_fit_page)
+
+        self._act_canvas_actual_size = QAction(tr("action_canvas_actual_size"), self)
+        self._act_canvas_actual_size.triggered.connect(lambda: self._zoom_current_view(CanvasView.zoom_to_100))
+        self._view_menu.addAction(self._act_canvas_actual_size)
+
         # ── UI font zoom (Ctrl/Cmd + / - / 0) ──
         self._view_menu.addSeparator()
         self._act_font_zoom_in = QAction(tr("action_font_zoom_in"), self)
@@ -1199,7 +1217,6 @@ class MainWindow(QMainWindow):
         self.mouse_pos_label = QLabel("")
         self.selection_info_label = QLabel("")
         self.canvas_size_label = QLabel("Canvas: -")
-        self.zoom_label = QLabel("Zoom: 100%")
 
         def _status_divider() -> QFrame:
             f = QFrame()
@@ -1252,11 +1269,66 @@ class MainWindow(QMainWindow):
             lambda _link: self._act_enable_agent_server.toggle())
         self.statusbar.addPermanentWidget(self.mcp_status_label)
         self._update_mcp_status()
-        self.statusbar.addPermanentWidget(self.zoom_label)
+        self.statusbar.addPermanentWidget(self._build_zoom_controls())
+
+    def _build_zoom_controls(self) -> QWidget:
+        """Status-bar zoom group: − · percent presets · + · Fit (active view)."""
+        controls = QWidget()
+        controls.setObjectName("zoomControl")
+        row = QHBoxLayout(controls)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(2)
+
+        self._zoom_out_btn = QToolButton()
+        self._zoom_out_btn.setText("\u2212")
+        self._zoom_out_btn.clicked.connect(lambda: self._zoom_current_view(CanvasView.zoom_out))
+
+        self.zoom_label = QToolButton()
+        self.zoom_label.setText("100%")
+        self.zoom_label.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self._zoom_menu = QMenu(self.zoom_label)
+        for pct in (25, 50, 100, 200, 400):
+            self._zoom_menu.addAction(f"{pct}%").triggered.connect(
+                lambda _checked=False, level=pct / 100:
+                    self._zoom_current_view(lambda view: view.zoom_to(level)))
+        self._zoom_menu.addSeparator()
+        self._zoom_menu.addAction(self._act_canvas_fit_page)
+        self._zoom_menu.addAction(self._act_canvas_actual_size)
+        self.zoom_label.setMenu(self._zoom_menu)
+
+        self._zoom_in_btn = QToolButton()
+        self._zoom_in_btn.setText("+")
+        self._zoom_in_btn.clicked.connect(lambda: self._zoom_current_view(CanvasView.zoom_in))
+
+        self._zoom_fit_btn = QToolButton()
+        self._zoom_fit_btn.clicked.connect(lambda: self._zoom_current_view(CanvasView.zoom_to_fit))
+
+        for button in (self._zoom_out_btn, self.zoom_label, self._zoom_in_btn, self._zoom_fit_btn):
+            row.addWidget(button)
+        self._retranslate_zoom_controls()
+        return controls
+
+    def _zoom_current_view(self, action):
+        if self.view is not None:
+            action(self.view)
+
+    def _retranslate_zoom_controls(self):
+        self._act_canvas_zoom_in.setText(tr("action_canvas_zoom_in"))
+        self._act_canvas_zoom_out.setText(tr("action_canvas_zoom_out"))
+        self._act_canvas_fit_page.setText(tr("action_canvas_fit_page"))
+        self._act_canvas_actual_size.setText(tr("action_canvas_actual_size"))
+        self._zoom_fit_btn.setText(tr("zoom_fit_btn"))
+        for button, key in ((self._zoom_out_btn, "action_canvas_zoom_out"),
+                            (self._zoom_in_btn, "action_canvas_zoom_in"),
+                            (self._zoom_fit_btn, "action_canvas_fit_page"),
+                            (self.zoom_label, "zoom_percent_tip")):
+            button.setToolTip(tr(key))
+            button.setAccessibleName(tr(key))
 
     def _connect_static_signals(self):
         """Connect once-only signals: inspector, layers panel."""
         self.inspector.cell_property_changed.connect(self._on_cell_property_changed)
+        self.inspector.match_text_size_requested.connect(self._on_inspector_match_text_size)
         self.inspector.text_property_changed.connect(self._on_text_property_changed)
         self.inspector.row_property_changed.connect(self._on_row_property_changed)
         self.inspector.project_property_changed.connect(self._on_project_property_changed)
@@ -1461,6 +1533,7 @@ class MainWindow(QMainWindow):
         self.undo_stack = tab.undo_stack
         self.scene = tab.scene
         self.view = tab.view
+        self._on_zoom_changed(tab.view.transform().m11())
         self._current_project_path = tab.path
 
         # Wire up new tab's project to the scene (first time only)
@@ -1903,6 +1976,7 @@ class MainWindow(QMainWindow):
         self._act_font_zoom_in.setText(tr("action_font_zoom_in"))
         self._act_font_zoom_out.setText(tr("action_font_zoom_out"))
         self._act_font_zoom_reset.setText(tr("action_font_zoom_reset"))
+        self._retranslate_zoom_controls()
         self._act_preview_mode.setText(tr("action_preview_mode"))
         self._act_preferences.setText(tr("action_preferences"))
         self._act_new_tab.setText(tr("action_new_tab"))
@@ -1919,7 +1993,7 @@ class MainWindow(QMainWindow):
         self.layers_panel.retranslate_ui()
 
     def _on_zoom_changed(self, zoom_level):
-        self.zoom_label.setText(f"Zoom: {int(zoom_level * 100)}%")
+        self.zoom_label.setText(f"{round(zoom_level * 100)}%")
 
     def _on_mouse_pos_changed(self, x_mm, y_mm):
         self.mouse_pos_label.setText(f"  X {x_mm:.1f},  Y {y_mm:.1f} mm")
@@ -2997,6 +3071,7 @@ class MainWindow(QMainWindow):
                 cell_dict["_image_aspect_ratio"] = self._cell_image_aspect_ratio(cell)
                 from src.utils.editable_plot import plot_is_loadable
                 cell_dict["_is_editable_plot"] = plot_is_loadable(cell.image_path)
+                cell_dict["_plot_text_sizes"] = self._plot_text_summary(cell)
                 corner_labels = {}
                 for t in self.project.text_items:
                     if t.scope == "cell" and t.parent_id == cell.id and t.anchor:
@@ -5856,6 +5931,34 @@ class MainWindow(QMainWindow):
                 path += '.svg'
             SvgExporter.export(self.project, path)
             QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
+
+    def _plot_text_summary(self, cell):
+        """Distinct text sizes of a reflowing native plot, memoised by file
+        and group state (reflow ON sizes do not depend on the cell size)."""
+        try:
+            from src.utils.editable_plot import plot_reflows
+            from src.utils.svg_text_utils import describe_text_roles, svg_text_rows
+            if not plot_reflows(self.project, cell):
+                return None
+            stat = os.stat(cell.image_path)
+            groups = tuple((g.font_size_pt, tuple((m.svg_path, m.element_key)
+                                                  for m in g.members))
+                           for g in self.project.svg_text_groups)
+            key = (cell.image_path, stat.st_mtime_ns, stat.st_size,
+                   self.project.typography_mode, groups)
+            cache = self.__dict__.setdefault('_plot_text_cache', {})
+            if key not in cache:
+                if len(cache) >= 32:
+                    cache.clear()
+                cache[key] = describe_text_roles(svg_text_rows(self.project, cell))
+            return cache[key]
+        except Exception:
+            return None
+
+    def _on_inspector_match_text_size(self, cell_id: str):
+        cell = self._leaf_cell_for_id(cell_id)
+        if cell is not None and cell.image_path:
+            self._on_open_svg_text_inspector(cell.image_path, cell)
 
     def _on_open_svg_text_inspector(self, svg_path: str, cell=None):
         """Open a stand-alone SVG text inspector for the given SVG file."""

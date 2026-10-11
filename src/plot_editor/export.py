@@ -3,8 +3,9 @@
 import os
 import tempfile
 
-from ilmplot.document import (LineSeries, PlotDocument, StackCategory,
-                       StackOptions, ViolinGroup, ViolinOptions)
+from ilmplot.document import (HeatmapOptions, LineSeries, PlotDocument,
+                       StackCategory, StackOptions, ViolinGroup,
+                       ViolinOptions)
 from .i18n import tr
 from .plot_data import tick_label_map
 from .plotting import stack_offsets
@@ -34,6 +35,7 @@ _STYLE = {
     'pure_scatters': ('', 'o'),
     'line_scatters': ('-', 'o'),
     'stacked_line': ('-', ''),
+    'step_line': ('-', ''),
 }
 
 # Chart key → (document kind, percent flag for stacked column charts).
@@ -41,6 +43,7 @@ CHART_KIND = {
     'pure_line': ('line', None),
     'pure_scatters': ('line', None),
     'line_scatters': ('line', None),
+    'step_line': ('line', None),
     'stacked_line': ('line', None),
     'ridgeline': ('ridgeline', None),
     'violin': ('violin', None),
@@ -53,6 +56,7 @@ CHART_KIND = {
     'bar': ('stacked_column', None),
     'stacked_bar_pct': ('stacked_column', True),
     'stacked_bar': ('stacked_column', False),
+    'heatmap': ('heatmap', None),
 }
 
 HORIZONTAL_CHARTS = frozenset({'bar', 'stacked_bar', 'stacked_bar_pct'})
@@ -154,7 +158,19 @@ def document_from_plot(items, chart_key, title='', *,
             doc.x_tick_labels = [[float(i), t]
                                  for i, t in enumerate(bar_labels)]
         return doc.validate()
+    if kind == 'heatmap':
+        matrix = items[0]
+        doc.kind = 'heatmap'
+        doc.series = []
+        doc.legend = False
+        doc.xlabel, doc.ylabel = default_axis_titles(items, chart_key)
+        doc.heatmap = HeatmapOptions(
+            values=[list(row) for row in matrix.rows],
+            x_cell_labels=list(matrix.col_labels),
+            y_cell_labels=list(matrix.row_labels))
+        return doc.validate()
     linestyle, marker = _STYLE.get(chart_key, ('-', ''))
+    drawstyle = 'steps-post' if chart_key == 'step_line' else 'default'
     offsets = stack_offsets(items)
     doc.xlabel, doc.ylabel = default_axis_titles(items, chart_key)
     ticks = tick_label_map(items)
@@ -174,7 +190,7 @@ def document_from_plot(items, chart_key, title='', *,
             x=list(s.x), y=list(y),
             color=colors[i],
             linewidth_pt=1.5, linestyle=linestyle, marker=marker,
-            markersize_pt=6.0,
+            markersize_pt=6.0, drawstyle=drawstyle,
             yerr=(list(s.yerr)
                   if kind != 'ridgeline' and s.yerr is not None
                   else None),

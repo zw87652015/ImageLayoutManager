@@ -509,6 +509,17 @@ _QSS_TEMPLATE = """
         border: none;
         max-width: 1px;
     }
+    QWidget#zoomControl QToolButton {
+        border: none;
+        border-radius: %(radius_button)s;
+        padding: 0 6px;
+        min-height: 20px;
+        color: %(text_sec)s;
+        background: transparent;
+    }
+    QWidget#zoomControl QToolButton:hover { background: %(hover)s; color: %(text)s; }
+    QWidget#zoomControl QToolButton:pressed { background: %(accent_tint)s; color: %(accent)s; }
+    QWidget#zoomControl QToolButton::menu-indicator { image: none; width: 0; }
 
     /* ── Tooltips ─────────────────────────────────────────────────── */
     QToolTip {

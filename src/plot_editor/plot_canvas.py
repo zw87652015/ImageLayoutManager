@@ -266,6 +266,8 @@ class PlotCanvas(QGraphicsView):
                     key[len(prefix):])
                 return entry.get('bbox') \
                     if isinstance(entry, dict) else entry
+        if key == 'heatmap':
+            return hit_test.heatmap_bbox(self._regions)
         return self._regions.get(key)
 
     def _update_hover(self, view_pos):

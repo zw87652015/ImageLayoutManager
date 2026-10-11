@@ -38,6 +38,7 @@ CHART_GROUPS = (
         ChartType('pure_line', 'Pure Line'),
         ChartType('pure_scatters', 'Pure Scatters'),
         ChartType('line_scatters', 'Line + Scatters'),
+        ChartType('step_line', 'Step Line'),
         ChartType('stacked_line', 'Stacked Line'),
         ChartType('ridgeline', 'Ridgeline'),
     )),
@@ -54,6 +55,9 @@ CHART_GROUPS = (
         ChartType('bar', 'Bar'),
         ChartType('stacked_bar_pct', '100% Stacked Bar'),
         ChartType('stacked_bar', 'Stacked Bar'),
+    )),
+    ChartGroup('matrix', 'Matrix', (
+        ChartType('heatmap', 'Heatmap'),
     )),
 )
 

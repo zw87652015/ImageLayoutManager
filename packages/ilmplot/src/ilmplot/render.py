@@ -1414,7 +1414,7 @@ def _draw_heatmap(document, ax, s):
     im = ax.imshow(data, cmap=cmap, vmin=opt.vmin, vmax=opt.vmax,
                    extent=_heatmap_extent(opt), origin='upper',
                    interpolation='nearest', aspect=opt.aspect)
-    im.set_gid('ilmplot-heatmap')
+    im.set_gid('ilmplot-heatmap-image')
     if opt.extent is None:
         if opt.x_cell_labels is not None:
             ax.set_xticks([j + 0.5 for j in range(len(opt.x_cell_labels))],
@@ -1428,6 +1428,7 @@ def _draw_heatmap(document, ax, s):
         cbar.ax.tick_params(labelsize=document.font_size_pt * s,
                             length=3.5 * s, width=0.8 * s, pad=3.5 * s)
         cbar.outline.set_linewidth(0.8 * s)
+        cbar.ax.set_gid('ilmplot-heatmap-colorbar')
         if opt.colorbar_label:
             cbar.set_label(safe_text(opt.colorbar_label),
                            **_text_kwargs(None, document.font_family,
@@ -2138,7 +2139,8 @@ def element_regions(document: PlotDocument) -> dict:
                                 ('ilmplot-annotation-', 'annotations'),
                                 ('ilmplot-bracket-', 'brackets'),
                                 ('ilmplot-band-', 'bands'),
-                                ('ilmplot-span-', 'spans')):
+                                ('ilmplot-span-', 'spans'),
+                                ('ilmplot-heatmap-', 'heatmaps')):
                 grouped = {}
                 points = {}
                 for artist in ax.findobj():

@@ -3,7 +3,7 @@ from __future__ import annotations
 from PyQt6.QtWidgets import QGraphicsView
 import math
 
-from PyQt6.QtCore import Qt, pyqtSignal, QPointF, QPoint, QRectF, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QPointF, QPoint, QRectF, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterPath, QPen, QBrush, QColor, QCursor, QTransform
 
 from src.app.motion import start_animation
@@ -45,6 +45,8 @@ class CanvasView(QGraphicsView):
         self._zoom_level = 1.0
         self._zoom_target = 1.0
         self._zoom_anim = None
+        self._pinch_total = 1.0
+        self.grabGesture(Qt.GestureType.PinchGesture)
         for bar in (self.horizontalScrollBar(), self.verticalScrollBar()):
             bar.sliderPressed.connect(self._cancel_zoom)
             bar.actionTriggered.connect(self._cancel_zoom)
@@ -85,6 +87,16 @@ class CanvasView(QGraphicsView):
     def zoom_to_100(self):
         """Reset zoom to 100%."""
         self._start_zoom(1.0)
+
+    def zoom_to(self, level):
+        """Animate to an absolute zoom level about the viewport centre."""
+        self._start_zoom(level, QPointF(self.viewport().rect().center()))
+
+    def zoom_in(self):
+        self._apply_zoom(1.25, QPointF(self.viewport().rect().center()))
+
+    def zoom_out(self):
+        self._apply_zoom(1 / 1.25, QPointF(self.viewport().rect().center()))
 
     def _zoom_anchor(self):
         point = self.viewport().mapFromGlobal(QCursor.pos())
@@ -403,6 +415,25 @@ class CanvasView(QGraphicsView):
             return
 
         super().keyPressEvent(event)
+
+    def event(self, event):
+        if event.type() == QEvent.Type.Gesture:
+            pinch = event.gesture(Qt.GestureType.PinchGesture)
+            if pinch is not None:
+                self._pinch(pinch)
+                event.accept(pinch)
+                return True
+        return super().event(event)
+
+    def _pinch(self, gesture):
+        if gesture.state() == Qt.GestureState.GestureStarted:
+            self._cancel_zoom()
+            self._pinch_total = 1.0
+        total = gesture.totalScaleFactor()
+        factor = total / self._pinch_total if self._pinch_total > 0 else 1.0
+        self._pinch_total = total
+        centre = self.viewport().mapFrom(self, gesture.centerPoint().toPoint())
+        self._apply_zoom(factor, QPointF(centre), animated=False)
 
     def resizeEvent(self, event):
         if hasattr(self, '_zoom_anim'):

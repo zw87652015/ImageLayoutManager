@@ -434,18 +434,17 @@ def svg_mm_per_unit(project, cell, svg_bytes, layout_result=None, content_size_m
     return max(ratio * view_scale, 1e-9)
 
 
-def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
-                                    content_size_mm=None) -> Optional[bytes]:
-    """Return modified SVG bytes for *cell*, or ``None`` if no changes are needed.
+def _svg_text_stage(project, cell, layout_result=None, content_size_mm=None,
+                    mm_per_unit_fn=None):
+    """Shared steps of ``get_svg_override_bytes_for_cell``.
 
-    Pipeline (in order):
-    1. If ``cell.svg_normalize_text`` is True: normalize all text to
-       ``cell.svg_normalize_text_pt``, accounting for ancestor transforms.
-    2. Apply per-element SvgTextGroup overrides on top.
-
-    This is the single entry-point used by both the canvas proxy and the
-    raster export pipeline so the two stay in sync.
+    Returns ``(bytes, positioned)`` — the SVG drawn for *cell* before
+    ``_positioned_text_runs`` (which rewrites text structure, so element
+    keys must be read here) and whether that pass still applies — or
+    ``None`` when the cell needs no change.
     """
+    from src.utils.typography_mode import uses_points
+    mm_fn = mm_per_unit_fn or svg_mm_per_unit
     path = getattr(cell, 'image_path', None)
     if not path or not path.lower().endswith('.svg'):
         return None
@@ -453,7 +452,6 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
     do_normalize = getattr(cell, 'svg_normalize_text', False)
     overrides = build_svg_overrides_for_path(project, path)
 
-    from src.utils.typography import uses_points
     precise = uses_points(project)
 
     # Cheap cached metadata probe BEFORE reading the file — ordinary SVGs
@@ -533,8 +531,8 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
                 except Exception:
                     pass  # fall back to the stored snapshot bytes
         if not handled:
-            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes,
-                                          layout_result, content_size_mm)
+            mm_per_unit = mm_fn(project, cell, base_bytes,
+                                layout_result, content_size_mm)
             # plot_reflow off keeps the stored snapshot verbatim — the
             # exact bytes the Plot Editor saved — so no style-scaled
             # re-render either. Placement then scales it like a picture.
@@ -555,7 +553,7 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         # maths assumes, which rendered synced text ~7% too small and left
         # it inconsistent with raster panels in the same group.
         if mm_per_unit is None:
-            mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result, content_size_mm)
+            mm_per_unit = mm_fn(project, cell, base_bytes, layout_result, content_size_mm)
         overrides = {key: (size * 25.4 / 72.0) / mm_per_unit for key, size in overrides.items()}
 
     # Step 1 — normalise
@@ -563,8 +561,8 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         target_pt = float(getattr(cell, 'svg_normalize_text_pt', 8.0))
         if precise:
             if mm_per_unit is None:
-                mm_per_unit = svg_mm_per_unit(project, cell, base_bytes, layout_result,
-                                              content_size_mm)
+                mm_per_unit = mm_fn(project, cell, base_bytes, layout_result,
+                                    content_size_mm)
             base_bytes = normalize_svg_text(
                 base_bytes, (target_pt * 25.4 / 72.0) / mm_per_unit,
                 unit='px', precise=True)
@@ -576,8 +574,220 @@ def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
         result = apply_svg_font_overrides_from_bytes(
             base_bytes, overrides, unit='px', precise=precise)
         if result:
-            return _positioned_text_runs(result) if precise else result
+            return result, precise
 
-    changed = native_doc is not None or do_normalize
-    return _positioned_text_runs(base_bytes) if changed and precise \
-        else base_bytes if changed else None
+    if native_doc is not None or do_normalize:
+        return base_bytes, precise
+    return None
+
+
+def get_svg_override_bytes_for_cell(project, cell, layout_result=None,
+                                    content_size_mm=None) -> Optional[bytes]:
+    """Return modified SVG bytes for *cell*, or ``None`` if no changes are needed.
+
+    Pipeline (in order):
+    1. If ``cell.svg_normalize_text`` is True: normalize all text to
+       ``cell.svg_normalize_text_pt``, accounting for ancestor transforms.
+    2. Apply per-element SvgTextGroup overrides on top.
+
+    This is the single entry-point used by both the canvas proxy and the
+    raster export pipeline so the two stay in sync.
+    """
+    stage = _svg_text_stage(project, cell, layout_result, content_size_mm)
+    if stage is None:
+        return None
+    data, positioned = stage
+    return _positioned_text_runs(data) if positioned else data
+
+
+_FONT_UNIT_PX = {'': 1.0, 'px': 1.0, 'pt': 4.0 / 3.0, 'pc': 16.0,
+                 'mm': 96.0 / 25.4, 'cm': 96.0 / 2.54, 'in': 96.0}
+_LENGTH_RE = re.compile(
+    r'^\s*([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([a-z%]*)\s*$', re.I)
+_FONT_SHORTHAND_RE = re.compile(
+    r'(?:^|\s)([-+]?(?:\d+\.?\d*|\.\d+))(px|pt|pc|mm|cm|in|em)(?=[\s/;]|$)',
+    re.I)
+
+
+def _parse_length(text):
+    m = _LENGTH_RE.match(text or '')
+    if m is None:
+        return None
+    return float(m.group(1)), m.group(2).lower()
+
+
+def _declared_font_size(elem):
+    """``(value, unit)`` from inline style, then the ``font`` shorthand, then
+    the presentation attribute; ``None`` when no numeric size is declared."""
+    decl = {}
+    for part in (elem.get('style', '') or '').split(';'):
+        if ':' in part:
+            name, value = part.split(':', 1)
+            decl[name.strip().lower()] = value.strip()
+    if 'font-size' in decl:
+        return _parse_length(decl['font-size'])
+    if 'font' in decl:
+        m = _FONT_SHORTHAND_RE.search(' ' + decl['font'])
+        return (float(m.group(1)), m.group(2).lower()) if m else None
+    if elem.get('font-size') is not None:
+        return _parse_length(elem.get('font-size'))
+    return None
+
+
+def _font_size_px(elem, parents):
+    decl = _declared_font_size(elem)
+    if decl is None:
+        return None
+    value, unit = decl
+    if unit in _FONT_UNIT_PX:
+        return value * _FONT_UNIT_PX[unit]
+    if unit == 'em':
+        node = parents.get(elem)
+        while node is not None:
+            base = _font_size_px(node, parents)
+            if base is not None:
+                return value * base
+            node = parents.get(node)
+    return None
+
+
+def _text_size_pt(elem, parents, mm_per_unit):
+    px = _font_size_px(elem, parents)
+    if px is None or mm_per_unit <= 0:
+        return None
+    transforms = []
+    node = parents.get(elem)
+    while node is not None:
+        transforms.append(node.get('transform', ''))
+        node = parents.get(node)
+    acc = _parse_transform_matrix(' '.join(reversed(transforms)))
+    em = _parse_transform_matrix(elem.get('transform', ''))
+    a, b, cc, d, e, f = acc
+    ma, mb, mc, md, me, mf = em
+    ctm = [a * ma + cc * mb, b * ma + d * mb, a * mc + cc * md,
+           b * mc + d * md, a * me + cc * mf + e, b * me + d * mf + f]
+    return px * _matrix_effective_scale(ctm) * mm_per_unit * 72.0 / 25.4
+
+
+_TEXT_ROLE_ORDER = ('title', 'axis_label', 'tick', 'legend', 'series_label',
+                    'colorbar', 'other')
+_TEXT_ROLE_BY_ID = {'ilmplot-title': 'title',
+                    'ilmplot-xlabel': 'axis_label',
+                    'ilmplot-ylabel': 'axis_label',
+                    'ilmplot-heatmap-colorbar': 'colorbar'}
+
+
+def _text_role_of_id(elem_id) -> Optional[str]:
+    if not elem_id:
+        return None
+    role = _TEXT_ROLE_BY_ID.get(elem_id)
+    if role is not None:
+        return role
+    if elem_id.startswith(('xtick_', 'ytick_')):
+        return 'tick'
+    if elem_id == 'legend' or elem_id.startswith('legend_'):
+        return 'legend'
+    if elem_id.startswith('ilmplot-series-label-'):
+        return 'series_label'
+    return None
+
+
+def _text_role(elem, parents) -> str:
+    """Role of a ``<text>`` from its own id, then its nearest ancestor with a
+    role-bearing id (``ilmplot-title``, ``xtick_N``, ``legend_N``, ...)."""
+    node = elem
+    while node is not None:
+        role = _text_role_of_id(node.get('id'))
+        if role is not None:
+            return role
+        node = parents.get(node)
+    return 'other'
+
+
+def svg_text_rows(project, cell, layout_result=None, content_size_mm=None,
+                  mm_per_unit_fn=None) -> list:
+    """One row per ``<text>`` of the SVG *cell* draws (before positioning).
+
+    Each row: ``key`` (same keys as ``get_svg_text_elements``), ``element_id``,
+    ``text``, ``size_pt`` — the effective final-figure point size, or
+    ``None`` when the size cannot be determined from the file — and ``role``
+    (see ``_text_role``).
+    """
+    mm_fn = mm_per_unit_fn or svg_mm_per_unit
+    stage = _svg_text_stage(project, cell, layout_result, content_size_mm,
+                            mm_fn)
+    if stage is not None:
+        data = stage[0]
+    else:
+        path = getattr(cell, 'image_path', None)
+        if not path or not path.lower().endswith('.svg'):
+            return []
+        try:
+            with open(path, 'rb') as fh:
+                data = fh.read()
+        except OSError:
+            return []
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        return []
+    mm = mm_fn(project, cell, data, layout_result, content_size_mm)
+    parents = {child: parent for parent in root.iter() for child in parent}
+    rows = []
+    for elem, key, idx in _iter_text_elements(root):
+        rows.append({
+            'key': key,
+            'element_id': elem.get('id'),
+            'text': _collect_text_content(elem) or f'<text {idx}>',
+            'size_pt': _text_size_pt(elem, parents, mm),
+            'role': _text_role(elem, parents),
+        })
+    return rows
+
+
+def svg_text_effective_sizes(project, cell, layout_result=None,
+                             content_size_mm=None,
+                             mm_per_unit_fn=None) -> dict:
+    """``{element key: effective final-figure point size}`` for the elements
+    whose size can be determined."""
+    return {row['key']: row['size_pt'] for row in svg_text_rows(
+        project, cell, layout_result, content_size_mm, mm_per_unit_fn)
+        if row['size_pt'] is not None}
+
+
+def describe_text_sizes(rows) -> list:
+    """``[(size_pt, count, example_text)]`` sorted by size, sizes rounded to
+    0.1 pt, from rows returned by ``svg_text_rows``."""
+    groups = {}
+    for row in rows:
+        size = row.get('size_pt')
+        if size is None:
+            continue
+        key = round(size, 1)
+        count, example = groups.get(key, (0, row.get('text', '')))
+        groups[key] = (count + 1, example)
+    return [(size, count, example)
+            for size, (count, example) in sorted(groups.items())]
+
+
+def describe_text_roles(rows) -> list:
+    """``[(role, size_pt, count, example_text)]`` in ``_TEXT_ROLE_ORDER``, then
+    by size; sizes rounded to 0.1 pt, rows without a size skipped."""
+    groups = {}
+    for row in rows:
+        size = row.get('size_pt')
+        if size is None:
+            continue
+        key = (row.get('role') or 'other', round(size, 1))
+        count, example = groups.get(key, (0, row.get('text', '')))
+        groups[key] = (count + 1, example)
+    order = {role: i for i, role in enumerate(_TEXT_ROLE_ORDER)}
+    return [(role, size, count, example) for (role, size), (count, example)
+            in sorted(groups.items(),
+                      key=lambda item: (order.get(item[0][0], len(order)),
+                                        item[0][1]))]
+
+
+def format_text_size(size_pt) -> str:
+    """Display form of a point size: at most two decimals, no trailing zeros."""
+    return f'{round(size_pt, 2):g}'
