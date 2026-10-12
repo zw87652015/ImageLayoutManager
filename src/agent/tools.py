@@ -781,8 +781,9 @@ def auto_label_cells(ctx: ToolContext, scheme: Optional[str] = None,
     *sub_scheme* switches numbering to hierarchical mode: top-level panels
     use *scheme* while each split panel restarts its children on
     *sub_scheme* (e.g. ``A`` → ``A-i, A-ii, A-iii``). Pass ``""`` to return
-    to flat numbering. *sub_prefix* toggles whether children carry the
-    parent label as a prefix.
+    to flat numbering, which labels each image panel once, skips split
+    containers, and finishes a split before the next sibling. *sub_prefix*
+    toggles whether children carry the parent label as a prefix.
     """
     p = ctx.project
     from src.utils.label_numbering import SCHEMES

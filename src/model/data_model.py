@@ -837,7 +837,8 @@ class Project:
     # Global Label Settings (Numbering)
     label_scheme: str = "(a)" # see src/utils/label_numbering.SCHEMES
     # Second-level scheme for sub-cells inside a split panel. "" disables
-    # hierarchy, so every label shares one continuous sequence (legacy).
+    # hierarchy: image panels share one continuous sequence and split
+    # containers are not labeled.
     label_scheme_sub: str = ""
     # When True sub-labels are prefixed with the parent's core text, giving
     # "A-i" style compound labels instead of a bare "i".

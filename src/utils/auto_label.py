@@ -5,19 +5,20 @@ from src.utils.label_numbering import core_of, format_index, parse_scheme
 _Y_TOL = 0.5  # mm; cells within this vertical gap count as the same row
 
 
-def _collect_leaves(cell, out):
-    if cell.is_leaf:
-        out.append(cell)
-    else:
-        for child in cell.children:
-            _collect_leaves(child, out)
+def _number_in_reading_order(cells, texts, scheme, key, index):
+    """Number image panels, finishing a split before the next sibling.
 
-
-def _collect_branches(cell, out):
-    if not cell.is_leaf:
-        out.append(cell)
-        for child in cell.children:
-            _collect_branches(child, out)
+    A column split into two is read top to bottom before the panel to its
+    right, so the letters run (a), (b), (c) rather than skipping across.
+    """
+    for cell in sorted(cells, key=key):
+        if cell.is_leaf:
+            texts[cell.id] = format_index(index, scheme)
+            index += 1
+        else:
+            index = _number_in_reading_order(
+                cell.children, texts, scheme, key, index)
+    return index
 
 
 def _spatial_key(cell, rects):
@@ -77,7 +78,7 @@ def _number_branch(parent, parent_core: str, sub_scheme: str,
 
 def compute_label_texts(project: Project, scheme: str = None,
                         sub_scheme: str = None) -> dict:
-    """Map every cell id to the label text the current scheme would give it.
+    """Map each labeled cell id to the text the current scheme would give it.
 
     Shared by auto-labelling and by scheme changes so both agree on ordering
     and numbering. Pass *scheme* / *sub_scheme* to preview a different scheme
@@ -85,12 +86,13 @@ def compute_label_texts(project: Project, scheme: str = None,
 
     Two modes, chosen by the sub-scheme:
 
-    * empty — one continuous sequence. Leaves are numbered first (a, b, c…)
-      and branch cells continue it, matching the convention that sub-panels
-      are lettered before their composite parent.
-    * set — hierarchical. Top-level panels use the main scheme while each
-      split panel restarts its children on the sub scheme, giving the
-      journal-standard A / i, ii, iii nesting.
+    * empty — one continuous sequence over image panels only. A split
+      container holds no image of its own, so it does not take a letter.
+      Its panels are numbered before the next sibling: a column split into
+      two is (a) then (b), and the column to its right is (c).
+    * set — hierarchical. Top-level panels, including a split container,
+      use the main scheme while each split panel restarts its children on
+      the sub scheme, giving the journal-standard A / i, ii, iii nesting.
     """
     scheme = project.label_scheme if scheme is None else scheme
     if sub_scheme is None:
@@ -110,14 +112,7 @@ def compute_label_texts(project: Project, scheme: str = None,
                                project, texts, key)
         return texts
 
-    leaves_flat: list = []
-    branches_flat: list = []
-    for cell in project.cells:
-        _collect_leaves(cell, leaves_flat)
-        _collect_branches(cell, branches_flat)
-    for index, cell in enumerate(sorted(leaves_flat, key=key)
-                                 + sorted(branches_flat, key=key)):
-        texts[cell.id] = format_index(index, scheme)
+    _number_in_reading_order(project.cells, texts, scheme, key, 0)
     return texts
 
 

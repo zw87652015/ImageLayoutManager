@@ -414,19 +414,31 @@ class LayoutEngine:
             return LayoutResult({}, {})
 
         # Per-row cell-label strips. A row reserves one strip above and/or one
-        # below, thick enough for the largest label that lands in it.
+        # below, thick enough for the largest label that lands in it. A label
+        # on a nested panel that sits on the outer edge of its column joins
+        # the same band, so it stays off the image and lines up with the
+        # other panels in the row.
         strips_above: Dict[int, float] = {}
         strips_below: Dict[int, float] = {}
         for cell in project.cells:
             placement = placements.get(cell.id)
             if placement == "label_row_above":
-                bucket = strips_above
+                size = strip_sizes.get(cell.id, 0.0)
+                strips_above[cell.row_index] = max(
+                    strips_above.get(cell.row_index, 0.0), size)
             elif placement == "label_row_below":
-                bucket = strips_below
-            else:
-                continue
-            size = strip_sizes.get(cell.id, 0.0)
-            bucket[cell.row_index] = max(bucket.get(cell.row_index, 0.0), size)
+                size = strip_sizes.get(cell.id, 0.0)
+                strips_below[cell.row_index] = max(
+                    strips_below.get(cell.row_index, 0.0), size)
+            for placement_key, bucket in (
+                ("label_row_above", strips_above),
+                ("label_row_below", strips_below),
+            ):
+                extra = LayoutEngine._nested_edge_strip(
+                    cell, placement_key, placements, strip_sizes)
+                if extra > 0:
+                    bucket[cell.row_index] = max(
+                        bucket.get(cell.row_index, 0.0), extra)
 
         # 3. Calculate row heights. Every reserved band costs its thickness
         # plus one gap, so the walk below and this budget stay in step.
@@ -568,20 +580,11 @@ class LayoutEngine:
                 placement = placements.get(cell.id)
 
                 # Reserve a label strip on the left or right edge of the picture cell.
-                pic_x_eff = x_pos
-                pic_w_eff = col_w
-                lbl_side_rect = None
-                if placement in ("label_col_left", "label_col_right"):
-                    label_col_w = strip_sizes.get(cell.id, 0.0)
-                    strip = min(label_col_w, col_w - 1.0) if col_w > 1.0 else 0.0
-                    if strip > 0:
-                        if placement == "label_col_left":
-                            lbl_side_rect = (x_pos, pic_y, strip, pic_h)
-                            pic_x_eff = x_pos + strip + gap_mm
-                            pic_w_eff = max(0.0, col_w - strip - gap_mm)
-                        else:  # label_col_right
-                            lbl_side_rect = (x_pos + col_w - strip, pic_y, strip, pic_h)
-                            pic_w_eff = max(0.0, col_w - strip - gap_mm)
+                content, lbl_side_rect = LayoutEngine._side_strip_inset(
+                    (x_pos, pic_y, col_w, pic_h), placement,
+                    strip_sizes.get(cell.id, 0.0), gap_mm,
+                )
+                pic_x_eff, _pic_y, pic_w_eff, _pic_h = content
 
                 cell_rects[cell.id] = (pic_x_eff, pic_y, pic_w_eff, pic_h)
 
@@ -593,12 +596,26 @@ class LayoutEngine:
                 elif lbl_side_rect is not None:
                     label_rects[cell.id] = lbl_side_rect
 
-                # Recursively layout sub-cells
+                # Recursively layout sub-cells. A container that does not own
+                # the row band lets its outer-edge children use it, so their
+                # letters line up with the rest of the row instead of eating
+                # into the picture.
                 if not cell.is_leaf:
+                    hoist_above = (
+                        (above_y, above_h)
+                        if above_y is not None and above_h > 0
+                        and placement != "label_row_above" else None
+                    )
+                    hoist_below = (
+                        (below_y, below_h)
+                        if below_y is not None and below_h > 0
+                        and placement != "label_row_below" else None
+                    )
                     LayoutEngine._layout_subcells(
                         cell, (pic_x_eff, pic_y, pic_w_eff, pic_h),
                         gap_mm, cell_rects, label_rects,
-                        placements, strip_sizes
+                        placements, strip_sizes,
+                        hoist_above=hoist_above, hoist_below=hoist_below,
                     )
 
         figure_rects: Dict[str, Tuple[float, float, float, float]] = dict(cell_rects)
@@ -802,6 +819,114 @@ class LayoutEngine:
         return result
 
     @staticmethod
+    def union_rect(a, b):
+        """Union of two ``(x, y, w, h)`` rects. Either may be missing."""
+        if not a:
+            return b
+        if not b:
+            return a
+        x0 = min(a[0], b[0])
+        y0 = min(a[1], b[1])
+        x1 = max(a[0] + a[2], b[0] + b[2])
+        y1 = max(a[1] + a[3], b[1] + b[3])
+        return (x0, y0, x1 - x0, y1 - y0)
+
+    @staticmethod
+    def subcell_divider_center(slot_a, slot_b, orientation: str) -> float:
+        """Midpoint of the gap between two subcell slots, along the split.
+
+        *orientation* is the parent's ``split_direction``. The slots are the
+        picture union its label strip, so the divider stays in the real gap
+        instead of running through a label that sits beside or between images.
+        """
+        if orientation == "horizontal":
+            return (slot_a[0] + slot_a[2] + slot_b[0]) / 2.0
+        return (slot_a[1] + slot_a[3] + slot_b[1]) / 2.0
+
+    @staticmethod
+    def _side_strip_inset(rect, placement, thickness, gap_mm):
+        """Inset a left or right label strip inside *rect*.
+
+        Returns ``(content_rect, label_rect)``. *label_rect* is ``None`` when
+        this placement does not claim a side strip. The picture keeps the
+        slot's height; only its width shrinks, so a parent's split ratios
+        still describe the slots.
+        """
+        x, y, w, h = rect
+        if placement not in ("label_col_left", "label_col_right") or h <= 0:
+            return rect, None
+        strip = min(thickness, w - 1.0) if w > 1.0 else 0.0
+        if strip <= 0:
+            return rect, None
+        if placement == "label_col_left":
+            return (
+                (x + strip + gap_mm, y, max(0.0, w - strip - gap_mm), h),
+                (x, y, strip, h),
+            )
+        return (
+            (x, y, max(0.0, w - strip - gap_mm), h),
+            (x + w - strip, y, strip, h),
+        )
+
+    @staticmethod
+    def _nodes_on_outer_edge(cell, edge):
+        """Descendants that sit on *cell*'s top (``above``) or bottom edge.
+
+        A horizontal split shares both edges across every child. A vertical
+        split exposes only its first child on top and its last child on the
+        bottom. *cell* itself is not included.
+        """
+        found = []
+
+        def walk(node, on_edge):
+            if node is not cell and on_edge:
+                found.append(node)
+            if node.is_leaf or not node.children:
+                return
+            if node.split_direction == "horizontal":
+                for child in node.children:
+                    walk(child, on_edge)
+            elif node.split_direction == "vertical":
+                last = len(node.children) - 1
+                for index, child in enumerate(node.children):
+                    child_on = on_edge and (
+                        (edge == "above" and index == 0)
+                        or (edge == "below" and index == last)
+                    )
+                    walk(child, child_on)
+            else:
+                for child in node.children:
+                    walk(child, False)
+
+        walk(cell, True)
+        return found
+
+    @staticmethod
+    def _wants_outer_edge(cell, placement, edge, placements) -> bool:
+        if placements.get(cell.id) == placement:
+            return True
+        return any(
+            placements.get(node.id) == placement
+            for node in LayoutEngine._nodes_on_outer_edge(cell, edge)
+        )
+
+    @staticmethod
+    def _nested_edge_strip(cell, placement, placements, strip_sizes) -> float:
+        """Thickness a nested panel on *cell*'s outer edge needs, else 0.
+
+        When *cell* itself owns this edge, its strip is the row band and
+        descendants keep their labels inside the picture.
+        """
+        if placements.get(cell.id) == placement:
+            return 0.0
+        edge = "above" if placement == "label_row_above" else "below"
+        best = 0.0
+        for node in LayoutEngine._nodes_on_outer_edge(cell, edge):
+            if placements.get(node.id) == placement:
+                best = max(best, strip_sizes.get(node.id, 0.0))
+        return best
+
+    @staticmethod
     def _layout_subcells(
         parent_cell: 'Cell',
         parent_rect: Tuple[float, float, float, float],
@@ -810,12 +935,18 @@ class LayoutEngine:
         label_rects: Dict[str, Tuple[float, float, float, float]],
         placements: Dict[str, str],
         strip_sizes: Dict[str, float],
+        hoist_above=None,
+        hoist_below=None,
     ):
         """Recursively compute geometry for sub-cells within a parent cell.
 
-        Sub-cells honour the ``label_row_above`` / ``label_row_below``
-        placements; side strips are a top-level feature because a nested
-        column strip would fight the parent's split ratios.
+        Above and below strips are carved out of the parent. A strip that
+        sits on the parent's outer edge is placed in *hoist_above* /
+        *hoist_below* (the row band) instead, so it lines up with the other
+        panels in the row and does not shorten the picture a second time.
+
+        Left and right strips are inset inside the child's own slot. The
+        slot size still follows the split ratios; only the picture shrinks.
         """
         children = parent_cell.children
         if not children:
@@ -826,6 +957,25 @@ class LayoutEngine:
             if placements.get(child.id) != wanted:
                 return 0.0
             return strip_sizes.get(child.id, 0.0)
+
+        def place_picture(child, slot):
+            content, side = LayoutEngine._side_strip_inset(
+                slot, placements.get(child.id),
+                strip_sizes.get(child.id, 0.0), gap_mm,
+            )
+            if side is not None:
+                label_rects[child.id] = side
+            cell_rects[child.id] = content
+            return content
+
+        def recurse(child, content, pass_above, pass_below):
+            if child.is_leaf:
+                return
+            LayoutEngine._layout_subcells(
+                child, content, gap_mm, cell_rects, label_rects,
+                placements, strip_sizes,
+                hoist_above=pass_above, hoist_below=pass_below,
+            )
 
         px, py, pw, ph = parent_rect
         n = len(children)
@@ -842,12 +992,28 @@ class LayoutEngine:
         if parent_cell.split_direction == "vertical":
             # --- Vertical stacking: divide height ---
             # Account for label strips around children and fixed-height children.
+            # An outer-edge strip that the row band already holds is not carved
+            # again here.
             label_space = 0.0
             fixed_h_total = 0.0
             ratio_sum = 0.0
             for i, child in enumerate(children):
-                for edge in ("label_row_above", "label_row_below"):
-                    size = strip_for(child, edge)
+                hoisted_above = (
+                    i == 0 and hoist_above is not None
+                    and LayoutEngine._wants_outer_edge(
+                        child, "label_row_above", "above", placements)
+                )
+                hoisted_below = (
+                    i == n - 1 and hoist_below is not None
+                    and LayoutEngine._wants_outer_edge(
+                        child, "label_row_below", "below", placements)
+                )
+                if not hoisted_above:
+                    size = strip_for(child, "label_row_above")
+                    if size > 0:
+                        label_space += size + gap_mm
+                if not hoisted_below:
+                    size = strip_for(child, "label_row_below")
                     if size > 0:
                         label_space += size + gap_mm
                 oh = getattr(child, 'override_height_mm', 0.0)
@@ -863,25 +1029,39 @@ class LayoutEngine:
                 available = 0
             current_y = py
             for i, child in enumerate(children):
+                on_top = (
+                    i == 0 and hoist_above is not None
+                    and LayoutEngine._wants_outer_edge(
+                        child, "label_row_above", "above", placements)
+                )
+                on_bottom = (
+                    i == n - 1 and hoist_below is not None
+                    and LayoutEngine._wants_outer_edge(
+                        child, "label_row_below", "below", placements)
+                )
                 above = strip_for(child, "label_row_above")
-                if above > 0:
+                if above > 0 and on_top:
+                    hy, hh = hoist_above
+                    label_rects[child.id] = (px, hy, pw, hh)
+                elif above > 0:
                     label_rects[child.id] = (px, current_y, pw, above)
                     current_y += above + gap_mm
 
                 oh = getattr(child, 'override_height_mm', 0.0)
                 child_h = oh if oh > 0 else (ratios[i] / ratio_sum) * available
-                child_rect = (px, current_y, pw, child_h)
-                cell_rects[child.id] = child_rect
-
-                if not child.is_leaf:
-                    LayoutEngine._layout_subcells(
-                        child, child_rect, gap_mm, cell_rects,
-                        label_rects, placements, strip_sizes
-                    )
+                content = place_picture(child, (px, current_y, pw, child_h))
+                recurse(
+                    child, content,
+                    hoist_above if on_top and above <= 0 else None,
+                    hoist_below if on_bottom and strip_for(child, "label_row_below") <= 0 else None,
+                )
                 current_y += child_h + gap_mm
 
                 below = strip_for(child, "label_row_below")
-                if below > 0:
+                if below > 0 and on_bottom:
+                    hy, hh = hoist_below
+                    label_rects[child.id] = (px, hy, pw, hh)
+                elif below > 0:
                     label_rects[child.id] = (px, current_y, pw, below)
                     current_y += below + gap_mm
 
@@ -903,11 +1083,18 @@ class LayoutEngine:
 
             # Side-by-side children must share one baseline, so a strip wanted
             # by any one of them is reserved across the whole band. Height is
-            # the thickest request on that edge.
+            # the thickest request on that edge. An outer band already reserved
+            # by the row is not carved out of the picture a second time.
             above_h = max((strip_for(c, "label_row_above") for c in children), default=0.0)
             below_h = max((strip_for(c, "label_row_below") for c in children), default=0.0)
-            above_overhead = (above_h + gap_mm) if above_h > 0 else 0.0
-            below_overhead = (below_h + gap_mm) if below_h > 0 else 0.0
+            if hoist_above is not None:
+                above_overhead = 0.0
+            else:
+                above_overhead = (above_h + gap_mm) if above_h > 0 else 0.0
+            if hoist_below is not None:
+                below_overhead = 0.0
+            else:
+                below_overhead = (below_h + gap_mm) if below_h > 0 else 0.0
             img_py = py + above_overhead
             img_ph = max(0.0, ph - above_overhead - below_overhead)
             below_y = img_py + img_ph + gap_mm
@@ -917,18 +1104,24 @@ class LayoutEngine:
                 ow = getattr(child, 'override_width_mm', 0.0)
                 child_w = ow if ow > 0 else (ratios[i] / ratio_sum) * available
 
-                # Label rect: spans the child's width, sits in the reserved strip
+                # Label rect: spans the child's width, sits in the reserved strip.
                 if strip_for(child, "label_row_above") > 0:
-                    label_rects[child.id] = (current_x, py, child_w, above_h)
+                    if hoist_above is not None:
+                        hy, hh = hoist_above
+                        label_rects[child.id] = (current_x, hy, child_w, hh)
+                    else:
+                        label_rects[child.id] = (current_x, py, child_w, above_h)
                 elif strip_for(child, "label_row_below") > 0:
-                    label_rects[child.id] = (current_x, below_y, child_w, below_h)
+                    if hoist_below is not None:
+                        hy, hh = hoist_below
+                        label_rects[child.id] = (current_x, hy, child_w, hh)
+                    else:
+                        label_rects[child.id] = (current_x, below_y, child_w, below_h)
 
-                child_rect = (current_x, img_py, child_w, img_ph)
-                cell_rects[child.id] = child_rect
-
-                if not child.is_leaf:
-                    LayoutEngine._layout_subcells(
-                        child, child_rect, gap_mm, cell_rects,
-                        label_rects, placements, strip_sizes
-                    )
+                content = place_picture(child, (current_x, img_py, child_w, img_ph))
+                recurse(
+                    child, content,
+                    None if strip_for(child, "label_row_above") > 0 else hoist_above,
+                    None if strip_for(child, "label_row_below") > 0 else hoist_below,
+                )
                 current_x += child_w + gap_mm

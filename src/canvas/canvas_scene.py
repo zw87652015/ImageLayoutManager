@@ -1095,6 +1095,13 @@ class CanvasScene(QGraphicsScene):
                     rb = layout_result.cell_rects.get(children[i + 1].id)
                     if not ra or not rb:
                         continue
+                    # The divider sits in the gap between slots (picture plus
+                    # its label strip) so it does not run through a label.
+                    # Its length still follows the pictures.
+                    slot_a = LayoutEngine.union_rect(
+                        ra, layout_result.label_rects.get(children[i].id))
+                    slot_b = LayoutEngine.union_rect(
+                        rb, layout_result.label_rects.get(children[i + 1].id))
                     div = DividerItem(
                         kind='subcell',
                         ratio_a=ratios[i], ratio_b=ratios[i + 1],
@@ -1104,7 +1111,8 @@ class CanvasScene(QGraphicsScene):
                         orientation=container.split_direction,
                     )
                     if container.split_direction == 'horizontal':
-                        cx = (ra[0] + ra[2] + rb[0]) / 2
+                        cx = LayoutEngine.subcell_divider_center(
+                            slot_a, slot_b, "horizontal")
                         top = min(ra[1], rb[1])
                         bottom = max(ra[1] + ra[3], rb[1] + rb[3])
                         # Inset: visibly shorter than row-level dividers.
@@ -1114,7 +1122,8 @@ class CanvasScene(QGraphicsScene):
                         div.setRect(0, 0, HIT_THICKNESS, bottom - top)
                         div.setPos(cx - HIT_THICKNESS / 2, top)
                     else:
-                        cy = (ra[1] + ra[3] + rb[1]) / 2
+                        cy = LayoutEngine.subcell_divider_center(
+                            slot_a, slot_b, "vertical")
                         left = min(ra[0], rb[0])
                         right = max(ra[0] + ra[2], rb[0] + rb[2])
                         inset = min(2.0, (right - left) * 0.06)
