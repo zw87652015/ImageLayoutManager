@@ -50,7 +50,6 @@ from src.app.theme import build_palette, apply_font_scale, LIGHT
 from src.utils import crash_recovery
 
 def main():
-    from src.app.main_window import MainWindow
     # File logging + crash guard must exist before any Qt code runs so
     # even import-time/startup failures leave a trace. The excepthook is
     # re-armed with a rescue callback once the window exists.
@@ -87,6 +86,23 @@ def main():
     app.setPalette(build_palette(LIGHT))
     apply_font_scale(app, _scale, LIGHT)
 
+    # Explorer double-click launch with a file argument: forward it to the
+    # most recently focused running instance instead of a new window.
+    # MainWindow is intentionally imported below this so a forwarded
+    # launch stays fast and never builds UI.
+    if len(sys.argv) > 1:
+        cli_path = sys.argv[1]
+        if os.path.isfile(cli_path):
+            try:
+                from src.app.instance_router import forward_to_running_instance
+                if forward_to_running_instance(cli_path):
+                    logger.info("Forwarded %s to a running instance", cli_path)
+                    return
+            except Exception:
+                logger.exception(
+                    "Instance forwarding failed; starting a new window")
+
+    from src.app.main_window import MainWindow
     window = MainWindow()
     window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
@@ -94,6 +110,24 @@ def main():
     # exception, every dirty tab is snapshotted to the recovery dir
     # before the crash dialog is shown.
     crash_recovery.install_excepthook(window.rescue_save_all)
+
+    # Register this window for forwarded file-open launches. Failure must
+    # never block startup.
+    try:
+        from src.app.instance_router import InstanceServer
+        router = InstanceServer(window)
+        if router.start():
+            router.open_requested.connect(window.open_external_path)
+            app.applicationStateChanged.connect(
+                lambda state: router.touch()
+                if state == Qt.ApplicationState.ApplicationActive else None)
+            app.aboutToQuit.connect(router.shutdown)
+            window._instance_router = router  # keep alive
+        else:
+            logger.warning("Instance server failed to listen on %s",
+                           router.server_name)
+    except Exception:
+        logger.exception("Instance server could not start")
 
     # Open a file passed as a command-line argument (double-click in Explorer).
     # Windows Explorer calls: ImageLayoutManager.exe "C:\path\to\file.figpack"

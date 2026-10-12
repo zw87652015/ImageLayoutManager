@@ -289,6 +289,54 @@ _QSS_TEMPLATE = """
         color: %(text_tert)s; background: %(surface_subtle)s;
     }
 
+    /* Spin buttons: side by side on the right, with hover/pressed feedback. */
+    QSpinBox, QDoubleSpinBox { padding-right: 46px; }
+    QSpinBox::up-button, QDoubleSpinBox::up-button,
+    QSpinBox::down-button, QDoubleSpinBox::down-button {
+        subcontrol-origin: border;
+        subcontrol-position: center right;
+        width: 20px; height: 18px;
+        border: none;
+        border-radius: %(radius_button)s;
+        background: transparent;
+    }
+    QSpinBox::down-button, QDoubleSpinBox::down-button { right: 3px; }
+    QSpinBox::up-button, QDoubleSpinBox::up-button { right: 24px; }
+    QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+    QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+        background: %(active)s;
+    }
+    QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed,
+    QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+        background: %(accent_tint)s;
+    }
+    QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+        image: url(__ARROW_UP__); width: 10px; height: 10px;
+    }
+    QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+        image: url(__ARROW_DOWN__); width: 10px; height: 10px;
+    }
+    QSpinBox::up-arrow:pressed, QDoubleSpinBox::up-arrow:pressed {
+        image: url(__ARROW_UP_PRESSED__);
+    }
+    QSpinBox::down-arrow:pressed, QDoubleSpinBox::down-arrow:pressed {
+        image: url(__ARROW_DOWN_PRESSED__);
+    }
+    QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:off,
+    QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {
+        image: url(__ARROW_UP_OFF__);
+    }
+    QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:off,
+    QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {
+        image: url(__ARROW_DOWN_OFF__);
+    }
+    QSpinBox::up-button:off, QDoubleSpinBox::up-button:off,
+    QSpinBox::down-button:off, QDoubleSpinBox::down-button:off,
+    QSpinBox::up-button:disabled, QDoubleSpinBox::up-button:disabled,
+    QSpinBox::down-button:disabled, QDoubleSpinBox::down-button:disabled {
+        background: transparent;
+    }
+
     QComboBox::drop-down {
         border: none; width: 22px;
         subcontrol-origin: padding; subcontrol-position: top right;
@@ -664,8 +712,16 @@ def _font_tokens(scale: float) -> dict:
 def get_stylesheet(theme: str, scale: float = 1.0) -> str:
     tokens = {**get_tokens(theme), **_font_tokens(scale)}
     arrow = _ARROW_DOWN_DARK if theme == DARK else _ARROW_DOWN_LIGHT
+    variant = "dark" if theme == DARK else "light"
+    assets = _assets_dir()
+    # Longer placeholders first so "__ARROW_DOWN__" never clips "__ARROW_DOWN_OFF__".
     return (_QSS_TEMPLATE % tokens) \
         .replace("__CHECK_ON__", _CHECK_ON) \
+        .replace("__ARROW_UP_PRESSED__", f"{assets}/arrow_up_accent_{variant}.svg") \
+        .replace("__ARROW_DOWN_PRESSED__", f"{assets}/arrow_down_accent_{variant}.svg") \
+        .replace("__ARROW_UP_OFF__", f"{assets}/arrow_up_{variant}_off.svg") \
+        .replace("__ARROW_DOWN_OFF__", f"{assets}/arrow_down_{variant}_off.svg") \
+        .replace("__ARROW_UP__", f"{assets}/arrow_up_{variant}.svg") \
         .replace("__ARROW_DOWN__", arrow)
 
 

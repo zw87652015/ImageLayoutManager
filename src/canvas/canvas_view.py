@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QGraphicsView
+from PyQt6.QtWidgets import QGraphicsView, QGraphicsRectItem
 import math
 
-from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QPointF, QPoint, QRectF, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QPointF, QPoint, QRect, QRectF, QVariantAnimation, QEasingCurve, QTimer
 from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterPath, QPen, QBrush, QColor, QCursor, QTransform
 
 from src.app.motion import start_animation
+from src.canvas.canvas_ruler import CanvasRuler, RulerCorner
 
 
 class CanvasView(QGraphicsView):
@@ -18,6 +19,7 @@ class CanvasView(QGraphicsView):
     mouse_scene_pos_changed = pyqtSignal(float, float)  # x_mm, y_mm
     navigate_cell = pyqtSignal(str)       # direction: "up"/"down"/"left"/"right"/"next"/"prev"
     swap_cell = pyqtSignal(str)           # direction: "up"/"down"/"left"/"right"
+    ruler_unit_requested = pyqtSignal(str)  # unit picked on a ruler/corner menu
 
     def __init__(self, scene, parent=None):
         super().__init__(scene, parent)
@@ -53,9 +55,6 @@ class CanvasView(QGraphicsView):
         if scene is not None:
             scene.sceneRectChanged.connect(self._scene_rect_changed)
 
-        # Space-drag pan state
-        self._space_held = False
-
         # Manual middle-button / space pan state (avoids synthetic LeftButton
         # reaching scene items and triggering their drag logic)
         self._pan_active = False
@@ -66,6 +65,131 @@ class CanvasView(QGraphicsView):
         from PyQt6.QtCore import QElapsedTimer
         self._last_mouse_emit = QElapsedTimer()
         self._last_mouse_emit.start()
+
+        # Canvas rulers — hidden by default (plot-alignment previews and
+        # other secondary CanvasViews keep their un-margined viewport).
+        self._rulers_visible = False
+        self._ruler_unit = "mm"
+        self._ruler_tokens = {}
+        self._ruler_dirty = False
+        self._cursor_vp_pos = None
+        self._h_ruler = CanvasRuler(Qt.Orientation.Horizontal, self)
+        self._v_ruler = CanvasRuler(Qt.Orientation.Vertical, self)
+        self._ruler_corner = RulerCorner(self)
+        for w in (self._h_ruler, self._v_ruler, self._ruler_corner):
+            w.hide()
+        # Never connect to scene.changed: any connection switches
+        # QGraphicsScene to its legacy update path, which leaves stale
+        # pixels on the canvas. Geometry changes refresh the rulers via
+        # mouse moves and MainWindow._refresh_and_update instead.
+        if scene is not None:
+            scene.selectionChanged.connect(self._schedule_ruler_update)
+
+    # ------------------------------------------------------------------
+    # Rulers
+    # ------------------------------------------------------------------
+
+    def set_rulers_visible(self, visible: bool):
+        visible = bool(visible)
+        if visible == self._rulers_visible:
+            return
+        self._rulers_visible = visible
+        t = self._h_ruler.thickness() if visible else 0
+        self.setViewportMargins(t, t, 0, 0)
+        for w in (self._h_ruler, self._v_ruler, self._ruler_corner):
+            w.setVisible(visible)
+        self._layout_rulers()
+        self._update_rulers()
+
+    def set_ruler_unit(self, unit: str):
+        self._ruler_unit = unit
+        self._h_ruler.set_unit(unit)
+        self._v_ruler.set_unit(unit)
+        self._ruler_corner.set_unit(unit)
+
+    def set_ruler_tokens(self, tokens: dict):
+        self._ruler_tokens = tokens or {}
+        for w in (self._h_ruler, self._v_ruler, self._ruler_corner):
+            w.set_tokens(self._ruler_tokens)
+
+    def _layout_rulers(self):
+        if not getattr(self, '_rulers_visible', False):
+            return
+        t = self._h_ruler.thickness()
+        vp = self.viewport().geometry()
+        self._h_ruler.setGeometry(QRect(vp.x(), vp.y() - t, vp.width(), t))
+        self._v_ruler.setGeometry(QRect(vp.x() - t, vp.y(), t, vp.height()))
+        self._ruler_corner.setGeometry(QRect(vp.x() - t, vp.y() - t, t, t))
+
+    def _schedule_ruler_update(self):
+        """Coalesce bursts of scene/selection changes into one repaint."""
+        if not getattr(self, '_rulers_visible', False) or self._ruler_dirty:
+            return
+        self._ruler_dirty = True
+        QTimer.singleShot(0, self._update_rulers)
+
+    def _update_rulers(self):
+        self._ruler_dirty = False
+        if not getattr(self, '_rulers_visible', False):
+            return
+        sel = self.selection_scene_rect()
+        m = self.viewportTransform()
+        cur = self._cursor_vp_pos
+        for ruler, horizontal in ((self._h_ruler, True),
+                                  (self._v_ruler, False)):
+            if sel is not None:
+                if horizontal:
+                    a = m.m11() * sel.left() + m.dx()
+                    b = m.m11() * sel.right() + m.dx()
+                else:
+                    a = m.m22() * sel.top() + m.dy()
+                    b = m.m22() * sel.bottom() + m.dy()
+                ruler.set_selection_range((min(a, b), max(a, b)))
+            else:
+                ruler.set_selection_range(None)
+            ruler.set_cursor(
+                None if cur is None else (cur.x() if horizontal else cur.y()))
+            ruler.update()
+
+    def selection_scene_rect(self):
+        """Union of the current selection's exact scene geometry."""
+        scene = self.scene()
+        if scene is None:
+            return None
+        rect = None
+        for item in scene.selectedItems():
+            r = None
+            pip_id = getattr(item, '_selected_pip_id', None)
+            if pip_id:
+                pip = next((p for p in getattr(item, '_pip_items', ())
+                            if p.id == pip_id), None)
+                if pip is not None:
+                    r = item.mapRectToScene(
+                        item._pip_inset_rect(pip, item._pip_content_rect()))
+            if r is None:
+                if isinstance(item, QGraphicsRectItem):
+                    r = item.mapRectToScene(item.rect())
+                else:
+                    r = item.sceneBoundingRect()
+            rect = r if rect is None else rect.united(r)
+        return rect
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange and getattr(self, '_rulers_visible', False):
+            t = self._h_ruler.thickness()
+            self.setViewportMargins(t, t, 0, 0)
+            self._layout_rulers()
+            self._update_rulers()
+
+    def scrollContentsBy(self, dx, dy):
+        super().scrollContentsBy(dx, dy)
+        self._update_rulers()
+
+    def leaveEvent(self, event):
+        self._cursor_vp_pos = None
+        self._update_rulers()
+        super().leaveEvent(event)
 
     # ------------------------------------------------------------------
     # Zoom helpers
@@ -143,6 +267,7 @@ class CanvasView(QGraphicsView):
         self.verticalScrollBar().setValue(scroll_y)
         self._zoom_level = self.transform().m11()
         self.zoom_changed.emit(self._zoom_level)
+        self._update_rulers()
 
     def _start_zoom(self, zoom, anchor=None, scene_target=None, animated=True):
         if not math.isfinite(zoom) or zoom <= 0:
@@ -214,8 +339,8 @@ class CanvasView(QGraphicsView):
 
     def mousePressEvent(self, event: QMouseEvent):
         self._cancel_zoom()
-        if event.button() == Qt.MouseButton.MiddleButton or self._space_held:
-            # Pan via middle-button or Space+drag — handled entirely in the
+        if event.button() == Qt.MouseButton.MiddleButton:
+            # Pan via middle-button — handled entirely in the
             # view so the event never reaches scene items (prevents accidental
             # cell-drag when the wheel button is pressed over a cell).
             self._pan_active = True
@@ -257,6 +382,10 @@ class CanvasView(QGraphicsView):
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        # Feed the rulers' cursor marker first — before the emit throttle and
+        # before the label-drag early return below.
+        self._cursor_vp_pos = event.position()
+        self._update_rulers()
         # A strip-label drag outlives its source item (the hover preview can
         # remove the strip), so the view forwards continuation events itself.
         scene = self.scene()
@@ -308,10 +437,10 @@ class CanvasView(QGraphicsView):
             self.viewport().update()
             event.accept()
             return
-        if event.button() == Qt.MouseButton.MiddleButton or (self._space_held and event.button() == Qt.MouseButton.LeftButton):
+        if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_active = False
             self._pan_last_pos = None
-            self.setCursor(Qt.CursorShape.OpenHandCursor if self._space_held else Qt.CursorShape.ArrowCursor)
+            self.setCursor(Qt.CursorShape.ArrowCursor)
             event.accept()
         else:
             super().mouseReleaseEvent(event)
@@ -331,13 +460,6 @@ class CanvasView(QGraphicsView):
     def keyPressEvent(self, event: QKeyEvent):
         key = event.key()
         mod = event.modifiers()
-
-        # Space+drag pan
-        if key == Qt.Key.Key_Space and not event.isAutoRepeat():
-            self._space_held = True
-            self.setCursor(Qt.CursorShape.OpenHandCursor)
-            event.accept()
-            return
 
         # Zoom shortcuts
         if (mod & Qt.KeyboardModifier.ControlModifier
@@ -439,15 +561,18 @@ class CanvasView(QGraphicsView):
         if hasattr(self, '_zoom_anim'):
             self._cancel_zoom()
         super().resizeEvent(event)
+        self._layout_rulers()
+        self._update_rulers()
 
     def hideEvent(self, event):
         self._cancel_zoom()
         super().hideEvent(event)
 
-    def keyReleaseEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
-            self._space_held = False
+    def focusOutEvent(self, event):
+        if self._pan_active:
+            self._pan_active = False
+            self._pan_last_pos = None
             self.unsetCursor()
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
+        super().focusOutEvent(event)
+
+

@@ -50,7 +50,7 @@ _SHORTCUTS_EN = [
     ("F5",                "Reload images from disk"),
     ("Wheel",             "Scroll canvas"),
     ("Ctrl + Wheel",      "Zoom canvas around the pointer"),
-    ("Middle drag",       "Pan canvas; Space + drag also works"),
+    ("Middle drag",       "Pan canvas"),
     ("Ctrl + + / -",      "Zoom canvas in / out (canvas focused)"),
     ("Ctrl + 0",          "Fit page in view (canvas focused)"),
     ("Ctrl + 1",          "Set canvas zoom to 100% (canvas focused)"),
@@ -63,6 +63,7 @@ _SHORTCUTS_EN = [
     ("Ctrl + Shift + T",  "Switch light / dark theme"),
     ("Ctrl + Shift + G",  "Switch interface language"),
     ("Ctrl + \\",         "Show / hide Layers"),
+    ("Ctrl + R",          "Show / hide rulers"),
     ("Ctrl + ,",          "Preferences…"),
     ("F1",                "User Guide…"),
 ]
@@ -93,7 +94,7 @@ _SHORTCUTS_ZH = [
     ("F5",                "从磁盘重新加载图片"),
     ("Wheel",             "滚轮：滚动画布"),
     ("Ctrl + Wheel",      "Ctrl + 滚轮：以指针位置为中心缩放画布"),
-    ("Middle drag",       "中键拖动：平移画布；也可按住空格拖动"),
+    ("Middle drag",       "中键拖动：平移画布"),
     ("Ctrl + + / -",      "放大／缩小画布（画布获得焦点时）"),
     ("Ctrl + 0",          "将页面适配到视图（画布获得焦点时）"),
     ("Ctrl + 1",          "画布缩放设为 100%（画布获得焦点时）"),
@@ -106,6 +107,7 @@ _SHORTCUTS_ZH = [
     ("Ctrl + Shift + T",  "切换浅色／深色主题"),
     ("Ctrl + Shift + G",  "切换界面语言"),
     ("Ctrl + \\",         "显示／隐藏图层面板"),
+    ("Ctrl + R",          "显示／隐藏标尺"),
     ("Ctrl + ,",          "偏好设置…"),
     ("F1",                "使用指南…"),
 ]
@@ -163,7 +165,7 @@ Use a new tab (<code>Ctrl+T</code>) if you want to keep both layouts open.</p>
 <h3>Finding Your Way Around</h3>
 <ul>
   <li><b>Layers, left:</b> select cells and inspect the layout hierarchy.</li>
-  <li><b>Canvas, centre:</b> arrange the figure. Ctrl+wheel or a two-finger pinch zooms; middle-button or Space+drag pans. The status bar's − / percentage / + / Fit controls zoom the current tab's canvas without a keyboard.</li>
+  <li><b>Canvas, centre:</b> arrange the figure. Ctrl+wheel or a two-finger pinch zooms; middle-button drag pans. The status bar's − / percentage / + / Fit controls zoom the current tab's canvas without a keyboard.</li>
   <li><b>Inspector, right:</b> edit project settings or the properties of the selected item.</li>
 </ul>
 <p>Canvas zoom and interface font zoom are separate. Neither changes the figure's physical dimensions.</p>
@@ -201,7 +203,7 @@ _GETTING_STARTED_HTML_ZH = """
 <h3>认识界面</h3>
 <ul>
   <li><b>左侧图层：</b>选择单元格、查看布局层级。</li>
-  <li><b>中间画布：</b>安排组合图。Ctrl+滚轮或双指捏合缩放；中键拖动或空格+拖动平移。状态栏的 − / 百分比 / + / 适合 按钮无需键盘即可缩放当前标签页的画布。</li>
+  <li><b>中间画布：</b>安排组合图。Ctrl+滚轮或双指捏合缩放；中键拖动平移。状态栏的 − / 百分比 / + / 适合 按钮无需键盘即可缩放当前标签页的画布。</li>
   <li><b>右侧检查器：</b>编辑全局设置或所选对象的属性。</li>
 </ul>
 <p>画布缩放与界面字体缩放相互独立，都不会改变图的实际物理尺寸。</p>

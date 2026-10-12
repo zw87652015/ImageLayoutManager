@@ -642,6 +642,30 @@ class MainWindow(QMainWindow):
         self._act_toggle_layers.setChecked(True)
         self._act_toggle_layers.triggered.connect(self._on_toggle_layers_panel)
         self._view_menu.addAction(self._act_toggle_layers)
+
+        # Canvas rulers: toggle + exclusive unit picker, both persisted.
+        self._act_show_rulers = QAction(tr("action_show_rulers"), self)
+        self._act_show_rulers.setShortcut(QKeySequence("Ctrl+R"))
+        self._act_show_rulers.setCheckable(True)
+        self._act_show_rulers.triggered.connect(self._on_toggle_rulers)
+        self._view_menu.addAction(self._act_show_rulers)
+        self._ruler_units_menu = self._view_menu.addMenu(tr("menu_ruler_units"))
+        self._ruler_unit_group = QActionGroup(self)
+        self._ruler_unit_group.setExclusive(True)
+        self._ruler_unit_actions = {}
+        for _u in ("mm", "cm", "in", "pt"):
+            _act = self._ruler_units_menu.addAction(tr(f"ruler_unit_{_u}"))
+            _act.setCheckable(True)
+            self._ruler_unit_group.addAction(_act)
+            self._ruler_unit_actions[_u] = _act
+            _act.triggered.connect(
+                lambda _c=False, u=_u: self._set_ruler_unit(u))
+        self._rulers_on = self._setting_bool("view/show_rulers", True)
+        self._act_show_rulers.setChecked(self._rulers_on)
+        self._ruler_unit = str(self._settings.value("view/ruler_unit", "mm"))
+        if self._ruler_unit not in ("mm", "cm", "in", "pt"):
+            self._ruler_unit = "mm"
+        self._ruler_unit_actions[self._ruler_unit].setChecked(True)
         self._view_menu.addSeparator()
 
         self._theme_action = QAction(tr("action_switch_light"), self)
@@ -1507,6 +1531,12 @@ class MainWindow(QMainWindow):
         # Seed canvas colours with the current theme before any content loads.
         tab.scene.apply_theme(get_tokens(self._current_theme))
 
+        # Rulers follow the app-wide visibility/unit/theme state.
+        tab.view.set_ruler_tokens(get_tokens(self._current_theme))
+        tab.view.set_ruler_unit(getattr(self, '_ruler_unit', 'mm'))
+        tab.view.set_rulers_visible(getattr(self, '_rulers_on', True))
+        tab.view.ruler_unit_requested.connect(self._set_ruler_unit)
+
         self._tabs.append(tab)
         idx = self.tab_widget.addTab(tab.view, self._tab_title(tab))
         self._activate_tab(idx)
@@ -1688,6 +1718,28 @@ class MainWindow(QMainWindow):
             self.splitter.animate_sizes(sizes)
             self._act_toggle_layers.setChecked(True)
 
+    def _setting_bool(self, key: str, default: bool = False) -> bool:
+        """QSettings may hand back "true"/"false" strings — parse robustly."""
+        v = self._settings.value(key, default)
+        if isinstance(v, str):
+            return v.strip().lower() in ("1", "true", "yes", "on")
+        return bool(v)
+
+    def _on_toggle_rulers(self, checked: bool = False):
+        self._rulers_on = self._act_show_rulers.isChecked()
+        self._settings.setValue("view/show_rulers", self._rulers_on)
+        for tab in self._tabs:
+            tab.view.set_rulers_visible(self._rulers_on)
+
+    def _set_ruler_unit(self, unit: str):
+        if unit not in ("mm", "cm", "in", "pt"):
+            unit = "mm"
+        self._ruler_unit = unit
+        self._settings.setValue("view/ruler_unit", unit)
+        self._ruler_unit_actions[unit].setChecked(True)
+        for tab in self._tabs:
+            tab.view.set_ruler_unit(unit)
+
     def _on_toggle_theme(self):
         new_theme = LIGHT if self._current_theme == DARK else DARK
         self._apply_theme(new_theme)
@@ -1721,6 +1773,7 @@ class MainWindow(QMainWindow):
         for tab in self._tabs:
             if tab.scene:
                 tab.scene.apply_theme(tokens)
+            tab.view.set_ruler_tokens(tokens)
 
         if animate and changed:
             self._flash_theme_overlay()
@@ -1974,6 +2027,10 @@ class MainWindow(QMainWindow):
         self._lang_action.setText(tr("action_switch_zh"))
 
         self._act_toggle_layers.setText(tr("action_toggle_layers"))
+        self._act_show_rulers.setText(tr("action_show_rulers"))
+        self._ruler_units_menu.setTitle(tr("menu_ruler_units"))
+        for _u, _act in self._ruler_unit_actions.items():
+            _act.setText(tr(f"ruler_unit_{_u}"))
         self._act_font_zoom_in.setText(tr("action_font_zoom_in"))
         self._act_font_zoom_out.setText(tr("action_font_zoom_out"))
         self._act_font_zoom_reset.setText(tr("action_font_zoom_reset"))
@@ -2200,6 +2257,8 @@ class MainWindow(QMainWindow):
         self.canvas_size_label.setText(f"Canvas: {int(rect.width())}x{int(rect.height())}")
         # Re-sync inspector so pip/cell spinboxes reflect any model changes
         self._on_selection_changed()
+        # Selection extent on the rulers follows model geometry changes
+        self.view._schedule_ruler_update()
         # Keep hot-reload watcher in sync with current image paths
         self._sync_image_watcher()
         # Keep Layout → Label Placement radio state in sync with project
@@ -2602,6 +2661,24 @@ class MainWindow(QMainWindow):
         is still clean and untitled — _open_path_dispatch reuses it.
         """
         self._open_path_dispatch(path)
+
+    def open_external_path(self, path: str):
+        """Open *path* forwarded by a second-process launch, then raise."""
+        self._open_path_dispatch(path)
+        win = getattr(self, 'welcome_window', None)
+        if win is not None:
+            # Dispatch failed before _dismiss_welcome (e.g. missing file).
+            if not win.isVisible():
+                win.show()
+            win.raise_()
+            win.activateWindow()
+            return
+        if self.isMinimized():
+            self.showNormal()
+        elif not self.isVisible():
+            self.show()
+        self.raise_()
+        self.activateWindow()
 
     def _build_project_from_images(self, paths):
         project = Project()

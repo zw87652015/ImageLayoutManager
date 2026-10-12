@@ -304,10 +304,10 @@ def main(argv=None) -> int:
         "PyQt6.QtGui",
         "PyQt6.QtWidgets",
         "PyQt6.QtSvg",
+        "PyQt6.QtNetwork",
     ]
 
     unused_qt_modules = [
-        "PyQt6.QtNetwork",
         "PyQt6.QtMultimedia",
         "PyQt6.QtMultimediaWidgets",
         "PyQt6.QtWebEngineWidgets",

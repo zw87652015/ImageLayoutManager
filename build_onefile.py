@@ -71,11 +71,11 @@ def main() -> int:
         "PyQt6.QtGui",
         "PyQt6.QtWidgets",
         "PyQt6.QtSvg",
+        "PyQt6.QtNetwork",
     ]
 
     # Qt6 addons that are definitely NOT used.
     unused_qt_modules = [
-        "PyQt6.QtNetwork",
         "PyQt6.QtMultimedia",
         "PyQt6.QtMultimediaWidgets",
         "PyQt6.QtWebEngineWidgets",
