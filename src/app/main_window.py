@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
     QSizePolicy, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray
+from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray, QEventLoop
 from PyQt6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeySequence, QUndoStack, QPalette
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
@@ -1925,7 +1925,7 @@ class MainWindow(QMainWindow):
         self._act_paste.setText(tr("action_paste_clipboard"))
         self._act_copy_shapes.setText(tr("action_copy_shapes"))
         self._act_duplicate_shapes.setText(tr("action_duplicate_shapes"))
-        self._act_delete_sel.setText(tr("action_delete_sel"))
+        self._sync_delete_action_text()
         self._act_delete_img.setText(tr("action_delete_img"))
         self._act_auto_label_incell.setText(tr("action_auto_label_incell"))
         self._act_auto_label_incell.setToolTip(tr("tooltip_auto_label_incell"))
@@ -2924,6 +2924,7 @@ class MainWindow(QMainWindow):
             items = self.scene.selectedItems()
         except RuntimeError:
             return  # Scene was deleted
+        self._sync_delete_action_text(items)
         self._update_mark_clipboard_actions(items)
         if not items:
             self.selection_info_label.setText("")
@@ -2938,7 +2939,8 @@ class MainWindow(QMainWindow):
         # Status bar: selection info
         cell_items = [i for i in items if hasattr(i, 'cell_id') and not getattr(i, 'is_label_cell', False)]
         if len(cell_items) > 1:
-            self.selection_info_label.setText(f"  {len(cell_items)} cells selected")
+            self.selection_info_label.setText(
+                tr("status_cells_selected").format(count=len(cell_items)))
         elif len(cell_items) == 1:
             ci = cell_items[0]
             cell = self.project.find_cell_by_id(ci.cell_id)
@@ -2974,23 +2976,30 @@ class MainWindow(QMainWindow):
 
         # Multi-cell selection
         if len(cell_items) > 1:
-            first_cell = self.project.find_cell_by_id(cell_items[0].cell_id)
-            multi_data = {"count": len(cell_items), "layout_mode": getattr(self.project, 'layout_mode', 'grid')}
-            if first_cell:
-                multi_data.update({
-                    "fit_mode": first_cell.fit_mode,
-                    "rotation": getattr(first_cell, 'rotation', 0),
-                    "padding_top": first_cell.padding_top,
-                    "padding_bottom": first_cell.padding_bottom,
-                    "padding_left": first_cell.padding_left,
-                    "padding_right": first_cell.padding_right,
-                })
-            # Common size group across selection (None if mixed or ungrouped)
-            gids = {getattr(self.project.find_cell_by_id(ci.cell_id), 'size_group_id', None)
-                    for ci in cell_items}
-            common_gid = next(iter(gids)) if len(gids) == 1 else None
-            multi_data["size_group_id"] = common_gid
-            multi_data["_size_groups"] = self._size_groups_payload()
+            from src.app.inspector import MIXED
+            cells = [self.project.find_cell_by_id(ci.cell_id) for ci in cell_items]
+            cells = [c for c in cells if c is not None]
+
+            def common(attr, default=None):
+                vals = {getattr(c, attr, default) for c in cells}
+                return vals.pop() if len(vals) == 1 else MIXED
+
+            multi_data = {
+                "count": len(cell_items),
+                "layout_mode": getattr(self.project, 'layout_mode', 'grid'),
+                "fit_mode": common('fit_mode', 'contain'),
+                "rotation": common('rotation', 0),
+                "align_h": common('align_h', 'center'),
+                "align_v": common('align_v', 'center'),
+                "padding_top": common('padding_top', 0),
+                "padding_bottom": common('padding_bottom', 0),
+                "padding_left": common('padding_left', 0),
+                "padding_right": common('padding_right', 0),
+                "override_width_mm": common('override_width_mm', 0.0),
+                "override_height_mm": common('override_height_mm', 0.0),
+                "size_group_id": common('size_group_id'),
+                "_size_groups": self._size_groups_payload(),
+            }
             self.inspector.set_selection('multi_cell', multi_data)
             return
 
@@ -3918,6 +3927,10 @@ class MainWindow(QMainWindow):
                     cmd = DeleteTextCommand(self.project, text_obj, self._refresh_and_update)
                     self.undo_stack.push(cmd)
                     handled = True
+            elif (isinstance(item, CellItem) and not item.is_label_cell
+                  and getattr(item, '_selected_pip_id', None)):
+                self._on_pip_removed(item.cell_id, item._selected_pip_id)
+                handled = True
             elif isinstance(item, CellItem) and item.is_label_cell:
                 # Label cell ID is "label_{cell_id}" — extract the parent cell_id
                 parent_cell_id = item.cell_id.removeprefix("label_")
@@ -3950,6 +3963,10 @@ class MainWindow(QMainWindow):
 
         # One command per cell (keeps undo/redo consistent with existing commands)
         for cell_item in selected_cells:
+            pip_id = getattr(cell_item, '_selected_pip_id', None)
+            if pip_id:
+                self._on_pip_removed(cell_item.cell_id, pip_id)
+                continue
             cell = self.project.find_cell_by_id(cell_item.cell_id)
             if not cell:
                 continue
@@ -3964,6 +3981,20 @@ class MainWindow(QMainWindow):
             )
             self.undo_stack.push(cmd)
 
+    def _sync_delete_action_text(self, items=None):
+        """Retitle the Delete action when the selection targets a PiP inset."""
+        if items is None:
+            try:
+                items = self.scene.selectedItems()
+            except (RuntimeError, AttributeError):
+                items = []
+        from src.canvas.cell_item import CellItem
+        if any(getattr(i, '_selected_pip_id', None)
+               for i in items if isinstance(i, CellItem)):
+            self._act_delete_sel.setText(tr("btn_delete_pip"))
+        else:
+            self._act_delete_sel.setText(tr("action_delete_sel"))
+
     def _append_reveal_image_source_action(self, menu, path):
         action = menu.addAction(tr("ctx_reveal_image_source"))
         action.setEnabled(bool(path) and os.path.isfile(path))
@@ -3971,14 +4002,16 @@ class MainWindow(QMainWindow):
         action.triggered.connect(lambda checked=False: self._reveal_image_source(path))
 
     def _reveal_image_source(self, path):
+        self._reveal_in_file_manager(path, tr("ctx_reveal_image_source"))
+
+    def _reveal_in_file_manager(self, path, title):
         import subprocess
         import sys
         from PyQt6.QtCore import QUrl
         from PyQt6.QtGui import QDesktopServices
 
         if not path or not os.path.isfile(path):
-            QMessageBox.warning(self, tr("ctx_reveal_image_source"),
-                                tr("reveal_image_source_missing"))
+            QMessageBox.warning(self, title, tr("reveal_image_source_missing"))
             return
         path = os.path.normpath(os.path.abspath(path))
         try:
@@ -3989,8 +4022,74 @@ class MainWindow(QMainWindow):
             elif not QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path))):
                 raise OSError(tr("reveal_image_source_failed"))
         except OSError:
-            QMessageBox.warning(self, tr("ctx_reveal_image_source"),
-                                tr("reveal_image_source_failed"))
+            QMessageBox.warning(self, title, tr("reveal_image_source_failed"))
+
+    def _run_export(self, fmt_label: str, fn):
+        """Run an exporter on the GUI thread behind a modal busy dialog."""
+        dlg = QProgressDialog(
+            tr("export_in_progress").format(fmt=fmt_label), None, 0, 0, self)
+        dlg.setWindowTitle(tr("msg_export_done_title"))
+        dlg.setCancelButton(None)
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setMinimumWidth(320)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        dlg.show()
+        for _ in range(3):
+            QApplication.processEvents(
+                QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+            dlg.repaint()
+        try:
+            result = fn()
+            return True, result
+        except Exception as e:
+            QMessageBox.warning(self, tr("msg_export_done_title"),
+                                tr("msg_export_failed").format(error=e))
+            return False, None
+        finally:
+            QApplication.restoreOverrideCursor()
+            dlg.close()
+            dlg.deleteLater()
+
+    def _show_export_result(self, path, message, details=None, warning=False):
+        """Non-modal export summary with Open File / Show in Folder actions."""
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QDesktopServices
+
+        old = getattr(self, '_export_result_box', None)
+        if old is not None:
+            try:
+                old.close()
+                old.deleteLater()
+            except RuntimeError:
+                pass
+        box = QMessageBox(
+            QMessageBox.Icon.Warning if warning else QMessageBox.Icon.Information,
+            tr("msg_export_done_title"), message,
+            QMessageBox.StandardButton.Close, self)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        if details:
+            box.setDetailedText(details)
+        open_btn = box.addButton(tr("btn_open_file"),
+                                 QMessageBox.ButtonRole.ActionRole)
+        reveal_btn = box.addButton(tr("btn_show_in_folder"),
+                                   QMessageBox.ButtonRole.ActionRole)
+
+        def _open():
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+                self.statusBar().showMessage(tr("msg_open_file_failed"), 5000)
+
+        open_btn.clicked.connect(_open)
+        reveal_btn.clicked.connect(
+            lambda: self._reveal_in_file_manager(path, tr("msg_export_done_title")))
+        box.setWindowModality(Qt.WindowModality.NonModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        self._export_result_box = box
+        self.statusBar().showMessage(
+            tr("msg_exported_to").format(path=path), 5000)
+        box.show()
 
     def _on_layers_context_menu(self, cell_ids: list, global_pos):
         """Right-click context menu from the layers panel tree.
@@ -5820,7 +5919,10 @@ class MainWindow(QMainWindow):
         default_dir = self._get_export_default_dir()
         path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_pdf"), default_dir, "PDF Files (*.pdf)")
         if path:
-            report = PdfExporter.export(self.project, path, image_mode=mode, jpeg_quality=quality)
+            ok, report = self._run_export("PDF", lambda: PdfExporter.export(
+                self.project, path, image_mode=mode, jpeg_quality=quality))
+            if not ok:
+                return
             message = tr("msg_exported_to").format(path=path)
             lines = [format_issue(issue, current_language()) for issue in report.issues]
             if lines:
@@ -5828,11 +5930,10 @@ class MainWindow(QMainWindow):
                 message += "\n\n" + tr("pdf_export_warnings").format(warnings="\n".join("• " + line for line in shown))
             if report.lossless_verified:
                 message += "\n\n" + tr("pdf_export_verified")
-            box = QMessageBox(QMessageBox.Icon.Information, tr("msg_export_done_title"), message,
-                              QMessageBox.StandardButton.Ok, self)
-            if lines:
-                box.setDetailedText("\n".join(lines))
-            box.exec()
+            self._show_export_result(
+                path, message,
+                details="\n".join(lines) if lines else None,
+                warning=bool(lines))
 
     def _on_export_tiff(self):
         if not self._check_plot_alignment_for_export():
@@ -5875,11 +5976,13 @@ class MainWindow(QMainWindow):
                 # harmless either way — exporter reads it defensively.
                 self.project.cmyk_rendering_intent = intent
 
-        ImageExporter.export(
+        ok, _ = self._run_export("TIFF", lambda: ImageExporter.export(
             self.project, path, "TIFF",
             color_mode=color_mode, icc_profile_path=icc_path,
             rendering_intent=intent,
-        )
+        ))
+        if not ok:
+            return
         info_tail = ""
         if color_mode == 'cmyk':
             if icc_path:
@@ -5887,8 +5990,8 @@ class MainWindow(QMainWindow):
                     name=os.path.basename(icc_path))
             else:
                 info_tail = tr("msg_no_icc_tail")
-        QMessageBox.information(
-            self, tr("msg_export_done_title"),
+        self._show_export_result(
+            path,
             tr("msg_export_done").format(
                 path=path, mode=color_mode.upper(), tail=info_tail)
         )
@@ -5907,9 +6010,12 @@ class MainWindow(QMainWindow):
         if path:
             if not path.lower().endswith('.png'):
                 path += '.png'
-            ImageExporter.export(self.project, path, "PNG",
-                                 transparent=selected_filter != white_filter)
-            QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
+            ok, _ = self._run_export("PNG", lambda: ImageExporter.export(
+                self.project, path, "PNG",
+                transparent=selected_filter != white_filter))
+            if not ok:
+                return
+            self._show_export_result(path, tr("msg_exported_to").format(path=path))
 
     def _on_export_jpg(self):
         if not self._check_plot_alignment_for_export():
@@ -5918,8 +6024,11 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, tr("dlg_export_jpg"), default_dir, "JPEG Files (*.jpg *.jpeg)")
         if not path:
             return
-        ImageExporter.export(self.project, path, "JPG")
-        QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
+        ok, _ = self._run_export("JPEG", lambda: ImageExporter.export(
+            self.project, path, "JPG"))
+        if not ok:
+            return
+        self._show_export_result(path, tr("msg_exported_to").format(path=path))
 
     def _on_export_svg(self):
         if not self._check_plot_alignment_for_export():
@@ -5930,8 +6039,11 @@ class MainWindow(QMainWindow):
         if path:
             if not path.lower().endswith('.svg'):
                 path += '.svg'
-            SvgExporter.export(self.project, path)
-            QMessageBox.information(self, tr("msg_export_done_title"), tr("msg_exported_to").format(path=path))
+            ok, _ = self._run_export("SVG", lambda: SvgExporter.export(
+                self.project, path))
+            if not ok:
+                return
+            self._show_export_result(path, tr("msg_exported_to").format(path=path))
 
     def _plot_text_summary(self, cell):
         """Distinct text sizes of a reflowing native plot, memoised by file

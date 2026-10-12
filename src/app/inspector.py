@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QPushButton, QToolButton, QButtonGroup, QCheckBox,
     QScrollArea, QColorDialog, QFrame, QSizePolicy
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF, QVariantAnimation, QLocale
+from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF, QVariantAnimation, QLocale, QSignalBlocker
 from PyQt6.QtGui import QColor, QPainter, QPalette, QFont, QFontMetrics, QPen, QDoubleValidator
 import os
 from typing import Optional
@@ -1247,10 +1247,14 @@ class Inspector(QWidget):
 
         self._sec_padding = QLabel("— Padding —")
         self.cell_layout.addRow(self._sec_padding)
-        self.pad_top = self._create_spinbox(-100, 100, self._emit_padding)
-        self.pad_bottom = self._create_spinbox(-100, 100, self._emit_padding)
-        self.pad_left = self._create_spinbox(-100, 100, self._emit_padding)
-        self.pad_right = self._create_spinbox(-100, 100, self._emit_padding)
+        self.pad_top = self._create_spinbox(
+            -100, 100, lambda v: self._emit_padding("padding_top", v))
+        self.pad_bottom = self._create_spinbox(
+            -100, 100, lambda v: self._emit_padding("padding_bottom", v))
+        self.pad_left = self._create_spinbox(
+            -100, 100, lambda v: self._emit_padding("padding_left", v))
+        self.pad_right = self._create_spinbox(
+            -100, 100, lambda v: self._emit_padding("padding_right", v))
         
         self.cell_layout.addRow(self._fl("lbl_pad_top"),    self.pad_top)
         self.cell_layout.addRow(self._fl("lbl_pad_bottom"), self.pad_bottom)
@@ -2480,6 +2484,8 @@ class Inspector(QWidget):
             if le is not None:
                 le.setPlaceholderText("")
             spin.setValue(value)
+            if le is not None and not le.text():
+                le.setText(spin.prefix() + spin.textFromValue(spin.value()) + spin.suffix())
 
     def _on_grid_mode_changed(self, index: int):
         mode = "stretch" if index == 0 else "fixed"
@@ -2493,13 +2499,10 @@ class Inspector(QWidget):
     def _make_collapsible(self, section) -> None:
         pass  # CollapsibleSection handles this natively
 
-    def _emit_padding(self):
-        self.cell_property_changed.emit({
-            "padding_top": self.pad_top.value(),
-            "padding_bottom": self.pad_bottom.value(),
-            "padding_left": self.pad_left.value(),
-            "padding_right": self.pad_right.value()
-        })
+    def _emit_padding(self, key, value):
+        # Each spin emits only its own key so a mixed multi-selection edit
+        # never overwrites the other three fields with placeholder defaults.
+        self.cell_property_changed.emit({key: value})
 
     def _set_freeform_visible(self, visible: bool):
         """Show or hide the Freeform Geometry section in the cell inspector."""
@@ -2540,7 +2543,10 @@ class Inspector(QWidget):
             "aspect_ratio_locked": self.aspect_lock_btn.isChecked(),
         })
 
-    def _on_override_w_changed(self):
+    def _on_override_w_changed(self, v=0.0):
+        if getattr(self, '_current_item_type', None) == 'multi_cell':
+            self.cell_property_changed.emit({"override_width_mm": v})
+            return
         if self.aspect_lock_btn.isChecked():
             ar = self._current_aspect_ratio()
             if ar and ar > 0 and self.override_w.value() > 0:
@@ -2549,7 +2555,10 @@ class Inspector(QWidget):
                 self.override_h.blockSignals(False)
         self._emit_override_size()
 
-    def _on_override_h_changed(self):
+    def _on_override_h_changed(self, v=0.0):
+        if getattr(self, '_current_item_type', None) == 'multi_cell':
+            self.cell_property_changed.emit({"override_height_mm": v})
+            return
         if self.aspect_lock_btn.isChecked():
             ar = self._current_aspect_ratio()
             if ar and ar > 0 and self.override_h.value() > 0:
@@ -3210,23 +3219,52 @@ class Inspector(QWidget):
             self.pip_group.hide()
             self.scale_bar_group.hide()
             self.svg_normalize_group.hide()
+            self.cell_group.show()
+            count = (data or {}).get("count", 0)
+            self.multi_label.setText(
+                tr("multi_cell_selection").format(count=count))
+            self.multi_label.show()
+            # Single-cell-only rows are hidden: per-cell values differ and a
+            # shared edit here would stamp one value over all of them.
+            self._set_freeform_visible(False)
+            for w in (self.format_value,
+                      self.corner_label_tl, self.corner_label_tr,
+                      self.corner_label_bl, self.corner_label_br,
+                      self._plot_alignment_row, self.aspect_lock_btn):
+                self.cell_layout.setRowVisible(w, False)
+            self._plot_alignment_cell_id = None
             if data:
                 self.blockSignals(True)
-                # Combos can't blank cleanly; show first item's value when mixed.
                 fm = data.get("fit_mode", "contain")
-                self.fit_mode_combo.setCurrentText(fm if fm is not MIXED else "")
+                with QSignalBlocker(self.fit_mode_combo):
+                    if fm is MIXED:
+                        self.fit_mode_combo.setCurrentIndex(-1)
+                    else:
+                        self.fit_mode_combo.setCurrentText(fm)
                 rot = data.get("rotation", 0)
-                self.rotation_combo.setCurrentText(str(rot) if rot is not MIXED else "")
+                with QSignalBlocker(self.rotation_combo):
+                    if rot is MIXED:
+                        self.rotation_combo.setCurrentIndex(-1)
+                    else:
+                        self.rotation_combo.setCurrentText(str(rot))
+                ah, av = data.get("align_h"), data.get("align_v")
+                if ah is MIXED or av is MIXED:
+                    self._set_alignment_buttons(None, None)
+                else:
+                    self._set_alignment_buttons(ah, av)
                 self._set_spin(self.pad_top,    data.get("padding_top", 0))
                 self._set_spin(self.pad_bottom, data.get("padding_bottom", 0))
                 self._set_spin(self.pad_left,   data.get("padding_left", 0))
                 self._set_spin(self.pad_right,  data.get("padding_right", 0))
-                self._set_spin(self.freeform_x, data.get("freeform_x_mm", 0.0))
-                self._set_spin(self.freeform_y, data.get("freeform_y_mm", 0.0))
-                self._set_spin(self.freeform_w, data.get("freeform_w_mm", 50.0), default=50.0)
-                self._set_spin(self.freeform_h, data.get("freeform_h_mm", 50.0), default=50.0)
+                # No shared image ratio across cells — the lock stays off and
+                # each override field emits only its own key.
+                self._current_cell_aspect_ratio = None
+                self._locked_ratio = None
                 self._set_spin(self.override_w, data.get("override_width_mm", 0.0))
                 self._set_spin(self.override_h, data.get("override_height_mm", 0.0))
+                self.aspect_lock_btn.blockSignals(True)
+                self.aspect_lock_btn.setChecked(False)
+                self.aspect_lock_btn.blockSignals(False)
                 # Size group: show current only if all selected share one; still allow assignment
                 sg = data.get("size_group_id")
                 self._populate_size_group_section(
@@ -3346,6 +3384,12 @@ class Inspector(QWidget):
             self.group_label_group.hide()
             self.mark_group.hide()
             self.cell_group.show()
+            # Rows hidden for 'multi_cell' must come back for single selection.
+            for w in (self.format_value,
+                      self.corner_label_tl, self.corner_label_tr,
+                      self.corner_label_bl, self.corner_label_br,
+                      self._plot_alignment_row, self.aspect_lock_btn):
+                self.cell_layout.setRowVisible(w, True)
             self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
 
             # Show row group
@@ -3399,10 +3443,10 @@ class Inspector(QWidget):
                 data.get("align_h", "center"),
                 data.get("align_v", "center"),
             )
-            self.pad_top.setValue(data.get("padding_top", 0))
-            self.pad_bottom.setValue(data.get("padding_bottom", 0))
-            self.pad_left.setValue(data.get("padding_left", 0))
-            self.pad_right.setValue(data.get("padding_right", 0))
+            self._set_spin(self.pad_top,    data.get("padding_top", 0))
+            self._set_spin(self.pad_bottom, data.get("padding_bottom", 0))
+            self._set_spin(self.pad_left,   data.get("padding_left", 0))
+            self._set_spin(self.pad_right,  data.get("padding_right", 0))
             self.freeform_x.setValue(data.get("freeform_x_mm", 0.0))
             self.freeform_y.setValue(data.get("freeform_y_mm", 0.0))
             self.freeform_w.setValue(data.get("freeform_w_mm", 50.0))
@@ -3411,8 +3455,8 @@ class Inspector(QWidget):
             # consult it, and a stale value would rewrite the loaded sizes.
             self._current_cell_aspect_ratio = data.get("_image_aspect_ratio")
             self._locked_ratio = None
-            self.override_w.setValue(data.get("override_width_mm", 0.0))
-            self.override_h.setValue(data.get("override_height_mm", 0.0))
+            self._set_spin(self.override_w, data.get("override_width_mm", 0.0))
+            self._set_spin(self.override_h, data.get("override_height_mm", 0.0))
             locked = data.get("aspect_ratio_locked", False)
             if locked and not self._current_cell_aspect_ratio:
                 # No image to measure: the stored pair is the locked ratio.

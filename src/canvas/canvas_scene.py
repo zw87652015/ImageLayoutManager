@@ -363,7 +363,11 @@ class CanvasScene(QGraphicsScene):
             )
 
             if not is_new and self._cell_data_cache.get(cell.id) == fingerprint:
-                continue  # nothing changed — skip expensive update
+                # PiP fields (geometry, border, ...) mutate in place and are not
+                # in the fingerprint, so repaint insets explicitly.
+                if pip_items or item._pip_items:
+                    item.update_pip_items(pip_items)
+                continue  # nothing else changed — skip expensive update
 
             self._cell_data_cache[cell.id] = fingerprint
 

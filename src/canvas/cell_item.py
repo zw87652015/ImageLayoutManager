@@ -1087,7 +1087,38 @@ class CellItem(QGraphicsRectItem):
             self._pip_resize_active = False
             self._pip_drag_mode = None
             self._pip_drag_id = None
+        self._refit_pip_heights()
         self.update()
+
+    def _refit_pip_heights(self):
+        """Keep each inset's frame matched to its content after the parent
+        cell's shape changes (Auto-Layout, divider drag, padding, ...).
+
+        Inset x/y/w/h are normalized to the cell content rect, so a cell with
+        a new aspect ratio would otherwise leave a gap between the content
+        (drawn contained) and the border. The height is a pure function of
+        the width and the content aspect, so re-deriving it is idempotent."""
+        cr = self._pip_content_rect()
+        if cr.width() <= 0 or cr.height() <= 0:
+            return
+        for pip in self._pip_items:
+            if pip.pip_type == "external":
+                if not (pip.image_path and os.path.exists(pip.image_path)):
+                    continue
+            elif not (self._pixmap and not self._pixmap.isNull()):
+                continue
+            ratio = self._get_pip_intrinsic_aspect_ratio(pip)
+            if ratio <= 0:
+                continue
+            w = pip.w
+            h = (w * cr.width()) / (ratio * cr.height())
+            if h > 1.0:
+                w, h = w / h, 1.0
+            if abs(h - pip.h) < 1e-6 and abs(w - pip.w) < 1e-6:
+                continue
+            pip.w, pip.h = w, h
+            pip.x = max(0.0, min(pip.x, 1.0 - w))
+            pip.y = max(0.0, min(pip.y, 1.0 - h))
 
     def select_pip(self, pip_id: str, resize: bool = False):
         """Select a PiP inset.
