@@ -1481,12 +1481,52 @@ class ChangeSubCellRatioCommand(QUndoCommand):
             self.update_callback()
 
 
+def _snapshot_numbering_labels(project) -> dict:
+    """Map id -> (text, sub_labels, sub_label_splits) for every cell label."""
+    return {
+        t.id: (t.text, list(t.sub_labels), list(t.sub_label_splits))
+        for t in project.text_items
+        if t.scope == "cell" and t.subtype != "corner"
+    }
+
+
+def _restore_numbering_labels(project, state: dict) -> None:
+    for t in project.text_items:
+        if t.id in state:
+            text, sub_labels, splits = state[t.id]
+            t.text = text
+            t.sub_labels = list(sub_labels)
+            t.sub_label_splits = list(splits)
+
+
+def _apply_label_updates(project, updates: dict) -> None:
+    """Apply ``apply_numbering_updates`` output; ``None`` sub-labels are kept."""
+    for t in project.text_items:
+        if t.id in updates:
+            text, sub_labels = updates[t.id]
+            t.text = text
+            if sub_labels is not None:
+                t.sub_labels = list(sub_labels)
+
+
+def _split_structure(project) -> dict:
+    """Map parent cell id -> (sub_labels, splits) for split labels on leaf cells."""
+    structure = {}
+    for t in project.text_items:
+        if t.scope != "cell" or t.subtype == "corner" or len(t.sub_labels) < 2:
+            continue
+        cell = project.find_cell_by_id(t.parent_id) if t.parent_id else None
+        if cell is not None and cell.is_leaf:
+            structure.setdefault(t.parent_id, (list(t.sub_labels), list(t.sub_label_splits)))
+    return structure
+
+
 class ChangeLabelSchemeCommand(QUndoCommand):
     """Change the label scheme(s) and re-apply them to existing numbering labels.
 
-    Numbering is delegated to ``auto_label.compute_label_texts`` so a scheme
+    Numbering is delegated to ``auto_label.apply_numbering_updates`` so a scheme
     change produces exactly what re-running auto-label would, including
-    hierarchical sub-schemes.
+    hierarchical sub-schemes and the segment texts of split panel labels.
     """
     def __init__(self, project, new_scheme: str, new_sub_scheme=None,
                  update_callback=None):
@@ -1499,39 +1539,36 @@ class ChangeLabelSchemeCommand(QUndoCommand):
                                else new_sub_scheme)
         self.update_callback = update_callback
 
-        self.old_texts = {
-            t.id: t.text for t in project.text_items
-            if t.scope == "cell" and t.subtype != "corner"
-        }
-        self.new_texts = self._compute_texts()
+        self.old_state = _snapshot_numbering_labels(project)
+        self.new_state = self._compute_state()
 
-    def _compute_texts(self) -> dict:
-        """Map text-item id -> new text, only for cells that already have one."""
-        from src.utils.auto_label import compute_label_texts
-        by_cell = compute_label_texts(
+    def _compute_state(self) -> dict:
+        """Map text-item id -> (text, sub_labels, splits) after the scheme change."""
+        from src.utils.auto_label import apply_numbering_updates
+        updates = apply_numbering_updates(
             self.project, self.new_scheme, self.new_sub_scheme
         )
-        return {
-            t.id: by_cell[t.parent_id]
-            for t in self.project.text_items
-            if (t.scope == "cell" and t.subtype != "corner"
-                and t.parent_id in by_cell)
-        }
+        state = dict(self.old_state)
+        for item_id, (text, sub_labels) in updates.items():
+            if item_id not in self.old_state:
+                continue
+            _old_text, old_sub, old_splits = self.old_state[item_id]
+            state[item_id] = (text, old_sub if sub_labels is None else sub_labels,
+                              old_splits)
+        return state
 
-    def _apply(self, scheme, sub_scheme, texts):
+    def _apply(self, scheme, sub_scheme, state):
         self.project.label_scheme = scheme
         self.project.label_scheme_sub = sub_scheme
-        for t in self.project.text_items:
-            if t.id in texts:
-                t.text = texts[t.id]
+        _restore_numbering_labels(self.project, state)
         if self.update_callback:
             self.update_callback()
 
     def redo(self):
-        self._apply(self.new_scheme, self.new_sub_scheme, self.new_texts)
+        self._apply(self.new_scheme, self.new_sub_scheme, self.new_state)
 
     def undo(self):
-        self._apply(self.old_scheme, self.old_sub_scheme, self.old_texts)
+        self._apply(self.old_scheme, self.old_sub_scheme, self.old_state)
 
 
 class AutoLabelCommand(QUndoCommand):
@@ -1595,10 +1632,11 @@ class AutoLabelOutCellCommand(QUndoCommand):
             t for t in project.text_items
             if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner'
         ]
+        self.old_split_structure = _split_structure(project)
         self.new_labels = []
 
     def redo(self):
-        from src.utils.auto_label import AutoLabel
+        from src.utils.auto_label import AutoLabel, apply_numbering_updates
         # Sweep ALL numbering labels out (defensive — prevents any stale duplicates)
         self.project.text_items[:] = [
             t for t in self.project.text_items
@@ -1611,6 +1649,13 @@ class AutoLabelOutCellCommand(QUndoCommand):
 
         if not self.new_labels:
             AutoLabel.generate_labels(self.project)
+            for t in self.project.text_items:
+                if (t.scope == 'cell' and t.subtype != 'corner'
+                        and t.parent_id in self.old_split_structure):
+                    labels, splits = self.old_split_structure[t.parent_id]
+                    t.sub_labels = list(labels)
+                    t.sub_label_splits = list(splits)
+            _apply_label_updates(self.project, apply_numbering_updates(self.project))
             self.new_labels = [
                 t for t in self.project.text_items
                 if t.scope == 'cell' and getattr(t, 'subtype', None) != 'corner'
@@ -1627,6 +1672,71 @@ class AutoLabelOutCellCommand(QUndoCommand):
                 self.project.text_items.remove(label)
         self.project.text_items.extend(self.old_numbering_labels)
         self.project.label_placement = self.old_label_placement
+        if self.update_callback:
+            self.update_callback()
+
+
+class SetSubLabelsCommand(QUndoCommand):
+    """Split a leaf cell's label into segments, or merge it back (count 1)."""
+
+    def __init__(self, project, text_item, count: int, update_callback=None,
+                 splits=None, texts=None):
+        from src.utils.sub_labels import MAX_SUB_LABELS, even_splits, sanitize
+        super().__init__("Split Label")
+        parent = project.find_cell_by_id(text_item.parent_id) if text_item.parent_id else None
+        if parent is None or not parent.is_leaf:
+            raise ValueError("Sub-labels need a label on a leaf cell.")
+        if type(count) is not int or not 1 <= count <= MAX_SUB_LABELS:
+            raise ValueError(f"Sub-label count must be 1..{MAX_SUB_LABELS}.")
+        if not any(t.id == text_item.id for t in project.text_items):
+            raise ValueError("Label is not in the project.")
+        if count >= 2:
+            requested = even_splits(count) if splits is None else [float(v) for v in splits]
+            _, checked = sanitize(["_"] * count, requested)
+            if checked != requested:
+                raise ValueError("Sub-label splits must be strictly increasing values in (0, 1).")
+        if texts is not None and (count < 2 or len(texts) != count):
+            raise ValueError("Sub-label texts must match the sub-label count.")
+        self.project = project
+        self.target_id = text_item.id
+        self.count = count
+        self.splits = [] if count < 2 else requested
+        self.texts = None if texts is None else [str(t) for t in texts]
+        self.update_callback = update_callback
+        self.old_state = _snapshot_numbering_labels(project)
+        self.new_state = None
+
+    def _build(self):
+        from src.utils.auto_label import apply_numbering_updates
+        item = next((t for t in self.project.text_items if t.id == self.target_id), None)
+        if item is None:
+            return
+        if self.count < 2:
+            item.sub_labels = []
+            item.sub_label_splits = []
+        else:
+            old = list(item.sub_labels)
+            if len(old) < 2:
+                item.sub_labels = [item.text] + [""] * (self.count - 1)
+            else:
+                item.sub_labels = (old + [""] * self.count)[:self.count]
+            item.sub_label_splits = list(self.splits)
+        _apply_label_updates(self.project,
+                             apply_numbering_updates(self.project, tiers={"panel"}))
+        if self.texts is not None and item.sub_labels:
+            item.sub_labels = list(self.texts)
+
+    def redo(self):
+        if self.new_state is None:
+            self._build()
+            self.new_state = _snapshot_numbering_labels(self.project)
+        else:
+            _restore_numbering_labels(self.project, self.new_state)
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        _restore_numbering_labels(self.project, self.old_state)
         if self.update_callback:
             self.update_callback()
 

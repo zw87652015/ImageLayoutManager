@@ -11,6 +11,7 @@ from src.model.data_model import Project, Cell, mark_for_tool
 from src.canvas.cell_item import CellItem
 from src.canvas.mark_item import MarkItem
 from src.utils import mark_geometry
+from src.utils.sub_labels import is_active
 from src.canvas.text_graphics_item import TextGraphicsItem
 from src.model.layout_engine import LayoutEngine
 from src.canvas.drag_manager import DragManager
@@ -54,6 +55,7 @@ class CanvasScene(QGraphicsScene):
     group_label_side_dropped = pyqtSignal(str, str)  # group_label_id, new side
     group_label_level_dropped = pyqtSignal(str, int)  # group_label_id, new level
     label_placement_dropped = pyqtSignal(str, str)  # text_item_id, new placement
+    label_sub_splits_changed = pyqtSignal(str, list)  # text_item_id, new divider fractions
     mark_drawn = pyqtSignal(object)               # Mark
     marks_geometry_changed = pyqtSignal(list)     # [(mark_id, old_points, new_points)]
     mark_context_menu = pyqtSignal(str, object)   # mark_id, screen_pos
@@ -469,6 +471,9 @@ class CanvasScene(QGraphicsScene):
             litem.label_offset_x, litem.label_offset_y = self.project.effective_label_offsets(text_model)
             litem.label_rotation = getattr(text_model, 'rotation', 0.0) or 0.0
             litem.label_text_item_id = text_model.id
+            sub_active = is_active(self.project, text_model)
+            litem.label_sub_texts = list(text_model.sub_labels) if sub_active else []
+            litem.label_sub_splits = list(text_model.sub_label_splits) if sub_active else []
             litem.update()
 
         self._sync_group_label_items(layout_result)

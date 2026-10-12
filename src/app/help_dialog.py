@@ -589,7 +589,7 @@ _EXPORT_HTML_EN = """
 <ul>
   <li><b>PDF / SVG:</b> can preserve vector elements such as supported SVG content and annotations.
       Raster source panels remain raster; these formats do not turn pixels into vectors.</li>
-  <li><b>TIFF / PNG:</b> lossless raster output, useful when a submission system requests images.</li>
+  <li><b>TIFF / PNG:</b> lossless raster output, useful when a submission system requests images. <b>File → Copy as PNG to Clipboard</b> (<code>Ctrl+Shift+C</code>) puts the same PNG on the clipboard for pasting into other apps.</li>
   <li><b>JPG:</b> lossy output; compression can introduce artifacts around lettering and fine lines.</li>
 </ul>
 <h3>Copy the Source Images</h3>
@@ -627,7 +627,7 @@ _EXPORT_HTML_ZH = """
 <ul>
   <li><b>PDF / SVG：</b>可保留支持的 SVG 内容、标注等矢量元素。
       位图源面板仍是位图，这些格式不会把像素变成矢量。</li>
-  <li><b>TIFF / PNG：</b>无损位图输出，适用于投稿系统要求图片文件的情况。</li>
+  <li><b>TIFF / PNG：</b>无损位图输出，适用于投稿系统要求图片文件的情况。<b>文件 → 复制为 PNG 到剪贴板</b>（<code>Ctrl+Shift+C</code>）可将同样的 PNG 放入剪贴板，粘贴到其他应用。</li>
   <li><b>JPG：</b>有损输出，压缩可能在文字和细线周围产生伪影。</li>
 </ul>
 <h3>复制源图片</h3>

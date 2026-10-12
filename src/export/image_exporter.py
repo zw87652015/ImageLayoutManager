@@ -162,18 +162,14 @@ class ImageExporter:
         return result
 
     @staticmethod
-    def export(project: Project, output_path: str, format: str = "TIFF",
-               color_mode: str = "rgb", icc_profile_path: str = None,
-               rendering_intent: int = 1, *, transparent: bool = True):
-        """
-        Export project to a raster image.
+    def render_image(project: Project, *, fmt: str = "PNG", transparent: bool = True) -> QImage:
+        """Render the project at export DPI into a QImage (no file save).
 
-        Args:
-            project: The project to export
-            output_path: Output file path
-            format: Image format - "TIFF", "JPG", "JPEG", or "PNG"
-            transparent: PNG only: keep a transparent background instead of
-                compositing onto opaque white. Other formats are always opaque.
+        Shared by file export and clipboard copy so both produce the same pixels.
+        Respects ``project.export_region``: the canvas shrinks to the region and
+        content is translated so the region origin maps to (0, 0). JPG renders
+        onto opaque white; PNG keeps a transparent background when *transparent*
+        is set; every other case is opaque white.
         """
         # Calculate Layout (mm)
         layout_result = LayoutEngine.calculate_layout(project)
@@ -194,30 +190,30 @@ class ImageExporter:
             page_h_mm = project.page_height_mm
             region_dx_mm = 0.0
             region_dy_mm = 0.0
-        
+
         # Convert mm to pixels using DPI
         # DPI = dots per inch, 1 inch = 25.4 mm
         scale = project.dpi / 25.4
         width_px = int(page_w_mm * scale)
         height_px = int(page_h_mm * scale)
-        
+
         # Preserve PNG alpha; keep the existing white background for other formats.
-        if format.upper() in ("JPG", "JPEG"):
+        if fmt.upper() in ("JPG", "JPEG"):
             image = QImage(width_px, height_px, QImage.Format.Format_RGB32)
             image.fill(Qt.GlobalColor.white)
         else:
             image = QImage(width_px, height_px, QImage.Format.Format_ARGB32)
-            if format.upper() == "PNG" and transparent:
+            if fmt.upper() == "PNG" and transparent:
                 image.fill(Qt.GlobalColor.transparent)
             else:
                 image.fill(Qt.GlobalColor.white)
-        
+
         # Set DPI metadata
         # QImage uses dots per meter: dpi * 39.3701 (inches per meter)
         dpm = int(project.dpi * 39.3701)
         image.setDotsPerMeterX(dpm)
         image.setDotsPerMeterY(dpm)
-        
+
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
@@ -226,68 +222,29 @@ class ImageExporter:
         # Shift so the region's top-left maps to pixel (0, 0). No-op when unset.
         if region_dx_mm != 0.0 or region_dy_mm != 0.0:
             painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
-        
+
         try:
-            label_rects = getattr(layout_result, 'label_rects', {})
-
-            # 1. Draw Images and Scale Bars (sorted by z_index for freeform overlap support)
-            sorted_cells = sorted(project.get_all_leaf_cells(), key=lambda c: getattr(c, 'z_index', 0))
-            for cell in sorted_cells:
-                if cell.id not in layout_result.cell_rects:
-                    continue
-                x_mm, y_mm, w_mm, h_mm = layout_result.cell_rects[cell.id]
-
-                target_rect = QRectF(
-                    x_mm * scale, y_mm * scale, w_mm * scale, h_mm * scale
-                )
-
-                content_rect = QRectF(*(v * scale for v in cell_content_rect(
-                    cell, (x_mm, y_mm, w_mm, h_mm), project.layout_mode)))
-                placement = layout_result._image_placements.placements.get(cell.id)
-
-                if content_rect.width() <= 0 or content_rect.height() <= 0:
-                    continue
-
-                if placement is not None:
-                    from src.utils.text_overrides import overrides_for_cell
-                    svg_override, raster_override = overrides_for_cell(
-                        project, cell, layout_result,
-                        (content_rect.width() / scale, content_rect.height() / scale))
-                    ImageExporter._draw_placed_image(painter, cell, placement, scale,
-                                                     svg_override, raster_override)
-
-                    if getattr(cell, 'scale_bar_enabled', False):
-                        ImageExporter._draw_scale_bar(painter, cell,
-                            QRectF(*(v * scale for v in placement.rect)), scale, fit_mode_override='contain',
-                            typography_mode=getattr(project, 'typography_mode', 'points'))
-
-                ImageExporter._draw_pip_items(painter, project, cell, content_rect, scale, placement)
-
-            # 1b. Draw Label Cells (labels living in their own reserved strip)
-            ImageExporter._draw_label_cells(painter, project, layout_result, scale)
-
-            # 1c. Draw Group Label bands (spans, column headers, row titles)
-            ImageExporter._draw_group_labels(painter, project, layout_result, scale)
-
-            # 1d. Draw vector marks (fixed page mm; above labels, below text)
-            from src.utils import mark_render
-            for mark in getattr(project, 'marks', []):
-                mark_render.draw(painter, mark, scale)
-
-            # 2. Draw Text Items
-            for text_item in project.text_items:
-                # Skip numbering labels rendered by label cells
-                if (
-                    text_item.scope == 'cell'
-                    and getattr(text_item, 'subtype', None) != 'corner'
-                    and text_item.parent_id in label_rects
-                ):
-                    continue
-                ImageExporter._draw_text(painter, project, text_item, layout_result, scale)
-                
+            ImageExporter._paint_scene(painter, project, layout_result, scale)
         finally:
             painter.end()
-        
+        return image
+
+    @staticmethod
+    def export(project: Project, output_path: str, format: str = "TIFF",
+               color_mode: str = "rgb", icc_profile_path: str = None,
+               rendering_intent: int = 1, *, transparent: bool = True):
+        """
+        Export project to a raster image.
+
+        Args:
+            project: The project to export
+            output_path: Output file path
+            format: Image format - "TIFF", "JPG", "JPEG", or "PNG"
+            transparent: PNG only: keep a transparent background instead of
+                compositing onto opaque white. Other formats are always opaque.
+        """
+        image = ImageExporter.render_image(project, fmt=format, transparent=transparent)
+
         # Save using appropriate format
         format_upper = format.upper()
         if format_upper == "TIFF":
@@ -363,53 +320,11 @@ class ImageExporter:
 
     @staticmethod
     def render_to_qimage(project: Project) -> QImage:
-        """Render project to a QImage (in-memory, no file save).
+        """Render project to an opaque white QImage (in-memory, no file save).
 
-        Respects ``project.export_region`` (clips canvas to region bounds,
-        same as ``export()``).  Delegates all painting to ``_paint_scene``
-        so z-index ordering and label-placement logic stay in sync.
+        Delegates to ``render_image`` so export and in-memory renders share one path.
         """
-        layout_result = LayoutEngine.calculate_layout(project)
-        layout_result._image_placements = resolve_image_placements(project, layout_result, strict=True)
-        layout_result._image_placements_strict = True
-
-        export_region = getattr(project, 'export_region', None)
-        if export_region is not None:
-            page_w_mm = export_region.w_mm
-            page_h_mm = export_region.h_mm
-            region_dx_mm = export_region.x_mm
-            region_dy_mm = export_region.y_mm
-        else:
-            page_w_mm = project.page_width_mm
-            page_h_mm = project.page_height_mm
-            region_dx_mm = 0.0
-            region_dy_mm = 0.0
-
-        scale = project.dpi / 25.4
-        width_px = int(page_w_mm * scale)
-        height_px = int(page_h_mm * scale)
-
-        image = QImage(width_px, height_px, QImage.Format.Format_ARGB32)
-        image.fill(Qt.GlobalColor.white)
-
-        dpm = int(project.dpi * 39.3701)
-        image.setDotsPerMeterX(dpm)
-        image.setDotsPerMeterY(dpm)
-
-        painter = QPainter(image)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-
-        if region_dx_mm != 0.0 or region_dy_mm != 0.0:
-            painter.translate(-region_dx_mm * scale, -region_dy_mm * scale)
-
-        try:
-            ImageExporter._paint_scene(painter, project, layout_result, scale)
-        finally:
-            painter.end()
-
-        return image
+        return ImageExporter.render_image(project, fmt="PNG", transparent=False)
 
     @staticmethod
     def _placed_source_rect(placement, crop, scale=1.0):
@@ -1062,46 +977,58 @@ class ImageExporter:
         if not label_rects:
             return
 
+        from src.utils.sub_labels import is_active, segment_rects
         for t in project.text_items:
             if t.scope != 'cell' or getattr(t, 'subtype', None) == 'corner':
                 continue
             if not t.parent_id or t.parent_id not in label_rects:
                 continue
-            if not t.text:
-                continue
             lx, ly, lw, lh = label_rects[t.parent_id]
-            align = project.effective_label_align(t)
             ox_mm, oy_mm = project.effective_label_offsets(t)
 
             rect_px = QRectF((lx + ox_mm) * scale, (ly + oy_mm) * scale,
                              lw * scale, lh * scale)
-            from src.utils.typography import uses_points
-            if uses_points(project):
-                from src.utils.label_strip_render import draw_point_strip_label
-                draw_point_strip_label(
-                    painter, rect_px, t.text, t.font_family, t.font_size_pt,
-                    t.font_weight, QColor(t.color),
-                    project.label_strip_is_vertical(t), align,
-                    project.effective_label_valign(t),
-                    getattr(t, 'rotation', 0.0) or 0.0, device_scale=scale)
-                continue
+            if is_active(project, t):
+                segments = segment_rects(
+                    (rect_px.x(), rect_px.y(), rect_px.width(), rect_px.height()),
+                    t.sub_label_splits, project.label_strip_is_vertical(t))
+                pieces = [(text, QRectF(*seg)) for text, seg in zip(t.sub_labels, segments)]
+            else:
+                pieces = [(t.text, rect_px)]
+            for text, piece_rect in pieces:
+                if text:
+                    ImageExporter._draw_label_piece(painter, project, t, text, piece_rect, scale)
 
-            # The canvas draws strip labels with an explicit pixel size, i.e.
-            # one point of label font spans one millimetre on the page (the
-            # same convention the layout engine sizes the strip with). Mirror
-            # that here instead of measuring a point-sized QGraphicsTextItem,
-            # whose metrics carry the screen's 96-dpi pt→px factor and would
-            # render the label a third larger than the app shows.
-            font = QFont(t.font_family)
-            font.setPixelSize(max(1, int(round(t.font_size_pt * scale))))
-            if t.font_weight == "bold":
-                font.setBold(True)
+    @staticmethod
+    def _draw_label_piece(painter: QPainter, project, t, text: str, rect_px: QRectF, scale: float):
+        align = project.effective_label_align(t)
+        from src.utils.typography import uses_points
+        if uses_points(project):
+            from src.utils.label_strip_render import draw_point_strip_label
+            draw_point_strip_label(
+                painter, rect_px, text, t.font_family, t.font_size_pt,
+                t.font_weight, QColor(t.color),
+                project.label_strip_is_vertical(t), align,
+                project.effective_label_valign(t),
+                getattr(t, 'rotation', 0.0) or 0.0, device_scale=scale)
+            return
 
-            from src.utils.label_strip_render import draw_strip_label
-            draw_strip_label(painter, rect_px, t.text, font, QColor(t.color),
-                             project.label_strip_is_vertical(t), align,
-                             project.effective_label_valign(t),
-                             getattr(t, 'rotation', 0.0) or 0.0)
+        # The canvas draws strip labels with an explicit pixel size, i.e.
+        # one point of label font spans one millimetre on the page (the
+        # same convention the layout engine sizes the strip with). Mirror
+        # that here instead of measuring a point-sized QGraphicsTextItem,
+        # whose metrics carry the screen's 96-dpi pt→px factor and would
+        # render the label a third larger than the app shows.
+        font = QFont(t.font_family)
+        font.setPixelSize(max(1, int(round(t.font_size_pt * scale))))
+        if t.font_weight == "bold":
+            font.setBold(True)
+
+        from src.utils.label_strip_render import draw_strip_label
+        draw_strip_label(painter, rect_px, text, font, QColor(t.color),
+                         project.label_strip_is_vertical(t), align,
+                         project.effective_label_valign(t),
+                         getattr(t, 'rotation', 0.0) or 0.0)
 
     @staticmethod
     def _draw_group_labels(painter: QPainter, project, layout_result, scale: float):

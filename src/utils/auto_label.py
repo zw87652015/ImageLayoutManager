@@ -1,23 +1,30 @@
 from src.model.data_model import Project, TextItem
 from src.model.layout_engine import LayoutEngine
 from src.utils.label_numbering import core_of, format_index, parse_scheme
+from src.utils.sub_labels import is_active
 
 _Y_TOL = 0.5  # mm; cells within this vertical gap count as the same row
 
 
-def _number_in_reading_order(cells, texts, scheme, key, index):
+def _number_in_reading_order(cells, texts, subs, scheme, key, index, split_counts):
     """Number image panels, finishing a split before the next sibling.
 
     A column split into two is read top to bottom before the panel to its
-    right, so the letters run (a), (b), (c) rather than skipping across.
+    right, so the letters run (a), (b), (c) rather than skipping across. An
+    active split strip label takes one letter per segment.
     """
     for cell in sorted(cells, key=key):
         if cell.is_leaf:
             texts[cell.id] = format_index(index, scheme)
-            index += 1
+            count = split_counts.get(cell.id)
+            if count:
+                subs[cell.id] = [format_index(index + k, scheme) for k in range(count)]
+                index += count
+            else:
+                index += 1
         else:
             index = _number_in_reading_order(
-                cell.children, texts, scheme, key, index)
+                cell.children, texts, subs, scheme, key, index, split_counts)
     return index
 
 
@@ -66,14 +73,72 @@ def _compose_sub(parent_core: str, index: int, sub_scheme: str, project: Project
     return f"{prefix}{core}{suffix}", core
 
 
-def _number_branch(parent, parent_core: str, sub_scheme: str,
-                   project: Project, texts: dict, key) -> None:
+def _split_texts(full_core: str, count: int, sub_scheme: str, project: Project) -> list:
+    """Child labels of a split leaf, always carrying its full ancestry core."""
+    prefix, _style, suffix = parse_scheme(sub_scheme)
+    return [
+        f"{prefix}{full_core}{project.label_sub_separator}"
+        f"{core_of(format_index(k, sub_scheme), sub_scheme)}{suffix}"
+        for k in range(count)
+    ]
+
+
+def _number_branch(parent, parent_core: str, parent_full: str, sub_scheme: str,
+                   project: Project, texts: dict, subs: dict,
+                   split_counts: dict, key) -> None:
     """Number *parent*'s direct children, restarting the sub sequence."""
     for index, child in enumerate(sorted(parent.children, key=key)):
         text, core = _compose_sub(parent_core, index, sub_scheme, project)
         texts[child.id] = text
-        if not child.is_leaf:
-            _number_branch(child, core, sub_scheme, project, texts, key)
+        own = core_of(format_index(index, sub_scheme), sub_scheme)
+        full = f"{parent_full}{project.label_sub_separator}{own}"
+        if child.is_leaf:
+            if child.id in split_counts:
+                subs[child.id] = _split_texts(full, split_counts[child.id], sub_scheme, project)
+        else:
+            _number_branch(child, core, full, sub_scheme, project, texts, subs,
+                           split_counts, key)
+
+
+def _active_split_counts(project: Project) -> dict:
+    """Leaf cell id -> segment count, for active panel-tier split labels."""
+    counts = {}
+    for item in project.text_items:
+        if (item.scope == "cell" and item.subtype != "corner"
+                and item.label_tier == "panel" and item.parent_id
+                and item.parent_id not in counts and is_active(project, item)):
+            counts[item.parent_id] = len(item.sub_labels)
+    return counts
+
+
+def _compute(project: Project, scheme: str = None, sub_scheme: str = None) -> tuple:
+    """Return ``(main_texts, sub_texts)`` keyed by cell id for one numbering pass."""
+    scheme = project.label_scheme if scheme is None else scheme
+    if sub_scheme is None:
+        sub_scheme = project.label_scheme_sub
+    sub_scheme = (sub_scheme or "").strip()
+
+    rects = LayoutEngine.calculate_layout(project).cell_rects
+    key = lambda c: _spatial_key(c, rects)  # noqa: E731
+    split_counts = _active_split_counts(project)
+    texts: dict = {}
+    subs: dict = {}
+
+    if sub_scheme:
+        for index, cell in enumerate(sorted(project.cells, key=key)):
+            text = format_index(index, scheme)
+            texts[cell.id] = text
+            core = core_of(text, scheme)
+            if cell.is_leaf:
+                if cell.id in split_counts:
+                    subs[cell.id] = _split_texts(core, split_counts[cell.id], sub_scheme, project)
+            else:
+                _number_branch(cell, core, core, sub_scheme, project, texts, subs,
+                               split_counts, key)
+        return texts, subs
+
+    _number_in_reading_order(project.cells, texts, subs, scheme, key, 0, split_counts)
+    return texts, subs
 
 
 def compute_label_texts(project: Project, scheme: str = None,
@@ -89,31 +154,43 @@ def compute_label_texts(project: Project, scheme: str = None,
     * empty — one continuous sequence over image panels only. A split
       container holds no image of its own, so it does not take a letter.
       Its panels are numbered before the next sibling: a column split into
-      two is (a) then (b), and the column to its right is (c).
+      two is (a) then (b), and the column to its right is (c). An active
+      split strip label consumes one letter per segment.
     * set — hierarchical. Top-level panels, including a split container,
       use the main scheme while each split panel restarts its children on
       the sub scheme, giving the journal-standard A / i, ii, iii nesting.
     """
-    scheme = project.label_scheme if scheme is None else scheme
-    if sub_scheme is None:
-        sub_scheme = project.label_scheme_sub
-    sub_scheme = (sub_scheme or "").strip()
+    return _compute(project, scheme, sub_scheme)[0]
 
-    rects = LayoutEngine.calculate_layout(project).cell_rects
-    key = lambda c: _spatial_key(c, rects)  # noqa: E731
-    texts: dict = {}
 
-    if sub_scheme:
-        for index, cell in enumerate(sorted(project.cells, key=key)):
-            text = format_index(index, scheme)
-            texts[cell.id] = text
-            if not cell.is_leaf:
-                _number_branch(cell, core_of(text, scheme), sub_scheme,
-                               project, texts, key)
-        return texts
+def compute_sub_label_texts(project: Project, scheme: str = None,
+                            sub_scheme: str = None) -> dict:
+    """Map leaf cell id -> segment texts, for active panel-tier split labels."""
+    return _compute(project, scheme, sub_scheme)[1]
 
-    _number_in_reading_order(project.cells, texts, scheme, key, 0)
-    return texts
+
+def apply_numbering_updates(project: Project, scheme: str = None,
+                            sub_scheme: str = None, tiers=None) -> dict:
+    """Map text-item id -> ``(text, sub_labels_or_None)`` for numbering labels.
+
+    ``None`` for the sub-labels means leave that label's segment texts alone.
+    *tiers* limits the labels considered (``None`` = every numbering label).
+    """
+    texts, subs = _compute(project, scheme, sub_scheme)
+    updates = {}
+    for item in project.text_items:
+        if item.scope != "cell" or item.subtype == "corner":
+            continue
+        if item.parent_id not in texts:
+            continue
+        if tiers is not None and item.label_tier not in tiers:
+            continue
+        sub = None
+        if (item.label_tier == "panel" and item.parent_id in subs
+                and is_active(project, item)):
+            sub = list(subs[item.parent_id])
+        updates[item.id] = (texts[item.parent_id], sub)
+    return updates
 
 
 class AutoLabel:

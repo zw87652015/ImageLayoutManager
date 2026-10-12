@@ -992,6 +992,31 @@ TOOL_SPECS: List[Dict[str, Any]] = [
         }),
     },
     {
+        "name": "label_set_sub_labels",
+        "description": (
+            "Split one leaf cell's label strip into several segments, each "
+            "with its own letter or caption, for one image that holds "
+            "several sub-plots sharing content. `count` 2–8 splits; 1 merges "
+            "back. `splits` are optional divider positions as fractions of "
+            "the strip (0–1, strictly increasing, count−1 values; default "
+            "even spacing). `texts` optionally sets each segment's text. "
+            "Only works for labels in a row/column strip on a leaf cell; "
+            "in-cell labels keep their text. Panel-tier splits take part in "
+            "auto-numbering (flat: consecutive letters; hierarchical: "
+            "B-i, B-ii)."
+        ),
+        "input_schema": _obj({
+            "cell_id": {"type": "string"},
+            "count": {"type": "integer", "minimum": 1, "maximum": 8},
+            "splits": {"type": "array",
+                       "items": {"type": "number", "exclusiveMinimum": 0,
+                                 "exclusiveMaximum": 1},
+                       "description": "count−1 strictly increasing fractions in (0, 1)."},
+            "texts": {"type": "array", "items": {"type": "string"},
+                      "description": "One text per segment (count entries)."},
+        }, required=("cell_id", "count")),
+    },
+    {
         "name": "auto_layout",
         "description": (
             "Run ILM's deterministic best-fit pass: re-balances row "

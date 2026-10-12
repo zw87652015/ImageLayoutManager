@@ -43,13 +43,16 @@ from src.model.enums import PageSizePreset
 from src.export.pdf_exporter import PdfExporter
 from src.export.pdf_images import coerce_image_settings, format_issue
 from src.export.image_exporter import ImageExporter
+from src.export.clipboard_export import copy_project_png
 from src.app.pdf_export_dialog import PdfExportOptionsDialog
 from src.utils.auto_label import AutoLabel
+from src.utils.sub_labels import even_splits, is_active
 from src.app.commands import (
     PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, MultiSwapCellsCommand,
     DropImageCommand, ChangeRowCountCommand, InsertRowCommand, InsertCellCommand,
     DeleteRowCommand, DeleteCellCommand,
     AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, AutoLayoutFreeformCommand, ChangeLabelSchemeCommand,
+    SetSubLabelsCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
     FreeformGeometryCommand, FreeformLayoutModeCommand, ZIndexChangeCommand, ReorderZIndexCommand,
@@ -864,6 +867,13 @@ class MainWindow(QMainWindow):
         file_menu.addAction(export_png_action)
         self._act_export_png = export_png_action
 
+        copy_png_action = QAction(tr("action_copy_png_clipboard"), self)
+        copy_png_action.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        copy_png_action.setToolTip(tr("tooltip_copy_png_clipboard"))
+        copy_png_action.triggered.connect(self._on_copy_png_to_clipboard)
+        file_menu.addAction(copy_png_action)
+        self._act_copy_png = copy_png_action
+
         export_svg_action = QAction(tr("action_export_svg"), self)
         export_svg_action.triggered.connect(self._on_export_svg)
         file_menu.addAction(export_svg_action)
@@ -1174,6 +1184,7 @@ class MainWindow(QMainWindow):
         export_menu.addAction(export_tiff_action)
         export_menu.addAction(export_jpg_action)
         export_menu.addAction(export_png_action)
+        export_menu.addAction(self._act_copy_png)
         export_menu.addAction(export_svg_action)
         export_menu.addSeparator()
         export_menu.addAction(self._act_preview_mode)
@@ -1370,6 +1381,7 @@ class MainWindow(QMainWindow):
         self.inspector.size_group_delete_requested.connect(self._on_size_group_delete)
         self.inspector.plot_alignment_edit_requested.connect(lambda cid: self._on_align_plot_areas([cid]))
         self.inspector.label_item_property_changed.connect(self._on_label_item_property_changed)
+        self.inspector.sub_label_count_changed.connect(self._on_sub_label_count_changed)
         self.inspector.group_label_property_changed.connect(self._on_group_label_property_changed)
         self.inspector.group_label_delete_requested.connect(self._on_group_label_delete)
         self.inspector.mark_property_changed.connect(self._on_mark_property_changed)
@@ -1408,6 +1420,7 @@ class MainWindow(QMainWindow):
         tab.scene.group_label_side_dropped.connect(self._on_group_label_side_dropped)
         tab.scene.group_label_level_dropped.connect(self._on_group_label_level_dropped)
         tab.scene.label_placement_dropped.connect(self._on_label_placement_dropped)
+        tab.scene.label_sub_splits_changed.connect(self._on_label_sub_splits_changed)
         tab.scene.cell_crop_committed.connect(self._on_cell_crop_committed)
         tab.scene.crop_mode_active.connect(self._on_crop_mode_active)
         tab.scene.empty_context_menu.connect(self._on_empty_context_menu)
@@ -1471,6 +1484,7 @@ class MainWindow(QMainWindow):
             tab.scene.group_label_side_dropped.disconnect(self._on_group_label_side_dropped)
             tab.scene.group_label_level_dropped.disconnect(self._on_group_label_level_dropped)
             tab.scene.label_placement_dropped.disconnect(self._on_label_placement_dropped)
+            tab.scene.label_sub_splits_changed.disconnect(self._on_label_sub_splits_changed)
             tab.scene.cell_crop_committed.disconnect(self._on_cell_crop_committed)
             tab.scene.crop_mode_active.disconnect(self._on_crop_mode_active)
             tab.scene.empty_context_menu.disconnect(self._on_empty_context_menu)
@@ -1972,6 +1986,9 @@ class MainWindow(QMainWindow):
         self._act_export_jpg.setText(tr("action_export_jpg"))
         if hasattr(self, '_act_export_png'):
             self._act_export_png.setText(tr("action_export_png"))
+        if hasattr(self, '_act_copy_png'):
+            self._act_copy_png.setText(tr("action_copy_png_clipboard"))
+            self._act_copy_png.setToolTip(tr("tooltip_copy_png_clipboard"))
         if hasattr(self, '_act_export_svg'):
             self._act_export_svg.setText(tr("action_export_svg"))
         self._act_add_text.setText(tr("action_add_text"))
@@ -3131,6 +3148,10 @@ class MainWindow(QMainWindow):
                     "label_tier": getattr(text_obj, 'label_tier', 'panel') if text_obj else 'panel',
                     "style_locked": getattr(text_obj, 'style_locked', False) if text_obj else False,
                     "rotation": getattr(text_obj, 'rotation', 0.0) if text_obj else 0.0,
+                    "sub_labels": list(text_obj.sub_labels) if text_obj else [],
+                    "sub_label_splits": list(text_obj.sub_label_splits) if text_obj else [],
+                    "sub_labels_allowed": self._sub_labels_allowed(text_obj),
+                    "sub_labels_active": is_active(self.project, text_obj) if text_obj else False,
                 }
                 self.inspector.set_selection('label_cell', label_data)
                 return
@@ -3381,6 +3402,60 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Group labels and per-label overrides
     # ------------------------------------------------------------------
+
+    def _sub_labels_allowed(self, text_obj) -> bool:
+        if text_obj is None or not text_obj.parent_id:
+            return False
+        parent = self.project.find_cell_by_id(text_obj.parent_id)
+        return parent is not None and parent.is_leaf
+
+    def _add_split_label_menu(self, menu, text_obj):
+        split_menu = menu.addMenu(tr("ctx_split_label"))
+        current = len(text_obj.sub_labels) if len(text_obj.sub_labels) >= 2 else 1
+        for count, key in ((1, "ctx_split_label_none"), (2, "ctx_split_label_2"),
+                           (3, "ctx_split_label_3"), (4, "ctx_split_label_4")):
+            action = split_menu.addAction(tr(key))
+            action.setCheckable(True)
+            action.setChecked(current == count)
+            action.triggered.connect(
+                lambda checked=False, c=count, tid=text_obj.id:
+                    self._on_sub_label_count_changed(tid, c))
+        split_menu.addSeparator()
+        even_action = split_menu.addAction(tr("ctx_split_label_even"))
+        even_action.setEnabled(current >= 2)
+        even_action.triggered.connect(
+            lambda checked=False, tid=text_obj.id: self._on_even_sub_label_splits(tid))
+
+    def _on_sub_label_count_changed(self, text_item_id: str, count: int):
+        text_obj = next((t for t in self.project.text_items if t.id == text_item_id), None)
+        if text_obj is None:
+            return
+        current = len(text_obj.sub_labels) if len(text_obj.sub_labels) >= 2 else 1
+        if current == count:
+            return
+        try:
+            cmd = SetSubLabelsCommand(self.project, text_obj, count, self._refresh_and_update)
+        except ValueError:
+            return
+        self.undo_stack.push(cmd)
+
+    def _on_even_sub_label_splits(self, text_item_id: str):
+        text_obj = next((t for t in self.project.text_items if t.id == text_item_id), None)
+        if text_obj is None or len(text_obj.sub_labels) < 2:
+            return
+        cmd = PropertyChangeCommand(
+            text_obj, {"sub_label_splits": even_splits(len(text_obj.sub_labels))},
+            self._refresh_and_update, "Even Label Spacing")
+        self.undo_stack.push(cmd)
+
+    def _on_label_sub_splits_changed(self, text_item_id: str, splits: list):
+        text_obj = next((t for t in self.project.text_items if t.id == text_item_id), None)
+        if text_obj is None:
+            return
+        cmd = PropertyChangeCommand(
+            text_obj, {"sub_label_splits": list(splits)},
+            self._refresh_and_update, "Move Label Divider")
+        self.undo_stack.push(cmd)
 
     def _on_label_item_property_changed(self, text_item_id: str, changes: dict):
         """Edit one numbering label's placement / tier / style lock / rotation.
@@ -4570,6 +4645,8 @@ class MainWindow(QMainWindow):
                 delete_label_action.triggered.connect(
                     lambda: self._ctx_delete_numbering_label(parent_cell_id)
                 )
+                if self._sub_labels_allowed(text_obj):
+                    self._add_split_label_menu(menu, text_obj)
             menu.exec(QPoint(int(screen_pos.x()), int(screen_pos.y())))
             return
 
@@ -6093,6 +6170,17 @@ class MainWindow(QMainWindow):
             if not ok:
                 return
             self._show_export_result(path, tr("msg_exported_to").format(path=path))
+
+    def _on_copy_png_to_clipboard(self):
+        if not self._check_plot_alignment_for_export():
+            return
+        ok, image = self._run_export("PNG", lambda: copy_project_png(
+            self.project, QApplication.clipboard()))
+        if not ok:
+            return
+        self.statusBar().showMessage(
+            tr("msg_copied_png_clipboard").format(
+                w=image.width(), h=image.height(), dpi=self.project.dpi), 5000)
 
     def _on_export_jpg(self):
         if not self._check_plot_alignment_for_export():

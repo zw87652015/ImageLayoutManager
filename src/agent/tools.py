@@ -838,13 +838,100 @@ def auto_label_cells(ctx: ToolContext, scheme: Optional[str] = None,
         )
 
     labels = [
-        {"id": t.id, "text": t.text, "parent_id": t.parent_id}
+        {"id": t.id, "text": t.text, "parent_id": t.parent_id,
+         "sub_labels": list(t.sub_labels)}
         for t in p.text_items
         if t.scope == "cell" and getattr(t, "subtype", None) != "corner"
     ]
     return _ok({"scheme": p.label_scheme, "placement": p.label_placement,
                 "sub_scheme": getattr(p, "label_scheme_sub", ""),
                 "label_count": len(labels), "labels": labels})
+
+
+def label_set_sub_labels(ctx: ToolContext, cell_id: str, count: int,
+                         splits: Optional[List[float]] = None,
+                         texts: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Split a leaf cell's strip label into *count* segments (1 merges it back).
+
+    *splits* are strip-relative divider fractions in (0, 1), strictly
+    increasing, one fewer than *count*; omit for even spacing. *texts* gives
+    one label per segment. A split label only shows in a label strip
+    (row/column placement); in-cell labels keep their text.
+    """
+    from src.app.commands import SetSubLabelsCommand
+    from src.utils.sub_labels import MAX_SUB_LABELS, is_active
+    import math
+
+    p = ctx.project
+    cell = _find_cell(ctx, cell_id)
+    if not cell.is_leaf:
+        raise ToolError(
+            "cell_not_leaf",
+            f"cell {cell_id} is a split container; sub-labels need a leaf cell",
+            hint="call project_describe to list leaf cell_ids", field="cell_id")
+    text_obj = next(
+        (t for t in p.text_items
+         if t.scope == "cell" and getattr(t, "subtype", None) != "corner"
+         and t.parent_id == cell_id),
+        None,
+    )
+    if text_obj is None:
+        raise ToolError(
+            "label_not_found",
+            f"cell {cell_id} has no numbering label",
+            hint="run auto_label_cells first", field="cell_id")
+    if isinstance(count, bool) or not isinstance(count, int) \
+            or not 1 <= count <= MAX_SUB_LABELS:
+        raise ToolError(
+            "invalid_value",
+            f"count must be an integer from 1 to {MAX_SUB_LABELS}, got {count!r}",
+            field="count")
+    if count < 2:
+        if splits:
+            raise ToolError("invalid_value",
+                            "splits must be empty when count is 1", field="splits")
+        if texts:
+            raise ToolError("invalid_value",
+                            "texts must be empty when count is 1", field="texts")
+    if splits is not None and count >= 2:
+        if not isinstance(splits, list) or len(splits) != count - 1:
+            raise ToolError(
+                "invalid_value",
+                f"splits must list {count - 1} values for {count} parts",
+                field="splits")
+        previous = 0.0
+        for value in splits:
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not math.isfinite(value) or not previous < value < 1.0:
+                raise ToolError(
+                    "invalid_value",
+                    "splits must be strictly increasing numbers in (0, 1)",
+                    field="splits")
+            previous = float(value)
+    if texts is not None:
+        if count < 2 or not isinstance(texts, list) or len(texts) != count \
+                or not all(isinstance(t, str) for t in texts):
+            raise ToolError(
+                "invalid_value",
+                f"texts must be a list of {count} strings",
+                field="texts")
+
+    cb = (lambda: ctx.on_changed()) if ctx.on_changed else None
+    try:
+        cmd = SetSubLabelsCommand(
+            p, text_obj, count, update_callback=cb,
+            splits=None if splits is None or count < 2 else [float(v) for v in splits],
+            texts=texts if count >= 2 else None)
+    except ValueError as e:
+        raise ToolError("invalid_value", str(e), field="count") from e
+    _apply(ctx, cmd)
+    return _ok({
+        "id": text_obj.id,
+        "text": text_obj.text,
+        "sub_labels": list(text_obj.sub_labels),
+        "sub_label_splits": list(text_obj.sub_label_splits),
+        "active": is_active(p, text_obj),
+    })
 
 
 def auto_layout(ctx: ToolContext) -> Dict[str, Any]:
@@ -1893,6 +1980,7 @@ _REGISTRY: Dict[str, Callable[..., Dict[str, Any]]] = {
     "labels_set_style":  labels_set_style,
     "project_set_label_style": project_set_label_style,
     "auto_label_cells":  auto_label_cells,
+    "label_set_sub_labels": label_set_sub_labels,
     # Group labels (spanning bands / row titles)
     "group_label_add":   group_label_add,
     "group_label_remove": group_label_remove,

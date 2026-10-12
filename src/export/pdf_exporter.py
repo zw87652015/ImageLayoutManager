@@ -904,44 +904,58 @@ class PdfExporter:
         if not label_rects:
             return
 
+        from src.utils.sub_labels import is_active, segment_rects
         for t in project.text_items:
             if t.scope != 'cell' or getattr(t, 'subtype', None) == 'corner':
                 continue
-            if not t.parent_id or t.parent_id not in label_rects or not t.text:
+            if not t.parent_id or t.parent_id not in label_rects:
                 continue
             lx, ly, lw, lh = label_rects[t.parent_id]
-            align = project.effective_label_align(t)
             ox_mm, oy_mm = project.effective_label_offsets(t)
 
             rect_dots = QRectF((lx + ox_mm) * scale, (ly + oy_mm) * scale,
                                lw * scale, lh * scale)
-            from src.utils.typography import uses_points
-            if uses_points(project):
-                from src.utils.label_strip_render import draw_point_strip_label
-                draw_point_strip_label(
-                    painter, rect_dots, t.text, t.font_family, t.font_size_pt,
-                    t.font_weight, QColor(t.color),
-                    project.label_strip_is_vertical(t), align,
-                    project.effective_label_valign(t),
-                    getattr(t, 'rotation', 0.0) or 0.0, device_scale=scale)
-                continue
+            if is_active(project, t):
+                segments = segment_rects(
+                    (rect_dots.x(), rect_dots.y(), rect_dots.width(), rect_dots.height()),
+                    t.sub_label_splits, project.label_strip_is_vertical(t))
+                pieces = [(text, QRectF(*seg)) for text, seg in zip(t.sub_labels, segments)]
+            else:
+                pieces = [(t.text, rect_dots)]
+            for text, piece_rect in pieces:
+                if text:
+                    PdfExporter._draw_label_piece(painter, project, t, text, piece_rect, scale)
 
-            # The canvas draws strip labels with an explicit pixel size, i.e.
-            # one point of label font spans one millimetre on the page (the
-            # same convention the layout engine sizes the strip with). Mirror
-            # that here instead of measuring a point-sized QGraphicsTextItem,
-            # whose metrics carry the screen's 96-dpi pt→px factor and would
-            # render the label a third larger than the app shows.
-            font = QFont(t.font_family)
-            font.setPixelSize(max(1, int(round(t.font_size_pt * scale))))
-            if t.font_weight == "bold":
-                font.setBold(True)
+    @staticmethod
+    def _draw_label_piece(painter: QPainter, project, t, text: str, rect_dots: QRectF, scale: float):
+        align = project.effective_label_align(t)
+        from src.utils.typography import uses_points
+        if uses_points(project):
+            from src.utils.label_strip_render import draw_point_strip_label
+            draw_point_strip_label(
+                painter, rect_dots, text, t.font_family, t.font_size_pt,
+                t.font_weight, QColor(t.color),
+                project.label_strip_is_vertical(t), align,
+                project.effective_label_valign(t),
+                getattr(t, 'rotation', 0.0) or 0.0, device_scale=scale)
+            return
 
-            from src.utils.label_strip_render import draw_strip_label
-            draw_strip_label(painter, rect_dots, t.text, font, QColor(t.color),
-                             project.label_strip_is_vertical(t), align,
-                             project.effective_label_valign(t),
-                             getattr(t, 'rotation', 0.0) or 0.0)
+        # The canvas draws strip labels with an explicit pixel size, i.e.
+        # one point of label font spans one millimetre on the page (the
+        # same convention the layout engine sizes the strip with). Mirror
+        # that here instead of measuring a point-sized QGraphicsTextItem,
+        # whose metrics carry the screen's 96-dpi pt→px factor and would
+        # render the label a third larger than the app shows.
+        font = QFont(t.font_family)
+        font.setPixelSize(max(1, int(round(t.font_size_pt * scale))))
+        if t.font_weight == "bold":
+            font.setBold(True)
+
+        from src.utils.label_strip_render import draw_strip_label
+        draw_strip_label(painter, rect_dots, text, font, QColor(t.color),
+                         project.label_strip_is_vertical(t), align,
+                         project.effective_label_valign(t),
+                         getattr(t, 'rotation', 0.0) or 0.0)
 
     @staticmethod
     def _draw_group_labels(painter: QPainter, project, layout_result, scale: float):

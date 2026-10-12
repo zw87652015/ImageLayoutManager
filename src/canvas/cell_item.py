@@ -429,6 +429,10 @@ class CellItem(QGraphicsRectItem):
         self.label_text = ""
         self.label_text_item_id = None   # TextItem whose letter this strip paints
         self._label_drag_start = None    # scene pos of a press on the strip
+        self.label_sub_texts = []        # segment texts when the strip label is split and active
+        self.label_sub_splits = []       # strip-relative divider fractions
+        self._sub_divider_index = None   # divider being dragged
+        self._sub_divider_origin = None  # splits when that drag began
         self.label_font_family = "Arial"
         self.label_font_size = 12
         self.label_font_weight = "bold"
@@ -745,6 +749,14 @@ class CellItem(QGraphicsRectItem):
 
         if self.is_label_cell:
             scene = self.scene()
+            if self._sub_divider_index is not None:
+                self._sub_divider_index = None
+                if (scene is not None and self.label_sub_splits != self._sub_divider_origin
+                        and hasattr(scene, 'label_sub_splits_changed')):
+                    scene.label_sub_splits_changed.emit(
+                        self.label_text_item_id, list(self.label_sub_splits))
+                super().mouseReleaseEvent(event)
+                return
             if (self._label_drag_start is not None and scene is not None
                     and hasattr(scene, 'label_drag_finish')
                     and scene.label_drag_active()):
@@ -791,6 +803,12 @@ class CellItem(QGraphicsRectItem):
         if self.is_label_cell:
             if (event.button() == Qt.MouseButton.LeftButton
                     and not bool(getattr(self.scene(), 'preview_mode', False))):
+                divider = self._sub_divider_at(event.pos())
+                if divider is not None:
+                    self._sub_divider_index = divider
+                    self._sub_divider_origin = list(self.label_sub_splits)
+                    event.accept()
+                    return
                 self._label_drag_start = event.scenePos()
             super().mousePressEvent(event)
             return
@@ -910,6 +928,10 @@ class CellItem(QGraphicsRectItem):
             return
         if self.is_label_cell:
             scene = self.scene()
+            if self._sub_divider_index is not None:
+                self._drag_sub_divider(event.pos())
+                event.accept()
+                return
             if (self._label_drag_start is not None and scene is not None
                     and hasattr(scene, 'label_drag_move')):
                 if not scene.label_drag_active():
@@ -1670,45 +1692,106 @@ class CellItem(QGraphicsRectItem):
             painter.setPen(self.border_pen)
             painter.drawRect(rect)
         
-        if self.label_text:
-            scene = self.scene()
-            project = getattr(scene, 'project', None)
-            from src.utils.typography import uses_points
-            if uses_points(project):
-                from src.utils.label_strip_render import draw_point_strip_label
-                text_rect = rect.translated(self.label_offset_x, self.label_offset_y)
-                draw_point_strip_label(
-                    painter, text_rect, self.label_text, self.label_font_family,
-                    self.label_font_size, self.label_font_weight,
-                    QColor(self.label_color), self.label_vertical,
-                    self.label_align, self.label_valign, self.label_rotation)
-                return
-            # QGraphicsTextItem uses 72 DPI internally, so 1pt = 1 scene unit.
-            # To match TextGraphicsItem rendering, use font_size_pt directly
-            # as the scene-coordinate size (not pt-to-mm converted).
-            font_size_scene = self.label_font_size  # 1pt = 1 scene unit
-            transform = painter.transform()
-            m11 = transform.m11()  # device pixels per scene unit (includes zoom)
+        if self.label_sub_texts:
+            from src.utils.sub_labels import segment_rects
+            segments = segment_rects((rect.x(), rect.y(), rect.width(), rect.height()),
+                                     self.label_sub_splits, self.label_vertical)
+            for text, segment in zip(self.label_sub_texts, segments):
+                if text:
+                    self._draw_label_text(painter, QRectF(*segment), text)
+            self._draw_sub_label_dividers(painter, rect)
+        elif self.label_text:
+            self._draw_label_text(painter, rect, self.label_text)
 
-            # Map rect and offsets to device pixels
-            dev_rect = transform.mapRect(rect)
-            dev_ox = self.label_offset_x * m11
-            dev_oy = self.label_offset_y * abs(transform.m22())
-            dev_text_rect = dev_rect.adjusted(dev_ox, dev_oy, dev_ox, dev_oy)
+    def _draw_label_text(self, painter: QPainter, rect: QRectF, text: str):
+        scene = self.scene()
+        project = getattr(scene, 'project', None)
+        from src.utils.typography import uses_points
+        if uses_points(project):
+            from src.utils.label_strip_render import draw_point_strip_label
+            text_rect = rect.translated(self.label_offset_x, self.label_offset_y)
+            draw_point_strip_label(
+                painter, text_rect, text, self.label_font_family,
+                self.label_font_size, self.label_font_weight,
+                QColor(self.label_color), self.label_vertical,
+                self.label_align, self.label_valign, self.label_rotation)
+            return
+        # QGraphicsTextItem uses 72 DPI internally, so 1pt = 1 scene unit.
+        # To match TextGraphicsItem rendering, use font_size_pt directly
+        # as the scene-coordinate size (not pt-to-mm converted).
+        font_size_scene = self.label_font_size  # 1pt = 1 scene unit
+        transform = painter.transform()
+        m11 = transform.m11()  # device pixels per scene unit (includes zoom)
 
-            device_font_size = max(1, int(font_size_scene * m11))
-            font = QFont(self.label_font_family)
-            font.setPixelSize(device_font_size)
-            if self.label_font_weight == "bold":
-                font.setBold(True)
+        # Map rect and offsets to device pixels
+        dev_rect = transform.mapRect(rect)
+        dev_ox = self.label_offset_x * m11
+        dev_oy = self.label_offset_y * abs(transform.m22())
+        dev_text_rect = dev_rect.adjusted(dev_ox, dev_oy, dev_ox, dev_oy)
 
-            painter.save()
-            painter.resetTransform()
-            from src.utils.label_strip_render import draw_strip_label
-            draw_strip_label(painter, dev_text_rect, self.label_text, font,
-                             QColor(self.label_color), self.label_vertical,
-                             self.label_align, self.label_valign, self.label_rotation)
-            painter.restore()
+        device_font_size = max(1, int(font_size_scene * m11))
+        font = QFont(self.label_font_family)
+        font.setPixelSize(device_font_size)
+        if self.label_font_weight == "bold":
+            font.setBold(True)
+
+        painter.save()
+        painter.resetTransform()
+        from src.utils.label_strip_render import draw_strip_label
+        draw_strip_label(painter, dev_text_rect, text, font,
+                         QColor(self.label_color), self.label_vertical,
+                         self.label_align, self.label_valign, self.label_rotation)
+        painter.restore()
+
+    def _draw_sub_label_dividers(self, painter: QPainter, rect: QRectF):
+        """Screen-only guides at the segment dividers of a selected split strip."""
+        if not self.isSelected() or getattr(self.scene(), 'preview_mode', False):
+            return
+        pen = QPen(QColor("#4A90D9"))
+        pen.setStyle(Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        painter.save()
+        painter.setPen(pen)
+        for split in self.label_sub_splits:
+            if self.label_vertical:
+                y = rect.y() + split * rect.height()
+                painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+            else:
+                x = rect.x() + split * rect.width()
+                painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+        painter.restore()
+
+    def _sub_divider_at(self, pos):
+        """Index of the split divider within ~4 screen px of *pos*, else None."""
+        scene = self.scene()
+        if (not self.label_sub_splits or not self.isSelected() or scene is None
+                or getattr(scene, 'preview_mode', False)):
+            return None
+        views = scene.views()
+        transform = views[0].transform() if views else None
+        scale = (abs(transform.m22() if self.label_vertical else transform.m11())
+                 if transform is not None else 1.0)
+        tolerance = 4.0 / scale if scale > 0 else 4.0
+        rect = self.rect()
+        if self.label_vertical:
+            origin, length, coord = rect.y(), rect.height(), pos.y()
+        else:
+            origin, length, coord = rect.x(), rect.width(), pos.x()
+        for index, split in enumerate(self.label_sub_splits):
+            if abs(coord - (origin + split * length)) <= tolerance:
+                return index
+        return None
+
+    def _drag_sub_divider(self, pos):
+        from src.utils.sub_labels import set_divider
+        rect = self.rect()
+        if self.label_vertical:
+            fraction = (pos.y() - rect.y()) / rect.height() if rect.height() else 0.0
+        else:
+            fraction = (pos.x() - rect.x()) / rect.width() if rect.width() else 0.0
+        self.label_sub_splits = set_divider(self._sub_divider_origin,
+                                            self._sub_divider_index, fraction)
+        self.update()
             
     def _draw_missing_file_icon(self, painter: QPainter, rect: QRectF):
         # Draw red cross or "Missing" text
@@ -2247,6 +2330,16 @@ class CellItem(QGraphicsRectItem):
         super().hoverEnterEvent(event)
 
     def hoverMoveEvent(self, event):
+        if self.is_label_cell:
+            if self._sub_divider_at(event.pos()) is not None:
+                vertical = self.label_vertical
+                self.setCursor(Qt.CursorShape.SizeVerCursor if vertical
+                               else Qt.CursorShape.SizeHorCursor)
+            else:
+                self.unsetCursor()
+            super().hoverMoveEvent(event)
+            return
+
         # 1. Crop mode cursor logic
         if self._in_crop_mode:
             crop_rect = self._get_crop_canvas_rect()

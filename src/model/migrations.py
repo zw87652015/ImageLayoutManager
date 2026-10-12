@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
-PROJECT_SCHEMA_VERSION = 6
+PROJECT_SCHEMA_VERSION = 7
 
 
 class ProjectMigrationError(ValueError):
@@ -325,8 +325,16 @@ def _migrate_schema_5_to_6(data):
     return data
 
 
+def _migrate_schema_6_to_7(data):
+    for item in data.get('text_items', []):
+        item.setdefault('sub_labels', [])
+        item.setdefault('sub_label_splits', [])
+    return data
+
+
 SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2, 2: _migrate_schema_2_to_3,
-                     3: _migrate_schema_3_to_4, 4: _migrate_schema_4_to_5, 5: _migrate_schema_5_to_6}
+                     3: _migrate_schema_3_to_4, 4: _migrate_schema_4_to_5, 5: _migrate_schema_5_to_6,
+                     6: _migrate_schema_6_to_7}
 
 
 def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:

@@ -15,6 +15,7 @@ from src.app.i18n import tr
 from src.app.wheel_guard import install_wheel_guard
 from src.utils import mark_geometry
 from src.utils.svg_text_utils import format_text_size
+from src.utils.sub_labels import MAX_SUB_LABELS, set_divider
 
 
 # Sentinel for "mixed values across a multi-selection". Inspector helpers
@@ -859,6 +860,7 @@ class Inspector(QWidget):
     plot_alignment_edit_requested = pyqtSignal(str)                # cell_id
     # Selected numbering-label item (placement override / tier / style lock)
     label_item_property_changed = pyqtSignal(str, dict)            # (text_item_id, changes)
+    sub_label_count_changed = pyqtSignal(str, int)                 # (text_item_id, segments; 1 = not split)
     # Group Label (spanning / row-title label) signals
     group_label_property_changed = pyqtSignal(str, dict)           # (group_label_id, changes)
     group_label_delete_requested = pyqtSignal(str)                 # group_label_id
@@ -1441,7 +1443,8 @@ class Inspector(QWidget):
         self.label_text_edit = QLineEdit()
         self.label_text_edit.setPlaceholderText(tr("placeholder_label_text"))
         self.label_text_edit.editingFinished.connect(self._on_label_text_edited)
-        self.label_cell_layout.addRow(self._fl("lbl_text"), self.label_text_edit)
+        self._label_text_caption = self._fl("lbl_text")
+        self.label_cell_layout.addRow(self._label_text_caption, self.label_text_edit)
 
         self.label_this_label_heading = QLabel(tr("lbl_this_label"))
         self.label_cell_layout.addRow(self.label_this_label_heading)
@@ -1541,6 +1544,48 @@ class Inspector(QWidget):
         self.label_cell_rotate_btn = QPushButton(tr("btn_rotate_label"))
         self.label_cell_rotate_btn.clicked.connect(self._on_label_cell_rotate)
         self.label_cell_layout.addRow("", self.label_cell_rotate_btn)
+
+        self._current_sub_labels = []
+        self._current_sub_splits = []
+        self.sub_label_count_spin = QSpinBox()
+        self.sub_label_count_spin.setRange(1, MAX_SUB_LABELS)
+        self.sub_label_count_spin.setToolTip(tr("tip_sub_label_count"))
+        self.sub_label_count_spin.valueChanged.connect(
+            lambda v: self._emit_sub_label_count(v)
+        )
+        self.label_cell_layout.addRow(self._fl("lbl_sub_labels"), self.sub_label_count_spin)
+
+        self.sub_label_hint = QLabel(tr("hint_sub_label_inactive"))
+        self.sub_label_hint.setWordWrap(True)
+        self.label_cell_layout.addRow(self.sub_label_hint)
+
+        self.sub_label_container = QWidget()
+        sub_form = QFormLayout(self.sub_label_container)
+        sub_form.setContentsMargins(0, 0, 0, 0)
+        self.sub_text_rows = []
+        for i in range(MAX_SUB_LABELS):
+            caption = QLabel(tr("lbl_sub_part").format(n=i + 1))
+            edit = QLineEdit()
+            edit.setPlaceholderText(tr("placeholder_label_text"))
+            edit.editingFinished.connect(lambda i=i: self._on_sub_label_text_edited(i))
+            sub_form.addRow(caption, edit)
+            self.sub_text_rows.append((caption, edit))
+        self.sub_split_rows = []
+        for i in range(MAX_SUB_LABELS - 1):
+            caption = QLabel(tr("lbl_sub_divider").format(n=i + 1))
+            caption.setToolTip(tr("tip_sub_divider"))
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 100.0)
+            spin.setDecimals(1)
+            spin.setSingleStep(1.0)
+            spin.setSuffix(" %")
+            spin.setToolTip(tr("tip_sub_divider"))
+            spin.editingFinished.connect(lambda i=i: self._on_sub_divider_edited(i))
+            sub_form.addRow(caption, spin)
+            self.sub_split_rows.append((caption, spin))
+        self.label_cell_layout.addRow(self.sub_label_container)
+        self.sub_label_container.hide()
+        self.sub_label_hint.hide()
 
         self.label_cell_style_row = QWidget()
         style_row_layout = QVBoxLayout(self.label_cell_style_row)
@@ -2927,6 +2972,65 @@ class Inspector(QWidget):
         if self._current_label_text_id:
             self.label_text_changed.emit(self._current_label_text_id, self.label_text_edit.text())
 
+    def _populate_sub_labels(self, data: dict):
+        sub_labels = list(data.get("sub_labels", []) or [])
+        splits = list(data.get("sub_label_splits", []) or [])
+        count = len(sub_labels) if len(sub_labels) >= 2 else 1
+        split = count >= 2
+        self._current_sub_labels = sub_labels if split else []
+        self._current_sub_splits = splits if split else []
+        allowed = bool(data.get("sub_labels_allowed", False))
+        with QSignalBlocker(self.sub_label_count_spin):
+            self.sub_label_count_spin.setValue(count)
+        self.sub_label_count_spin.setEnabled(allowed and bool(self._current_label_text_id))
+        self.sub_label_count_spin.setToolTip(
+            tr("tip_sub_label_count") if allowed else tr("tip_sub_label_needs_leaf"))
+        self._label_text_caption.setVisible(not split)
+        self.label_text_edit.setVisible(not split)
+        self.sub_label_hint.setVisible(split and not data.get("sub_labels_active", False))
+        self.sub_label_container.setVisible(split)
+        for i, (caption, edit) in enumerate(self.sub_text_rows):
+            shown = split and i < count
+            caption.setVisible(shown)
+            edit.setVisible(shown)
+            with QSignalBlocker(edit):
+                edit.setText(sub_labels[i] if shown else "")
+        for i, (caption, _spin) in enumerate(self.sub_split_rows):
+            caption.setVisible(split and i < count - 1)
+            self.sub_split_rows[i][1].setVisible(split and i < count - 1)
+        self._refresh_sub_split_spins(splits if split else [])
+
+    def _emit_sub_label_count(self, count: int):
+        if self._current_label_text_id:
+            self.sub_label_count_changed.emit(self._current_label_text_id, int(count))
+
+    def _on_sub_label_text_edited(self, index: int):
+        if not self._current_label_text_id or index >= len(self._current_sub_labels):
+            return
+        text = self.sub_text_rows[index][1].text()
+        if text == self._current_sub_labels[index]:
+            return
+        texts = list(self._current_sub_labels)
+        texts[index] = text
+        self._current_sub_labels = texts
+        self.label_item_property_changed.emit(self._current_label_text_id, {"sub_labels": texts})
+
+    def _on_sub_divider_edited(self, index: int):
+        if not self._current_label_text_id or index >= len(self._current_sub_splits):
+            return
+        requested = self.sub_split_rows[index][1].value() / 100.0
+        splits = set_divider(self._current_sub_splits, index, requested)
+        if all(abs(a - b) < 1e-9 for a, b in zip(splits, self._current_sub_splits)):
+            return
+        self._current_sub_splits = splits
+        self._refresh_sub_split_spins(splits)
+        self.label_item_property_changed.emit(self._current_label_text_id, {"sub_label_splits": splits})
+
+    def _refresh_sub_split_spins(self, splits):
+        for i, (_caption, spin) in enumerate(self.sub_split_rows):
+            with QSignalBlocker(spin):
+                spin.setValue(splits[i] * 100.0 if i < len(splits) else 0.0)
+
     def _on_apply_label_style_to_all(self):
         """Push the selected strip label's style onto every strip label."""
         self.apply_style_to_group.emit("numbering", {
@@ -3340,6 +3444,7 @@ class Inspector(QWidget):
                 self.label_offset_y.setValue(data.get("label_offset_y", 0.0))
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
                 self.label_col_width_spin.setValue(data.get("label_col_width", 0.0))
+                self._populate_sub_labels(data)
                 self.blockSignals(False)
 
                 enabled = bool(self._current_label_text_id)

@@ -49,6 +49,12 @@ class TextItem:
     label_valign: Optional[str] = None
     label_offset_x: Optional[float] = None
     label_offset_y: Optional[float] = None
+
+    # Split strip labels: sub_labels holds one text per segment (empty = not
+    # split, otherwise >= 2). sub_label_splits are the strip-relative divider
+    # fractions between segments (len == len(sub_labels) - 1).
+    sub_labels: List[str] = field(default_factory=list)
+    sub_label_splits: List[float] = field(default_factory=list)
     
     # For global/floating text: absolute canvas position in MILLIMETRES.
     # Scene coordinates are in mm (page_rect is in mm), so these values are
@@ -88,6 +94,8 @@ class TextItem:
             "label_valign": self.label_valign,
             "label_offset_x": self.label_offset_x,
             "label_offset_y": self.label_offset_y,
+            "sub_labels": list(self.sub_labels),
+            "sub_label_splits": list(self.sub_label_splits),
             "x": self.x,
             "y": self.y,
             "rotation": self.rotation,
@@ -104,6 +112,11 @@ class TextItem:
         # Filter to known fields so older/newer saves don't crash the loader.
         allowed = {f.name for f in fields(cls)}
         clean = {k: v for k, v in data.items() if k in allowed}
+        if "sub_labels" in clean or "sub_label_splits" in clean:
+            from src.utils.sub_labels import sanitize
+            texts, splits = sanitize(clean.get("sub_labels", []),
+                                     clean.get("sub_label_splits", []))
+            clean["sub_labels"], clean["sub_label_splits"] = texts, splits
         return cls(**clean)
 
 @dataclass
