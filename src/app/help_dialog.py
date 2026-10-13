@@ -238,7 +238,7 @@ The welcome window accepts saved projects, not image folders: choose New Project
 Dragging an existing cell onto another swaps their images. Use Ctrl+click to select multiple cells;
 check the highlighted destination before releasing a drag.</p>
 <p>To add an external inset, drag a single image over a filled panel and release over its top-right inset drop zone.
-Drag the inset to move it. To resize it, select its own row under the parent cell in <b>Layers</b>, or click it on the canvas, then edit the size fields in the Inspector's <b>Inset Image Properties</b>. Right-click for <b>Remove Inset</b> or <b>Reveal Image Source in File Explorer</b>.</p>
+Drag the inset to move it. Click it to show its handles, then drag a handle to resize it (it keeps its shape); exact X, Y, W and H are in the Inspector's <b>Inset Image Properties</b>. Right-click for <b>Remove Inset</b> or <b>Reveal Image Source in File Explorer</b>.</p>
 <h3>Fit, Crop, and Rotate</h3>
 <ul>
   <li><b>Scale to Fit:</b> keeps the entire image visible, with space left over if the proportions differ.</li>
@@ -271,7 +271,7 @@ _IMAGES_HTML_ZH = """
 <p>将单张图片拖到已占用的单元格通常会替换图片；拖到插图投放区则会添加插图。
 将画布上的一个单元格拖到另一个上可交换图片。Ctrl+点击可多选，松开拖动前请确认高亮的目标位置。</p>
 <p>添加外部插图时，将单张图片拖到已有图片的面板上，在右上角的插图投放区松开。
-拖动插图主体可移动它。调整大小时，在<b>图层</b>中选择主单元格下的插图条目，或直接点击画布上的插图，再修改检查器<b>插图属性</b>中的尺寸字段。右键菜单提供<b>移除插图</b>和<b>在文件资源管理器中显示图像源文件</b>。</p>
+拖动插图主体可移动它。点击插图显示调整手柄，拖动手柄即可调整大小（保持比例）；精确的 X、Y、宽、高在检查器的<b>插图属性</b>中。右键菜单提供<b>移除插图</b>和<b>在文件资源管理器中显示图像源文件</b>。</p>
 <h3>适应、裁剪与旋转</h3>
 <ul>
   <li><b>适应 (Scale to Fit)：</b>完整显示图片；比例不一致时保留空白。</li>
@@ -314,11 +314,9 @@ The main Auto Layout button and <code>Ctrl+Shift+A</code> still arrange panels a
   <li>Choose a reference image whose plot height and bottom line the others should match. <b>Match reference exactly</b> keeps its placement and size while all panels fit. If the reference size would cut off content, the group is reduced together and a notice explains the change. <b>Fit within cells</b> allows the reference to shrink or move to fit the available space.
       Only plot height is matched; image aspect ratios are always preserved. Neither mode moves or resizes cells,
       in either grid or freeform layouts.</li>
-  <li>Use <b>Grid rows</b> to keep each grid row's bottom baseline separate, or <b>Custom rows</b> for explicit grouping.
-      Panels with the same number in the table's <b>Baseline</b> column share one bottom axis. Freeform defaults to suggested
-      numbers based on current vertical positions; review and retype them rather than flattening a multi-row figure. <b>One baseline</b> is only for panels that should share one line.</li>
-  <li><b>Preview alignment</b> shows a separate project copy, the target height in millimetres and temporary plot/baseline guides.
-      If the group was reduced to fit, review the notice and preview before applying. If no valid fit is possible, adjust the layout or group membership; Apply stays unavailable until the problem is resolved.
+  <li>Choose the <b>Baseline</b> pictogram to keep each grid row's bottom baseline separate, <b>One baseline</b> for panels that should share one line, or <b>Custom rows</b> for explicit grouping. In Custom rows, click a card's row badge to cycle its row number; panels with the same number share one bottom axis.</li>
+  <li>The <b>preview</b> on the right is always on: it shows the group's final layout, fitted to the group's panels. Use the <b>Size</b> pictogram to choose exact or fitted plot heights; an amber dot means fitting would help.
+      If the group was reduced to fit, review the notice in the preview before applying. If no valid fit is possible, adjust the layout or group membership; Apply stays unavailable until the problem is resolved.
       Cropped-out plot areas, missing sources, changed sources and overlapping group membership also require repair.</li>
 </ol>
 <p><b>Apply</b> saves markers and alignment groups in one undoable change, without editing source files.
@@ -503,8 +501,8 @@ _TYPOGRAPHY_HTML_EN = """
 <ol>
   <li>Right-click an SVG image cell → <b>Match Text Size…</b>.</li>
   <li>Select text elements from the list; use Ctrl or Shift for multiple selections.</li>
-  <li>Click <b>Add Group</b>, give it a meaningful name, and set its point size.</li>
-  <li>Choose the group in <b>Assign to</b>, then click <b>Assign selected to group</b>.</li>
+  <li>Click the <b>+</b> chip to create a group at the selected text's size. Double-click the chip's name to rename it, or its size to type a new one; drag the size to scrub it.</li>
+  <li>Click a group chip to assign the selected texts to it. <b>∅</b> removes the selection from its group.</li>
   <li>Open another panel's inspector and assign matching text to the same group.
       Editing the group's size updates its members throughout the project.</li>
 </ol>

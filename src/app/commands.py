@@ -1816,6 +1816,84 @@ class GroupLabelPropertyChangeCommand(QUndoCommand):
         self._apply(self.old_values)
 
 
+def _container_cells(cells):
+    """Every non-leaf cell at any depth (split containers hold split_ratios)."""
+    for cell in cells:
+        if not cell.is_leaf:
+            yield cell
+        yield from _container_cells(cell.children)
+
+
+class ChangeGapCommand(QUndoCommand):
+    """Change Project -> Cell Gap, re-fitting rows and page height when the grid has images.
+
+    Consecutive gap changes merge into one undo step. Each redo re-runs the layout
+    for the current gap, so the snapshot taken at construction stays the pre-change state.
+    """
+
+    def __init__(self, project, new_gap, update_callback=None):
+        super().__init__("Change Cell Gap")
+        self.project = project
+        self.new_gap = float(new_gap)
+        self.update_callback = update_callback
+
+        self.old_gap = project.gap_mm
+        self.old_page_height = project.page_height_mm
+        self.old_row_settings = {}  # row_index -> {height_ratio, column_ratios}
+        for row in project.rows:
+            self.old_row_settings[row.index] = {
+                'height_ratio': row.height_ratio,
+                'column_ratios': list(row.column_ratios) if row.column_ratios is not None else None,
+            }
+        self.old_split_ratios = {
+            cell.id: list(cell.split_ratios) for cell in _container_cells(project.cells)
+        }
+
+    def _should_refit(self):
+        from src.utils.auto_layout import AutoLayout
+        return (self.project.layout_mode == "grid"
+                and bool(AutoLayout._get_image_aspect_ratios(self.project)))
+
+    def redo(self):
+        from src.utils.auto_layout import AutoLayout
+        self.project.gap_mm = self.new_gap
+        if self._should_refit():
+            settings = AutoLayout.optimize_layout(self.project)
+            for i, row_data in enumerate(settings['rows']):
+                if i < len(self.project.rows):
+                    row = self.project.rows[i]
+                    row.height_ratio = row_data.get('height_ratio', 1.0)
+                    row.column_ratios = row_data.get('column_ratios', [])
+            if 'optimal_page_height_mm' in settings:
+                self.project.page_height_mm = settings['optimal_page_height_mm']
+        if self.update_callback:
+            self.update_callback()
+
+    def undo(self):
+        self.project.gap_mm = self.old_gap
+        self.project.page_height_mm = self.old_page_height
+        for row in self.project.rows:
+            if row.index in self.old_row_settings:
+                settings = self.old_row_settings[row.index]
+                row.height_ratio = settings['height_ratio']
+                row.column_ratios = list(settings['column_ratios']) if settings['column_ratios'] is not None else None
+        for cell_id, ratios in self.old_split_ratios.items():
+            cell = self.project.find_cell_by_id(cell_id)
+            if cell:
+                cell.split_ratios = list(ratios)
+        if self.update_callback:
+            self.update_callback()
+
+    def id(self):
+        return (id(self.project) ^ 0x6A9) & 0x7FFFFFFF
+
+    def mergeWith(self, other):
+        if not isinstance(other, ChangeGapCommand) or other.project is not self.project:
+            return False
+        self.new_gap = other.new_gap
+        return True
+
+
 class AutoLayoutCommand(QUndoCommand):
     def __init__(self, project, update_callback=None):
         super().__init__("Auto Layout")

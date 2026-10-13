@@ -529,7 +529,7 @@ class CellItem(QGraphicsRectItem):
         # PiP inset state
         self._pip_items = []          # list of PiPItem data objects
         self._selected_pip_id = None  # id of the currently selected PiP
-        self._pip_resize_active = False  # True only when user explicitly enters resize mode
+        self._pip_resize_active = False  # True while a PiP is selected: its handles are drawn and hit-tested
         self._pip_drag_mode = None    # "move"|"resize_nw"|…|"origin_move"|"origin_resize_nw"|…
         self._pip_drag_id = None      # id of the pip being dragged (separate from selection)
         self._pip_drag_start_item_pos = None
@@ -823,19 +823,19 @@ class CellItem(QGraphicsRectItem):
             return
 
         # PiP interaction:
-        #   - Click PiP body: select it (highlight) and start a move drag.
-        #   - Resize handles only appear after "Resize" from context menu.
-        #   - While resize mode active, clicking a handle starts a resize drag.
-        #   - Clicking outside any PiP exits resize mode and deselects.
+        #   - Click PiP body: select it (its handles appear) and start a move drag.
+        #   - While a PiP is selected, pressing a handle starts a resize drag.
+        #   - Clicking outside any PiP deselects it and hides its handles.
         if self._pip_items and event.button() == Qt.MouseButton.LeftButton:
             pip_id, mode = self._pip_hit_test(event.pos())
             if pip_id:
                 pip = next((p for p in self._pip_items if p.id == pip_id), None)
                 if pip:
                     if pip_id != self._selected_pip_id:
-                        # Newly clicked PiP: select it, clear resize mode
+                        # Newly clicked PiP: select it and show its handles
+                        self.prepareGeometryChange()
                         self._selected_pip_id = pip_id
-                        self._pip_resize_active = False
+                        self._pip_resize_active = True
                         self.update()
                         scene = self.scene()
                         if scene and hasattr(scene, "selection_changed_custom"):
@@ -859,7 +859,8 @@ class CellItem(QGraphicsRectItem):
                 event.accept()
                 return
             elif self._selected_pip_id:
-                # Clicked outside any PiP — exit resize mode and deselect
+                # Clicked outside any PiP — deselect and hide its handles
+                self.prepareGeometryChange()
                 self._selected_pip_id = None
                 self._pip_resize_active = False
                 self._pip_drag_mode = None
@@ -988,16 +989,7 @@ class CellItem(QGraphicsRectItem):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            if self._pip_resize_active:
-                # First Esc: exit resize mode but keep PiP selected
-                self._pip_resize_active = False
-                self._pip_drag_mode = None
-                self._pip_drag_id = None
-                self.update()
-                event.accept()
-                return
             if self._selected_pip_id:
-                # Second Esc (or Esc when not in resize): deselect PiP
                 self.deselect_pip()
                 event.accept()
                 return
@@ -1114,6 +1106,7 @@ class CellItem(QGraphicsRectItem):
     def update_pip_items(self, pip_items):
         self._pip_items = list(pip_items)
         if self._selected_pip_id and not any(p.id == self._selected_pip_id for p in self._pip_items):
+            self.prepareGeometryChange()
             self._selected_pip_id = None
             self._pip_resize_active = False
             self._pip_drag_mode = None
@@ -1152,15 +1145,11 @@ class CellItem(QGraphicsRectItem):
             pip.y = max(0.0, min(pip.y, 1.0 - h))
 
     def select_pip(self, pip_id: str, resize: bool = False):
-        """Select a PiP inset.
-        resize=False (default): highlight + move only, no resize handles.
-        resize=True: also show resize handles (called from context menu)."""
-        changed = pip_id != self._selected_pip_id
+        """Select a PiP inset and show its resize handles.
+        The resize argument is kept for compatibility; handles always show for a selected inset."""
+        self.prepareGeometryChange()
         self._selected_pip_id = pip_id
-        if resize:
-            self._pip_resize_active = True
-        elif changed:
-            self._pip_resize_active = False
+        self._pip_resize_active = True
         self.update()
         scene = self.scene()
         if scene and hasattr(scene, "selection_changed_custom"):
@@ -1169,6 +1158,7 @@ class CellItem(QGraphicsRectItem):
     def deselect_pip(self):
         """Deselect the currently selected PiP inset."""
         if self._selected_pip_id is not None:
+            self.prepareGeometryChange()
             self._selected_pip_id = None
             self._pip_resize_active = False
             self._pip_drag_mode = None
@@ -2359,8 +2349,8 @@ class CellItem(QGraphicsRectItem):
             super().hoverMoveEvent(event)
             return
 
-        # 2. PiP handle cursor logic
-        if self._selected_pip_id and self._pip_resize_active:
+        # 2. PiP handle and body cursor logic
+        if self._pip_items:
             _, mode = self._pip_hit_test(event.pos())
             if mode:
                 cursors = {
@@ -2377,6 +2367,7 @@ class CellItem(QGraphicsRectItem):
                     "origin_resize_sw": Qt.CursorShape.SizeBDiagCursor,
                     "origin_resize_se": Qt.CursorShape.SizeFDiagCursor,
                     "origin_move": Qt.CursorShape.SizeAllCursor,
+                    "move": Qt.CursorShape.SizeAllCursor,
                 }
                 if mode in cursors:
                     self.setCursor(cursors[mode])

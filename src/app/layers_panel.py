@@ -704,18 +704,25 @@ class LayersPanel(QWidget):
     # ── selection ─────────────────────────────────────────────────────────────
 
     def select_item(self, target_id):
+        self.select_items([] if target_id is None else [target_id])
+
+    def select_items(self, target_ids):
+        """Select the first row of each id (label cells map to their cell) and scroll to the first."""
         self._is_updating = True
         self.tree.clearSelection()
-        if target_id is not None:
-            lookup_id = target_id.removeprefix("label_")
-            it = QTreeWidgetItemIterator(self.tree)
-            while it.value():
-                item = it.value()
-                if item.data(0, _ROLE_ID) == lookup_id:
-                    item.setSelected(True)
+        remaining = {target_id.removeprefix("label_") for target_id in target_ids}
+        scrolled = False
+        it = QTreeWidgetItemIterator(self.tree)
+        while remaining and it.value():
+            item = it.value()
+            item_id = item.data(0, _ROLE_ID)
+            if item_id in remaining:
+                remaining.discard(item_id)
+                item.setSelected(True)
+                if not scrolled:
                     self.tree.scrollToItem(item)
-                    break
-                it += 1
+                    scrolled = True
+            it += 1
         self._is_updating = False
 
     # ── i18n ──────────────────────────────────────────────────────────────────

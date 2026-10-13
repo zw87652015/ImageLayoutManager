@@ -256,24 +256,24 @@ _QSS_TEMPLATE = """
     QWidget#collapsibleSection {
         background: transparent;
     }
-    QWidget#sectionHead {
-        background: transparent;
-        border-left: 3px solid %(accent)s;
-        border-bottom: 1px solid %(divider)s;
+    QFrame#sectionHead {
+        background: %(surface_subtle)s;
         border: none;
+        border-top: 1px solid %(border_strong)s;
+        border-bottom: 1px solid %(border)s;
     }
-    QWidget#sectionHead:hover {
-        background: %(hover)s;
+    QFrame#sectionHead:hover {
+        background: %(accent_tint)s;
     }
     QLabel#sectionTitle {
         font-size: %(font_md)s;
-        font-weight: 600;
+        font-weight: 700;
         color: %(text)s;
-        letter-spacing: 0.2px;
+        letter-spacing: 0.4px;
         background: transparent;
     }
     QLabel#sectionChevron {
-        color: %(text_tert)s;
+        color: %(text_sec)s;
         font-size: %(font_xs)s;
         background: transparent;
     }
@@ -281,7 +281,7 @@ _QSS_TEMPLATE = """
         background: transparent;
     }
     QFrame#sectionDivider {
-        background: %(divider)s;
+        background: transparent;
         border: none;
         max-height: 1px;
     }

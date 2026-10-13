@@ -15,6 +15,8 @@ from src.app.i18n import tr
 from src.app.wheel_guard import install_wheel_guard
 from src.app.auto_spinbox import AutoDoubleSpinBox
 from src.app.pictogram_combo import PictogramCombo
+from src.app.numbering_preview_widget import NumberingPreview
+from src.app.scheme_picker import SchemePicker
 from src.app.pictograms import INSPECTOR_PICTOGRAMS as _PG, draw_pictogram
 from src.app.resizable_text_edit import ResizableTextEdit
 from src.app.theme import get_tokens, LIGHT
@@ -442,7 +444,7 @@ class CollapsibleSection(QWidget):
         outer.setSpacing(0)
         outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self._header = QWidget()
+        self._header = QFrame()  # QFrame, not QWidget: style sheets only draw borders on frames
         self._header.setObjectName("sectionHead")
         self._header.setCursor(Qt.CursorShape.PointingHandCursor)
         self._header.setFixedHeight(34)
@@ -695,10 +697,9 @@ class ReflowCard(QFrame):
             self._reflow_icon_color = icon_color
         self._reflow_icon.paint(painter, QRect(10, 7, 24, 24))
 
-        # Wordmark + state word — heavy italic, RTX style.
+        # Wordmark + state word — heavy upright weight.
         mark_font = QFont()
         mark_font.setPixelSize(15)
-        mark_font.setItalic(True)
         mark_font.setWeight(QFont.Weight.Black)
         painter.setFont(mark_font)
         fm = QFontMetrics(mark_font)
@@ -844,6 +845,7 @@ class _PlotTextSizeChip(QWidget):
 
 
 class Inspector(QWidget):
+    _label_sub_separator = ""
     # Signals for property changes
     cell_property_changed = pyqtSignal(dict) # {property: value}
     match_text_size_requested = pyqtSignal(str)  # cell id
@@ -967,7 +969,7 @@ class Inspector(QWidget):
         self.m_bottom = self._create_spinbox(0, 100, self._emit_project_margins)
         self.m_left = self._create_spinbox(0, 100, self._emit_project_margins)
         self.m_right = self._create_spinbox(0, 100, self._emit_project_margins)
-        
+
         self.project_layout.addRow(self._fl("lbl_margin_top"),    self.m_top)
         self.project_layout.addRow(self._fl("lbl_margin_bottom"), self.m_bottom)
         self.project_layout.addRow(self._fl("lbl_margin_left"),   self.m_left)
@@ -1038,7 +1040,7 @@ class Inspector(QWidget):
         self._sec_label_hierarchy = QLabel(tr("sec_label_hierarchy"))
         self.project_layout.addRow(self._sec_label_hierarchy)
 
-        self.label_sub_scheme_combo = QComboBox()
+        self.label_sub_scheme_combo = SchemePicker()
         self._label_sub_scheme_options = [("opt_scheme_none", "")] + [
             (None, s) for s in self._numbering_schemes()
         ]
@@ -1056,6 +1058,10 @@ class Inspector(QWidget):
             lambda v: self.project_property_changed.emit({"label_sub_prefix_parent": v})
         )
         self.project_layout.addRow("", self.label_sub_prefix_chk)
+        self.numbering_preview = NumberingPreview()
+        self.project_layout.addRow(self.numbering_preview)
+        self.label_sub_scheme_combo.currentIndexChanged.connect(self._update_numbering_preview)
+        self.label_sub_prefix_chk.toggled.connect(self._update_numbering_preview)
 
         # Panel Title Defaults (title tier: descriptive captions)
         self._sec_title_tier = QLabel(tr("sec_title_tier"))
@@ -1270,7 +1276,7 @@ class Inspector(QWidget):
             -100, 100, lambda v: self._emit_padding("padding_left", v))
         self.pad_right = self._create_spinbox(
             -100, 100, lambda v: self._emit_padding("padding_right", v))
-        
+
         self.cell_layout.addRow(self._fl("lbl_pad_top"),    self.pad_top)
         self.cell_layout.addRow(self._fl("lbl_pad_bottom"), self.pad_bottom)
         self.cell_layout.addRow(self._fl("lbl_pad_left"),   self.pad_left)
@@ -1628,12 +1634,13 @@ class Inspector(QWidget):
         self.label_all_labels_heading = QLabel(tr("lbl_all_labels"))
         self.label_cell_layout.addRow(self.label_all_labels_heading)
 
-        self.label_scheme = QComboBox()
+        self.label_scheme = SchemePicker()
         self.label_scheme.addItems(self._numbering_schemes())
         self.label_scheme.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_scheme": t})
         )
         self.label_scheme.currentTextChanged.connect(self.label_align.set_sample)
+        self.label_scheme.currentTextChanged.connect(self._update_numbering_preview)
         self.label_cell_layout.addRow(self._fl("lbl_scheme"), self.label_scheme)
 
         self.label_row_height = AutoDoubleSpinBox()
@@ -2060,7 +2067,7 @@ class Inspector(QWidget):
             lambda v: self.row_property_changed.emit({"height_ratio": v})
         )
         self.row_layout.addRow(self._fl("lbl_height_ratio"), self.row_height)
-        
+
         # Column ratios (comma-separated, e.g. "1,2,1" for 25%-50%-25%)
         self.col_ratios_edit = QLineEdit()
         self.col_ratios_edit.setPlaceholderText(tr("placeholder_col_ratios"))
@@ -2297,7 +2304,7 @@ class Inspector(QWidget):
         self.text_layout.addRow(self._fl("lbl_bg_padding"), self.text_bg_padding)
 
         # Scheme selector — only shown for in-cell numbering labels (not corner labels)
-        self._incell_scheme = QComboBox()
+        self._incell_scheme = SchemePicker()
         self._incell_scheme.addItems(self._numbering_schemes())
         self._incell_scheme.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_scheme": t})
@@ -2401,6 +2408,7 @@ class Inspector(QWidget):
 
         for key, lbl in self._lbl_registry:
             lbl.setText(tr(key))
+        self.numbering_preview.setToolTip(tr("numbering_preview_label"))
 
         self.no_selection_label.setText(tr("no_selection"))
         self._update_typography_labels()
@@ -3114,6 +3122,14 @@ class Inspector(QWidget):
         })
 
     # --- Label item (per-label overrides) helpers ---
+
+    def _update_numbering_preview(self, *_):
+        main = self.label_scheme.currentText() if hasattr(self, "label_scheme") else "(a)"
+        index = self.label_sub_scheme_combo.currentIndex()
+        options = self._label_sub_scheme_options
+        sub = options[index][1] if 0 <= index < len(options) else ""
+        self.numbering_preview.set_scheme(main, sub, self.label_sub_prefix_chk.isChecked(),
+                                          self._label_sub_separator)
 
     @staticmethod
     def _numbering_schemes() -> list:
@@ -3875,6 +3891,10 @@ class Inspector(QWidget):
                 self.label_sub_prefix_chk.setChecked(
                     bool(effective_project_data.get("label_sub_prefix_parent", False))
                 )
+                self._label_sub_separator = effective_project_data.get("label_sub_separator", "")
+                with QSignalBlocker(self.label_scheme):
+                    self.label_scheme.setCurrentText(effective_project_data.get("label_scheme", "(a)"))
+                self._update_numbering_preview()
 
                 # Panel title defaults
                 self.title_label_font.setCurrentText(

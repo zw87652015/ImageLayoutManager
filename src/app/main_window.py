@@ -51,7 +51,7 @@ from src.app.commands import (
     PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, MultiSwapCellsCommand,
     DropImageCommand, ChangeRowCountCommand, InsertRowCommand, InsertCellCommand,
     DeleteRowCommand, DeleteCellCommand,
-    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, AutoLayoutFreeformCommand, ChangeLabelSchemeCommand,
+    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, AutoLayoutFreeformCommand, ChangeLabelSchemeCommand, ChangeGapCommand,
     SetSubLabelsCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
@@ -3071,6 +3071,15 @@ class MainWindow(QMainWindow):
             self.layers_panel.select_item(None)
             return
 
+        # Layers mirrors the whole canvas selection (a selected PiP stands in for its cell).
+        layer_ids = []
+        for i in items:
+            target = (getattr(i, '_selected_pip_id', None) or getattr(i, 'cell_id', None)
+                      or getattr(i, 'mark_id', None) or getattr(i, 'text_item_id', None))
+            if target and target not in layer_ids:
+                layer_ids.append(target)
+        self.layers_panel.select_items(layer_ids)
+
         # Status bar: selection info
         cell_items = [i for i in items if hasattr(i, 'cell_id') and not getattr(i, 'is_label_cell', False)]
         if len(cell_items) > 1:
@@ -3104,7 +3113,6 @@ class MainWindow(QMainWindow):
                     data = first.to_dict()
                     data["_count"] = len(mark_items)
                     self.inspector.set_selection('mark', data)
-                    self.layers_panel.select_item(mark_items[0].mark_id)
                     return
             self.inspector.set_selection('mixed', {"count": len(items)})
             return
@@ -3145,7 +3153,6 @@ class MainWindow(QMainWindow):
             # effective selection target for layers highlight + inspector.
             selected_pip_id = getattr(item, '_selected_pip_id', None)
             if selected_pip_id:
-                self.layers_panel.select_item(selected_pip_id)
                 cell = self.project.find_cell_by_id(item.cell_id)
                 if cell:
                     pip = next((p for p in getattr(cell, 'pip_items', []) if p.id == selected_pip_id), None)
@@ -3153,7 +3160,6 @@ class MainWindow(QMainWindow):
                         self.inspector.set_selection('pip', pip.to_dict())
                         return
 
-            self.layers_panel.select_item(item.cell_id)
             # Check if it's a label cell (id starts with "label_")
             if hasattr(item, 'is_label_cell') and item.is_label_cell:
                 # Find the corresponding text item for this label cell
@@ -3938,6 +3944,11 @@ class MainWindow(QMainWindow):
         # We need to handle PageSizePreset conversion for the command to work if we pass raw dict
         # or do it inside the command. PropertyChangeCommand simply sets attributes.
         # So we should convert values before passing to command if needed.
+
+        if set(changes) == {"gap_mm"}:
+            cmd = ChangeGapCommand(self.project, changes["gap_mm"], update_callback=self._refresh_and_update)
+            self.undo_stack.push(cmd)
+            return
 
         if "label_scheme" in changes:
             cmd = ChangeLabelSchemeCommand(self.project, changes["label_scheme"],

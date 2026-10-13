@@ -5,7 +5,7 @@ before); only painting, mouse, and keyboard selection differ. There is no
 popup and the wheel never changes the value, so scrolling the Inspector is safe.
 """
 
-from PyQt6.QtCore import QRectF, QSize, Qt
+from PyQt6.QtCore import QEvent, QRect, QRectF, QSize, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPalette, QPen
 from PyQt6.QtWidgets import QComboBox, QSizePolicy
 
@@ -23,6 +23,7 @@ class PictogramCombo(QComboBox):
     TILE_H = 30
     GAP = 4
     CAPTION_H = 14
+    CAPTION_MAX_LINES = 3
     MIN_W = 28
     MAX_W = 44
 
@@ -30,18 +31,19 @@ class PictogramCombo(QComboBox):
         super().__init__(parent)
         self._pictograms = list(pictograms)
         self._caption_suffix = caption_suffix
-        self._caption_tip = False
         self._mirror = mirror
         self._vertical = False
         self._hover = -1
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        # Expanding so the caption gets the whole field width; tiles stay capped at MAX_W.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(self.TILE_H + self.GAP + self.CAPTION_H)
         model = self.model()
         for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset,
                        model.dataChanged, model.layoutChanged):
             signal.connect(self._refresh_accessibility)
+        self.currentIndexChanged.connect(self._sync_height)
         self._refresh_accessibility()
 
     # ── configuration ────────────────────────────────────────────────────
@@ -53,6 +55,7 @@ class PictogramCombo(QComboBox):
     def setItemText(self, index, text):
         super().setItemText(index, text)
         self._refresh_accessibility()
+        self._sync_height()
 
     def _refresh_accessibility(self, *_args):
         names = [self.itemText(i) for i in range(self.count())]
@@ -62,8 +65,37 @@ class PictogramCombo(QComboBox):
         return tile_rects(self.width(), self.count(), min_w=self.MIN_W,
                           max_w=self.MAX_W, gap=self.GAP, height=self.TILE_H)
 
+    def _caption(self):
+        return (self.currentText() + self._caption_suffix) if self.currentIndex() >= 0 else "—"
+
+    def _caption_font(self):
+        font = QFont(self.font())
+        font.setPixelSize(11)
+        return font
+
+    def _caption_height(self, width):
+        """Height of the word-wrapped caption at *width*, at least one line."""
+        fm = QFontMetrics(self._caption_font())
+        wrapped = fm.boundingRect(QRect(0, 0, max(1, int(width)), 10000),
+                                  int(Qt.TextFlag.TextWordWrap), self._caption()).height()
+        return max(self.CAPTION_H, min(wrapped, fm.lineSpacing() * self.CAPTION_MAX_LINES))
+
     def _height(self):
-        return self.TILE_H + self.GAP + self.CAPTION_H
+        return self.TILE_H + self.GAP + self._caption_height(self.width())
+
+    def _sync_height(self, *_args):
+        height = self._height()
+        if height != self.height():
+            self.setFixedHeight(height)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_height()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.FontChange:
+            self._sync_height()
 
     def sizeHint(self):
         return QSize(row_width(self.count(), 36, self.GAP), self._height())
@@ -134,21 +166,12 @@ class PictogramCombo(QComboBox):
                 # outset ring would be clipped by the widget edge.
                 p.drawRoundedRect(rect.adjusted(2.5, 2.5, -2.5, -2.5), 4, 4)
 
-        caption = (self.currentText() + self._caption_suffix) if current >= 0 else "—"
-        font = QFont(self.font())
-        font.setPixelSize(11)
-        p.setFont(font)
+        p.setFont(self._caption_font())
         p.setPen(_tint(text, 153))
-        shown = QFontMetrics(font).elidedText(caption, Qt.TextElideMode.ElideRight, int(self.width()))
-        if shown != caption:
-            self.setToolTip(caption)
-            self._caption_tip = True
-        elif self._caption_tip:
-            self.setToolTip("")
-            self._caption_tip = False
-        p.drawText(QRectF(0, self.TILE_H + self.GAP, self.width(), self.CAPTION_H),
-                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                   shown)
+        top = self.TILE_H + self.GAP
+        p.drawText(QRectF(0, top, self.width(), self.height() - top),
+                   int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop) | int(Qt.TextFlag.TextWordWrap),
+                   self._caption())
         p.end()
 
     # ── mouse ────────────────────────────────────────────────────────────
