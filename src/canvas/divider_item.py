@@ -9,6 +9,9 @@ HIT_THICKNESS = 4.0
 VIS_THICKNESS = 1.5
 
 
+from src.canvas import canvas_accent
+
+
 class DividerItem(QGraphicsRectItem):
     """An invisible drag handle placed in the gap between rows or columns.
 
@@ -87,7 +90,7 @@ class DividerItem(QGraphicsRectItem):
         r = self.rect()
         # Subcell dividers paint lighter: the nested gaps are a deeper level.
         alpha = 110 if self.kind == 'subcell' else 180
-        color = QColor(0, 122, 204, alpha)
+        color = canvas_accent.accent(alpha)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(QBrush(color))
         painter.setPen(QPen(Qt.PenStyle.NoPen))

@@ -2,14 +2,14 @@ from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsItem
 from PyQt6.QtGui import QColor, QPen, QBrush, QFont, QPainter
 from PyQt6.QtCore import Qt, QRectF
 
+from src.canvas import canvas_accent
+
 
 class AddButtonItem(QGraphicsRectItem):
     """A '+' button placed on the canvas margins for adding rows/cells.
 
     Row buttons are wide horizontal bars; cell buttons are tall vertical bars.
     """
-
-    THICKNESS = 4.0   # mm – the short dimension
 
     def __init__(self, action: str, width: float = 0, height: float = 0,
                  row_index: int = -1, col_index: int = -1, parent=None):
@@ -19,8 +19,8 @@ class AddButtonItem(QGraphicsRectItem):
         self.col_index = col_index
         self._hovered = False
 
-        w = width if width > 0 else self.THICKNESS
-        h = height if height > 0 else self.THICKNESS
+        w = width if width > 0 else 1.0
+        h = height if height > 0 else 1.0
         self.setRect(0, 0, w, h)
         self.setZValue(500)
         self.setAcceptHoverEvents(True)
@@ -34,14 +34,20 @@ class AddButtonItem(QGraphicsRectItem):
 
     def paint(self, painter: QPainter, option, widget=None):
         r = self.rect()
-        bg = QColor(0, 122, 204, 180) if self._hovered else QColor(0, 122, 204, 100)
+        bg = canvas_accent.accent(180) if self._hovered else canvas_accent.accent(100)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(QBrush(bg))
-        painter.setPen(QPen(QColor(0, 122, 204, 220), 0.3))
-        painter.drawRoundedRect(r, 1.0, 1.0)
+        border = QPen(canvas_accent.accent(220), 1.0)
+        border.setCosmetic(True)
+        painter.setPen(border)
+        rad = min(r.width(), r.height()) * 0.25
+        painter.drawRoundedRect(r, rad, rad)
 
         # Draw "+" centred, arm length based on shorter dimension
-        painter.setPen(QPen(Qt.GlobalColor.white, 0.5))
+        plus = QPen(Qt.GlobalColor.white, 1.5)
+        plus.setCosmetic(True)
+        plus.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(plus)
         cx, cy = r.center().x(), r.center().y()
         arm = min(r.width(), r.height()) * 0.28
         painter.drawLine(QRectF(cx - arm, cy, arm * 2, 0).topLeft(),

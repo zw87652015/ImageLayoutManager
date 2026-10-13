@@ -6,7 +6,9 @@ import math
 from PyQt6.QtCore import Qt, QEvent, pyqtSignal, QPointF, QPoint, QRect, QRectF, QVariantAnimation, QEasingCurve, QTimer
 from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterPath, QPen, QBrush, QColor, QCursor, QTransform
 
+from src.canvas import canvas_accent
 from src.app.motion import start_animation
+from src.canvas import display_scale
 from src.canvas.canvas_ruler import CanvasRuler, RulerCorner
 from src.canvas.reveal_math import axis_reveal_delta, reveal_margin
 
@@ -16,7 +18,7 @@ class CanvasView(QGraphicsView):
     MAX_ZOOM = 64.0
     ZOOM_DURATION_MS = 140
 
-    zoom_changed = pyqtSignal(float)
+    zoom_changed = pyqtSignal(float)  # fraction of actual size (1.0 == real size)
     mouse_scene_pos_changed = pyqtSignal(float, float)  # x_mm, y_mm
     navigate_cell = pyqtSignal(str)       # direction: "up"/"down"/"left"/"right"/"next"/"prev"
     swap_cell = pyqtSignal(str)           # direction: "up"/"down"/"left"/"right"
@@ -49,6 +51,10 @@ class CanvasView(QGraphicsView):
         self._zoom_target = 1.0
         self._zoom_anim = None
         self._pinch_total = 1.0
+        self._actual_scale = None
+        self._hooked_window = None
+        self._tracked_screen = None
+        self._dpi_slot = None
         self.grabGesture(Qt.GestureType.PinchGesture)
         for bar in (self.horizontalScrollBar(), self.verticalScrollBar()):
             bar.sliderPressed.connect(self._cancel_zoom)
@@ -231,13 +237,58 @@ class CanvasView(QGraphicsView):
                    max(1, viewport.height() - 4) / page_rect.height())
         self._start_zoom(zoom, QPointF(viewport.center()), page_rect.center())
 
+    def actual_size_scale(self) -> float:
+        """Transform px-per-mm that prints the page at its real size here."""
+        if self._actual_scale is None:
+            self._actual_scale = display_scale.screen_px_per_mm(self.screen())
+        return self._actual_scale
+
+    def zoom_fraction(self) -> float:
+        return self.transform().m11() / self.actual_size_scale()
+
+    def refresh_display_scale(self):
+        old = self._actual_scale
+        self._actual_scale = None
+        new = self.actual_size_scale()
+        if old is not None and abs(new - old) > 1e-9:
+            anchor = QPointF(self.viewport().rect().center())
+            scene_anchor = self._scene_at(anchor)
+            self._cancel_zoom()
+            self._set_zoom_frame(self.transform().m11() / old * new, scene_anchor, anchor)
+        else:
+            self.zoom_changed.emit(self.zoom_fraction())
+
+    def _on_screen_changed(self, screen):
+        if self._tracked_screen is not None and self._dpi_slot is not None:
+            try:
+                self._tracked_screen.physicalDotsPerInchChanged.disconnect(self._dpi_slot)
+            except TypeError:
+                pass
+        self._tracked_screen = screen
+        if screen is not None:
+            self._dpi_slot = lambda *_: self.refresh_display_scale()
+            screen.physicalDotsPerInchChanged.connect(self._dpi_slot)
+        self.refresh_display_scale()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        handle = self.window().windowHandle()
+        if handle is not None and handle is not self._hooked_window:
+            self._hooked_window = handle
+            handle.screenChanged.connect(self._on_screen_changed)
+            self._on_screen_changed(handle.screen())
+
     def zoom_to_100(self):
-        """Reset zoom to 100%."""
-        self._start_zoom(1.0)
+        """Reset zoom to 100% (true physical size on this monitor)."""
+        self._start_zoom(self.actual_size_scale())
 
     def zoom_to(self, level):
-        """Animate to an absolute zoom level about the viewport centre."""
-        self._start_zoom(level, QPointF(self.viewport().rect().center()))
+        """Animate to a zoom level about the viewport centre.
+
+        *level* is a fraction of real-world size (1.0 == actual size).
+        """
+        self._start_zoom(level * self.actual_size_scale(),
+                         QPointF(self.viewport().rect().center()))
 
     def zoom_in(self):
         self._apply_zoom(1.25, QPointF(self.viewport().rect().center()))
@@ -289,7 +340,7 @@ class CanvasView(QGraphicsView):
         self.horizontalScrollBar().setValue(scroll_x)
         self.verticalScrollBar().setValue(scroll_y)
         self._zoom_level = self.transform().m11()
-        self.zoom_changed.emit(self._zoom_level)
+        self.zoom_changed.emit(self._zoom_level / self.actual_size_scale())
         self._update_rulers()
 
     def _start_zoom(self, zoom, anchor=None, scene_target=None, animated=True):
@@ -475,8 +526,8 @@ class CanvasView(QGraphicsView):
             rb_end = self.mapToScene(self._rb_current)
             rb_rect = QRectF(rb_start, rb_end).normalized()
             painter.save()
-            painter.setPen(QPen(QColor(74, 144, 226), 0))
-            painter.setBrush(QBrush(QColor(74, 144, 226, 40)))
+            painter.setPen(QPen(canvas_accent.accent(255), 0))
+            painter.setBrush(QBrush(canvas_accent.accent(40)))
             painter.drawRect(rb_rect)
             painter.restore()
 

@@ -13,9 +13,8 @@ from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsObject
 
+from src.canvas import canvas_accent
 from src.utils import mark_geometry, mark_render
-
-_ACCENT = "#4A90D9"
 
 
 class MarkItem(QGraphicsObject):
@@ -194,7 +193,7 @@ class MarkItem(QGraphicsObject):
         # selected mark (multi-selection included).
         for rect in self._selection_rects().values():
             painter.save()
-            pen = QPen(QColor(_ACCENT), 0)
+            pen = QPen(canvas_accent.accent(), 0)
             pen.setCosmetic(True)
             painter.setPen(pen)
             painter.setBrush(QColor("#FFFFFF"))

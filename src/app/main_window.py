@@ -698,6 +698,9 @@ class MainWindow(QMainWindow):
         self._act_canvas_actual_size = QAction(tr("action_canvas_actual_size"), self)
         self._act_canvas_actual_size.triggered.connect(lambda: self._zoom_current_view(CanvasView.zoom_to_100))
         self._view_menu.addAction(self._act_canvas_actual_size)
+        self._act_calibrate_display = QAction(tr("action_calibrate_display"), self)
+        self._act_calibrate_display.triggered.connect(lambda: self._on_calibrate_display())
+        self._view_menu.addAction(self._act_calibrate_display)
 
         # ── UI font zoom (Ctrl/Cmd + / - / 0) ──
         self._view_menu.addSeparator()
@@ -1329,6 +1332,7 @@ class MainWindow(QMainWindow):
         self._zoom_menu.addSeparator()
         self._zoom_menu.addAction(self._act_canvas_fit_page)
         self._zoom_menu.addAction(self._act_canvas_actual_size)
+        self._zoom_menu.addAction(self._act_calibrate_display)
         self.zoom_label.setMenu(self._zoom_menu)
 
         self._zoom_in_btn = QToolButton()
@@ -1352,6 +1356,7 @@ class MainWindow(QMainWindow):
         self._act_canvas_zoom_out.setText(tr("action_canvas_zoom_out"))
         self._act_canvas_fit_page.setText(tr("action_canvas_fit_page"))
         self._act_canvas_actual_size.setText(tr("action_canvas_actual_size"))
+        self._act_calibrate_display.setText(tr("action_calibrate_display"))
         self._zoom_fit_btn.setText(tr("zoom_fit_btn"))
         for button, key in ((self._zoom_out_btn, "action_canvas_zoom_out"),
                             (self._zoom_in_btn, "action_canvas_zoom_in"),
@@ -1578,7 +1583,7 @@ class MainWindow(QMainWindow):
         self.undo_stack = tab.undo_stack
         self.scene = tab.scene
         self.view = tab.view
-        self._on_zoom_changed(tab.view.transform().m11())
+        self._on_zoom_changed(tab.view.zoom_fraction())
         self._current_project_path = tab.path
 
         # Wire up new tab's project to the scene (first time only)
@@ -2072,6 +2077,16 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, zoom_level):
         self.zoom_label.setText(f"{round(zoom_level * 100)}%")
+
+    def _on_calibrate_display(self):
+        from src.app.display_calibration_dialog import DisplayCalibrationDialog
+        dlg = DisplayCalibrationDialog(self.screen(), parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_display_scale()
+
+    def refresh_display_scale(self):
+        for tab in self._tabs:
+            tab.view.refresh_display_scale()
 
     def _on_mouse_pos_changed(self, x_mm, y_mm):
         self.mouse_pos_label.setText(f"  X {x_mm:.1f},  Y {y_mm:.1f} mm")
@@ -3029,7 +3044,7 @@ class MainWindow(QMainWindow):
                 self.inspector.set_selection('draw_empty',
                                              self.project.to_dict())
             else:
-                self.inspector.set_selection(None, self.project.to_dict())
+                self.inspector.set_selection(None, self._project_selection_payload())
             self.layers_panel.select_item(None)
             return
 
@@ -3128,6 +3143,7 @@ class MainWindow(QMainWindow):
                 eff_ox, eff_oy = (self.project.effective_label_offsets(text_obj)
                                 if text_obj else
                                 (self.project.label_offset_x, self.project.label_offset_y))
+                from src.model.layout_engine import LayoutEngine
                 label_data = {
                     "text_item_id": text_obj.id if text_obj else None,
                     "label_text": text_obj.text if text_obj else "",
@@ -3147,6 +3163,10 @@ class MainWindow(QMainWindow):
                     "label_offset_y": eff_oy,
                     "label_row_height": getattr(self.project, 'label_row_height', 0.0),
                     "label_col_width": getattr(self.project, 'label_col_width', 0.0),
+                    "_effective_row_height_mm": LayoutEngine._strip_size_mm(
+                        self.project, getattr(text_obj, 'font_size_pt', 0.0) if text_obj else 0.0, True),
+                    "_effective_col_width_mm": LayoutEngine._strip_size_mm(
+                        self.project, getattr(text_obj, 'font_size_pt', 0.0) if text_obj else 0.0, False),
                     "placement": getattr(text_obj, 'placement', None) if text_obj else None,
                     "label_tier": getattr(text_obj, 'label_tier', 'panel') if text_obj else 'panel',
                     "style_locked": getattr(text_obj, 'style_locked', False) if text_obj else False,
@@ -3173,6 +3193,7 @@ class MainWindow(QMainWindow):
                 row_data = row.to_dict() if row else None
 
                 # Populate corner label fields from existing cell-scoped text items
+                from src.utils.auto_value import effective_cell_size, effective_subcell_size
                 cell_dict = cell.to_dict()
                 cell_dict["layout_mode"] = getattr(self.project, 'layout_mode', 'grid')
                 cell_dict["_size_groups"] = self._size_groups_payload()
@@ -3189,6 +3210,12 @@ class MainWindow(QMainWindow):
                         corner_labels[t.anchor] = t.text
                 cell_dict["corner_labels"] = corner_labels
 
+                layout = getattr(self.scene, '_last_layout_result', None)
+                eff_w, eff_h = effective_cell_size(layout, cell.id)
+                if eff_w is not None:
+                    cell_dict["_effective_width_mm"] = eff_w
+                    cell_dict["_effective_height_mm"] = eff_h
+
                 # Sub-cell info: if this cell has a parent split container, provide ratio data
                 cell_parent = self.project.find_parent_of(cell.id)
                 if cell_parent and cell_parent.split_direction != "none":
@@ -3204,6 +3231,8 @@ class MainWindow(QMainWindow):
                         "ratio": ratios[idx] if idx < len(ratios) else 1.0,
                         "override_width_mm": getattr(cell, 'override_width_mm', 0.0),
                         "override_height_mm": getattr(cell, 'override_height_mm', 0.0),
+                        "effective_size_mm": effective_subcell_size(
+                            layout, cell.id, cell_parent.split_direction),
                     }
 
                 self.inspector.set_selection('cell', cell_dict, row_data)
@@ -3220,10 +3249,15 @@ class MainWindow(QMainWindow):
         if hasattr(item, 'group_label_id'):
             group_label = self.project.find_group_label(item.group_label_id)
             if group_label:
-                self.inspector.set_selection('group_label', group_label.to_dict())
+                from src.model.layout_engine import LayoutEngine
+                gl_data = group_label.to_dict()
+                gl_data["_effective_thickness_mm"] = LayoutEngine.group_label_thickness_mm(
+                    group_label, self.project.typography_mode)
+                gl_data["_effective_rotation"] = group_label.auto_rotation()
+                self.inspector.set_selection('group_label', gl_data)
                 return
 
-        self.inspector.set_selection(None, self.project.to_dict())
+        self.inspector.set_selection(None, self._project_selection_payload())
 
     def _on_scene_selection_changed_custom(self, _ids: list):
         """Scene-level custom selection updates (PiP select/deselect)."""
@@ -3338,19 +3372,38 @@ class MainWindow(QMainWindow):
 
         return w / h if h > 0 else None
 
+    def _project_selection_payload(self) -> dict:
+        from src.model.layout_engine import LayoutEngine
+        data = self.project.to_dict()
+        data["_effective_col_width_mm"] = LayoutEngine._label_col_width_mm(self.project)
+        return data
+
     def _size_groups_payload(self) -> list:
         """Build the list-of-dicts passed to the inspector for combo population."""
         from src.app.i18n import tr  # local import to avoid circular
-        return [
-            {
+        from src.model.layout_engine import LayoutEngine
+        from src.utils.auto_value import effective_cell_size
+        layout = getattr(self.scene, '_last_layout_result', None)
+        effective = (LayoutEngine._resolve_group_overrides(self.project, layout.cell_rects)
+                     if layout is not None else {})
+        payload = []
+        for g in getattr(self.project, 'size_groups', []):
+            members = self.project.size_group_members(g.id)
+            eff_w, eff_h = effective.get(members[0].id, (0.0, 0.0)) if members else (0.0, 0.0)
+            if members and (not eff_w or not eff_h):
+                fallback_w, fallback_h = effective_cell_size(layout, members[0].id)
+                eff_w = eff_w or fallback_w
+                eff_h = eff_h or fallback_h
+            payload.append({
                 "id": g.id,
                 "name": g.name,
                 "pinned_width_mm": g.pinned_width_mm,
                 "pinned_height_mm": g.pinned_height_mm,
-                "member_count": len(self.project.size_group_members(g.id)),
-            }
-            for g in getattr(self.project, 'size_groups', [])
-        ]
+                "member_count": len(members),
+                "effective_width_mm": eff_w,
+                "effective_height_mm": eff_h,
+            })
+        return payload
 
     def _selected_leaf_cells(self) -> list:
         """Return currently-selected leaf Cell objects (de-duplicated)."""

@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QGraphicsScene, QGraphicsSceneDragDropEvent, QGraphi
 from PyQt6.QtGui import QColor, QFont, QPen, QBrush, QPainter, QPainterPath
 from PyQt6.QtCore import Qt, QEasingCurve, QPointF, pyqtSignal, QRectF, QVariantAnimation
 
+from src.canvas import canvas_accent
 from src.model.data_model import Project, Cell, mark_for_tool
 from src.canvas.cell_item import CellItem
 from src.canvas.mark_item import MarkItem
@@ -16,6 +17,7 @@ from src.canvas.text_graphics_item import TextGraphicsItem
 from src.model.layout_engine import LayoutEngine
 from src.canvas.drag_manager import DragManager
 from src.canvas.add_button_item import AddButtonItem
+from src.canvas import add_button_layout
 from src.canvas.divider_item import DividerItem, HIT_THICKNESS
 from src.canvas.export_region_item import ExportRegionItem
 from src.app.motion import start_animation
@@ -84,6 +86,7 @@ class CanvasScene(QGraphicsScene):
         self._draw_lock_state = {}     # item -> pre-lock interaction state
         self._view_scale = 1.0         # px-per-mm, fed by CanvasView transform
         self._add_buttons = [] # list of AddButtonItem
+        self._add_button_layout = None
         self._cell_data_cache = {}  # cell_id -> fingerprint tuple for change detection
 
         # Drag manager (animated cell swap)
@@ -151,6 +154,7 @@ class CanvasScene(QGraphicsScene):
 
     def apply_theme(self, tokens: dict) -> None:
         """Update all canvas visuals from design tokens. Call on theme switch."""
+        canvas_accent.set_accent(tokens["accent"])
         self._canvas_bg = tokens["canvas_bg"]
         self._grid_line = tokens["grid_line"]
         self.page_item.setBrush(QBrush(Qt.GlobalColor.white))
@@ -159,6 +163,7 @@ class CanvasScene(QGraphicsScene):
         )
         for item in list(self.cell_items.values()) + list(self.label_cell_items.values()):
             item.apply_theme_tokens(tokens)
+        self.update()
         self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.BackgroundLayer)
 
     # ------------------------------------------------------------------
@@ -681,6 +686,7 @@ class CanvasScene(QGraphicsScene):
         if abs(m11 - self._view_scale) < 1e-9:
             return
         self._view_scale = m11
+        self._relayout_add_buttons()
         for item in self.mark_items.values():
             item.prepareGeometryChange()
             item.update()
@@ -919,86 +925,51 @@ class CanvasScene(QGraphicsScene):
                 self._drag_target_cell = None
             super().dropEvent(event)
 
+    def _compute_add_button_specs(self, layout_result):
+        project = self.project
+        col_counts = {row.index: row.column_count for row in project.rows}
+        group_label_rects = getattr(layout_result, 'group_label_rects', {}).values()
+        content_width = project.page_width_mm - project.margin_left_mm - project.margin_right_mm
+        return add_button_layout.add_button_specs(
+            layout_result.row_rects, col_counts, group_label_rects,
+            project.margin_left_mm, content_width,
+            self.px_to_mm(add_button_layout.THICKNESS_PX),
+            self.px_to_mm(add_button_layout.GAP_PX))
+
     def _refresh_add_buttons(self, layout_result):
         """Create / reposition the '+' buttons around the layout."""
-        # Remove old buttons
         for btn in self._add_buttons:
             self.removeItem(btn)
         self._add_buttons.clear()
+        self._add_button_layout = layout_result
 
         if not self.project or not layout_result.row_rects:
             return
 
-        T = AddButtonItem.THICKNESS
-        GAP = 1.5  # spacing between layout edge and button (mm)
-
-        sorted_rows = sorted(layout_result.row_rects.items(), key=lambda kv: kv[0])
-        content_width = self.project.page_width_mm - self.project.margin_left_mm - self.project.margin_right_mm
-        margin_left = self.project.margin_left_mm
-
-        # Row buttons: wide horizontal bars spanning content width
-        row_btn_w = content_width
-        row_btn_h = T
-
-        # --- Add Row Above (above first row) ---
-        if sorted_rows:
-            first_y = sorted_rows[0][1][1]
-            btn = AddButtonItem("row_above", width=row_btn_w, height=row_btn_h,
-                                row_index=sorted_rows[0][0])
-            btn.setPos(margin_left, first_y - row_btn_h - GAP)
+        for spec in self._compute_add_button_specs(layout_result):
+            btn = AddButtonItem(spec.action, width=spec.w, height=spec.h,
+                                row_index=spec.row_index, col_index=spec.col_index)
+            btn.setPos(spec.x, spec.y)
             self.addItem(btn)
             self._add_buttons.append(btn)
-
-        # --- Add Row Below (below last row) ---
-        if sorted_rows:
-            last_idx, (_, last_y, _, last_h) = sorted_rows[-1]
-            btn = AddButtonItem("row_below", width=row_btn_w, height=row_btn_h,
-                                row_index=last_idx)
-            btn.setPos(margin_left, last_y + last_h + GAP)
-            self.addItem(btn)
-            self._add_buttons.append(btn)
-
-        # Side (left/right) shared-label bands reserve their own gutter next
-        # to a row; buttons must clear those bands too, not just the row rect.
-        group_label_rects = list(getattr(layout_result, 'group_label_rects', {}).values())
-
-        def _side_band_extent(rx, ry, rw, rh):
-            left_x, right_x = rx, rx + rw
-            for bx, by, bw, bh in group_label_rects:
-                if by + bh <= ry or by >= ry + rh:
-                    continue  # no vertical overlap with this row
-                if bx + bw <= rx + 0.01:
-                    left_x = min(left_x, bx)
-                elif bx >= rx + rw - 0.01:
-                    right_x = max(right_x, bx + bw)
-            return left_x, right_x
-
-        # --- Per-row: Add Cell Left / Right (tall vertical bars spanning row height) ---
-        for row_idx, (rx, ry, rw, rh) in sorted_rows:
-            row_temp = next((r for r in self.project.rows if r.index == row_idx), None)
-            col_count = row_temp.column_count if row_temp else 1
-
-            cell_btn_w = T
-            cell_btn_h = rh
-            left_x, right_x = _side_band_extent(rx, ry, rw, rh)
-
-            # Left button
-            btn_l = AddButtonItem("cell_left", width=cell_btn_w, height=cell_btn_h,
-                                  row_index=row_idx, col_index=0)
-            btn_l.setPos(left_x - cell_btn_w - GAP, ry)
-            self.addItem(btn_l)
-            self._add_buttons.append(btn_l)
-
-            # Right button
-            btn_r = AddButtonItem("cell_right", width=cell_btn_w, height=cell_btn_h,
-                                  row_index=row_idx, col_index=col_count)
-            btn_r.setPos(right_x + GAP, ry)
-            self.addItem(btn_r)
-            self._add_buttons.append(btn_r)
 
         if self.preview_mode:
             for btn in self._add_buttons:
                 btn.setVisible(False)
+
+    def _relayout_add_buttons(self):
+        """Resize the '+' buttons in place for the current zoom."""
+        if self._add_button_layout is None or not self.project:
+            return
+        specs = self._compute_add_button_specs(self._add_button_layout)
+        if [b.action for b in self._add_buttons] == [s.action for s in specs]:
+            for btn, spec in zip(self._add_buttons, specs):
+                btn.setRect(0, 0, spec.w, spec.h)
+                btn.setPos(spec.x, spec.y)
+                btn.row_index = spec.row_index
+                btn.col_index = spec.col_index
+        else:
+            self._refresh_add_buttons(self._add_button_layout)
 
     def _clear_dividers(self):
         for d in self._divider_items:
@@ -1268,8 +1239,8 @@ class CanvasScene(QGraphicsScene):
             self._parent_hint = None
             return
         if hint is None or hint.scene() is not self:
-            pen = QPen(QColor("#007ACC"), 0.9, Qt.PenStyle.DashLine)
-            hint = self.addRect(rect, pen, QColor(0, 122, 204, 14))
+            pen = QPen(canvas_accent.accent(), 0.9, Qt.PenStyle.DashLine)
+            hint = self.addRect(rect, pen, canvas_accent.accent(14))
             hint.setZValue(550)
             hint.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             self._parent_hint = hint
@@ -1402,14 +1373,13 @@ class CanvasScene(QGraphicsScene):
         if rect is None:
             return
 
-        accent = QColor("#4A90D9")
+        accent = canvas_accent.accent()
         pen = QPen(accent, 0.4, Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         # Ghost outline of the source band so the origin stays visible.
         source = self.addRect(item.sceneBoundingRect(), pen)
         target = self.addRect(
-            QRectF(*rect), pen, QBrush(QColor(accent.red(), accent.green(),
-                                              accent.blue(), 30)))
+            QRectF(*rect), pen, QBrush(canvas_accent.accent(30)))
         # Same-side restack slot: dragging the band away from the artwork
         # past its resting slot raises its level, dragging inward lowers it.
         level_hint = None
@@ -1417,8 +1387,7 @@ class CanvasScene(QGraphicsScene):
             self.project, model, model.side, layout)
         if base is not None:
             level_hint = self.addRect(
-                QRectF(*base), pen, QBrush(QColor(accent.red(), accent.green(),
-                                                  accent.blue(), 60)))
+                QRectF(*base), pen, QBrush(canvas_accent.accent(60)))
             level_hint.setVisible(False)
         for hint in (source, target, level_hint):
             if hint is None:
@@ -1468,10 +1437,8 @@ class CanvasScene(QGraphicsScene):
         inside = hints['target'].rect().contains(scene_pos)
         if inside != hints['inside']:
             hints['inside'] = inside
-            accent = QColor("#4A90D9")
             alpha = 90 if inside else 30
-            hints['target'].setBrush(QBrush(QColor(accent.red(), accent.green(),
-                                                   accent.blue(), alpha)))
+            hints['target'].setBrush(QBrush(canvas_accent.accent(alpha)))
         level = None
         if hints['level_hint'] is not None and not inside:
             candidate = self._level_slot_at(hints, scene_pos)
@@ -1600,15 +1567,14 @@ class CanvasScene(QGraphicsScene):
         press = getattr(label_cell, '_label_drag_start', None)
         grab_offset = origin - press if press is not None else QPointF()
 
-        accent = QColor("#4A90D9")
+        accent = canvas_accent.accent()
         pen = QPen(accent, 0.4, Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         source = self.addRect(strip_rect, pen)
         targets = []
         for placement, (_spec_project, rect) in specs.items():
             item = self.addRect(QRectF(*rect), pen,
-                                QBrush(QColor(accent.red(), accent.green(),
-                                              accent.blue(), 30)))
+                                QBrush(canvas_accent.accent(30)))
             targets.append([item, placement, False])
         for hint in [source] + [t[0] for t in targets]:
             hint.setZValue(60)
@@ -1635,14 +1601,12 @@ class CanvasScene(QGraphicsScene):
         if not drag or drag["ghost"].scene() is not self:
             return
         drag["ghost"].setPos(scene_pos + drag["grab_offset"])
-        accent = QColor("#4A90D9")
         for target in drag["targets"]:
             inside = target[0].rect().contains(scene_pos)
             if inside != target[2]:
                 target[2] = inside
                 alpha = 90 if inside else 30
-                target[0].setBrush(QBrush(QColor(accent.red(), accent.green(),
-                                                 accent.blue(), alpha)))
+                target[0].setBrush(QBrush(canvas_accent.accent(alpha)))
                 # Live reflow preview: hovering a target shows the layout
                 # the drop would produce; hovering nothing returns to the
                 # drag's default (flip) preview, keeping targets aligned.

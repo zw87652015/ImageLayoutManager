@@ -41,6 +41,7 @@ from PyQt6.QtWidgets import (
 
 from src.app.i18n import tr
 from src.app.motion import MotionTween, install_button_feedback, set_motion_mode
+from src.canvas import display_scale
 from src.app.theme import LIGHT, DARK
 
 
@@ -188,6 +189,19 @@ class PreferencesDialog(QDialog):
         motion_hint.setForegroundRole(QPalette.ColorRole.PlaceholderText)
         form.addRow("", motion_hint)
 
+        # Actual-size calibration (saved by the calibration dialog itself)
+        calib_row = QWidget()
+        calib_layout = QHBoxLayout(calib_row)
+        calib_layout.setContentsMargins(0, 0, 0, 0)
+        self._calib_factor_label = QLabel()
+        calib_layout.addWidget(self._calib_factor_label)
+        calib_btn = QPushButton(tr("prefs_calibrate_button"))
+        calib_btn.clicked.connect(self._on_calibrate_display)
+        calib_layout.addWidget(calib_btn)
+        calib_layout.addStretch(1)
+        self._refresh_calib_label()
+        form.addRow(tr("prefs_display_calibration"), calib_row)
+
         # Undo limit
         self._undo_spin = QSpinBox()
         self._undo_spin.setRange(50, 2000)
@@ -213,6 +227,19 @@ class PreferencesDialog(QDialog):
         form.addRow("", self._mcp_autostart_chk)
 
         return w
+
+    def _calib_screen(self):
+        return self._mw.screen() if self._mw is not None else None
+
+    def _refresh_calib_label(self):
+        screen = self._calib_screen()
+        factor = display_scale.screen_calibration(screen) if screen is not None else 1.0
+        self._calib_factor_label.setText(tr("calib_factor").format(pct=factor * 100))
+
+    def _on_calibrate_display(self):
+        if self._mw is not None:
+            self._mw._on_calibrate_display()
+        self._refresh_calib_label()
 
     def _build_files(self) -> QWidget:
         w = QWidget()

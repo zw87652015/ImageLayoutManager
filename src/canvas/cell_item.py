@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphi
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QFontMetrics, QCursor
 from PyQt6.QtCore import Qt, QRectF, QRect, QPointF, pyqtSignal, QVariantAnimation, QEasingCurve, QTimer
 
+from src.canvas import canvas_accent
 from src.app.motion import start_animation
 from src.model.enums import FitMode
 from src.utils.image_proxy import get_image_proxy
@@ -36,7 +37,6 @@ class ResizeHandleItem(QGraphicsRectItem):
 
         s = self.HANDLE_SIZE
         self.setRect(-s / 2, -s / 2, s, s)
-        self.setBrush(QBrush(QColor("#007ACC")))
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setZValue(1000)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
@@ -44,6 +44,11 @@ class ResizeHandleItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         idx = self.ANCHORS.index((anchor_col, anchor_row))
         self.setCursor(self.CURSORS[idx])
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(canvas_accent.accent()))
+        painter.drawRect(self.rect())
 
     def update_position(self):
         r = self.cell_item.rect()
@@ -1747,7 +1752,7 @@ class CellItem(QGraphicsRectItem):
         """Screen-only guides at the segment dividers of a selected split strip."""
         if not self.isSelected() or getattr(self.scene(), 'preview_mode', False):
             return
-        pen = QPen(QColor("#4A90D9"))
+        pen = QPen(canvas_accent.accent())
         pen.setStyle(Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         painter.save()
