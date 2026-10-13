@@ -463,6 +463,26 @@ _QSS_TEMPLATE = """
 
     /* Startup welcome page — compact "high-DPI" density; element sizes
        follow importance: modest title, small actions, tiny hints. */
+    QDialog#mcpGuide { background: %(panel)s; }
+    QDialog#mcpGuide QLabel { background: transparent; }
+    QLabel#mcpTitle { font-size: 15px; font-weight: 600; color: %(text)s; }
+    QLabel#mcpSubtitle, QLabel#mcpStepBody, QLabel#mcpSafety { font-size: %(font_md)s; color: %(text_sec)s; }
+    QFrame#mcpStepCard { background: %(surface)s; border: 1px solid %(border)s; border-radius: %(radius_panel)s; }
+    QDialog#mcpGuide QLabel#mcpStepBadge { background: %(accent)s; color: %(on_accent)s; border-radius: 11px; font-weight: 600; }
+    QLabel#mcpStepTitle { font-size: %(font_base)s; font-weight: 600; color: %(text)s; }
+    QLabel#mcpStatusPill { border-radius: 10px; padding: 2px 10px; font-size: %(font_sm)s; border: 1px solid %(border)s; color: %(text_tert)s; }
+    QLabel#mcpStatusPill[on="true"] { border-color: %(success)s; color: %(success)s; }
+    QLabel#mcpHost { font-size: %(font_sm)s; color: %(text_tert)s; padding-right: 10px; }
+    QLabel#mcpHost[found="true"] { color: %(text)s; }
+    QLabel#mcpFeedback { font-size: %(font_sm)s; color: %(success)s; }
+    QPushButton#mcpPrompt { text-align: left; padding: 6px 10px; background: %(surface_subtle)s; border: 1px solid %(border)s; border-radius: 12px; color: %(text)s; font-weight: 400; }
+    QPushButton#mcpPrompt:hover { border-color: %(accent)s; }
+    QToolButton#mcpDetailsToggle { border: none; background: transparent; color: %(text_sec)s; font-weight: 500; padding: 4px 0; }
+    QToolButton#mcpDetailsToggle:hover { color: %(text)s; }
+    QPlainTextEdit#mcpCode { background: %(surface_subtle)s; border: 1px solid %(border)s; border-radius: %(radius_input)s; color: %(text)s; }
+    QLabel#mcpLocHost { font-weight: 600; color: %(text)s; }
+    QLabel#mcpLocPath { color: %(text_sec)s; }
+    QDialog#mcpGuide QLabel#mcpChip { background: %(surface_subtle)s; border: 1px solid %(border)s; border-radius: 10px; padding: 2px 8px; font-size: %(font_sm)s; color: %(text)s; }
     QWidget#welcomePage { background: %(panel)s; }
     QLabel#welcomeTitle { font-size: 13pt; font-weight: 500; color: %(text)s; }
     QLabel#welcomeDropHint { font-size: 10px; color: %(text_tert)s; }

@@ -4757,7 +4757,7 @@ class MainWindow(QMainWindow):
 
         has_image = cell.image_path and not cell.is_placeholder
 
-        # --- Import / Delete Image ---
+        # --- Content ---
         import_action = menu.addAction(tr("ctx_import_image"))
         import_action.triggered.connect(lambda: self._ctx_import_image(cell_id))
 
@@ -4774,28 +4774,80 @@ class MainWindow(QMainWindow):
         paste_text_action.triggered.connect(
             lambda: self._ctx_paste_text(cell_id, screen_pos))
 
-        if has_image:
-            self._append_reveal_image_source_action(menu, cell.image_path)
-            delete_img_action = menu.addAction(tr("action_delete_img"))
-            delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
-            if cell.is_leaf:
-                selected = [c.id for c in self._selected_leaf_cells() if c.image_path and not c.is_placeholder]
-                scope = tuple(selected if cell_id in selected else [cell_id])
-                align_action = menu.addAction(tr("action_align_plots"))
-                align_action.setToolTip(tr("tooltip_align_plots"))
-                align_action.triggered.connect(lambda checked=False, ids=scope: self._on_align_plot_areas(list(ids)))
+        from src.utils.editable_plot import is_editable_plot
+        if cell.is_leaf and has_image and is_editable_plot(cell.image_path):
+            plot_action = menu.addAction(tr("ctx_edit_plot"))
+            plot_action.triggered.connect(lambda: self._on_edit_plot(cell_id))
+        elif cell.is_leaf and not has_image:
+            plot_action = menu.addAction(tr("ctx_new_plot"))
+            plot_action.triggered.connect(lambda: self._on_new_plot(cell_id))
+        else:
+            plot_action = menu.addAction(tr("ctx_edit_plot"))
+            plot_action.setEnabled(False)
+        menu.addSeparator()
 
-        if cell.is_leaf:
-            from src.utils.editable_plot import is_editable_plot
-            if has_image and is_editable_plot(cell.image_path):
-                edit_plot_action = menu.addAction(tr("ctx_edit_plot"))
-                edit_plot_action.triggered.connect(
-                    lambda: self._on_edit_plot(cell_id))
-            elif not has_image:
-                new_plot_action = menu.addAction(tr("ctx_new_plot"))
-                new_plot_action.triggered.connect(
-                    lambda: self._on_new_plot(cell_id))
+        # --- Image ---
+        crop_action = menu.addAction(tr("ctx_crop_image"))
+        crop_action.setEnabled(bool(has_image))
+        crop_action.triggered.connect(lambda: self._ctx_crop_image(cell_id))
+        trim_action = menu.addAction(tr("ctx_auto_trim"))
+        trim_action.setEnabled(bool(has_image) and os.path.isfile(cell.image_path))
+        trim_action.triggered.connect(lambda: self._ctx_auto_trim(cell_id))
 
+        image_menu = menu.addMenu(tr("ctx_image_menu"))
+        image_menu.setEnabled(bool(has_image))
+        fit_menu = image_menu.addMenu(tr("ctx_fit_mode"))
+        for mode, key in [("contain", "ctx_fit_contain"), ("cover", "ctx_fit_cover")]:
+            action = fit_menu.addAction(tr(key))
+            action.setCheckable(True)
+            action.setChecked(cell.fit_mode == mode)
+            action.triggered.connect(
+                lambda checked=False, m=mode: self._ctx_set_cell_prop(cell_id, {"fit_mode": m})
+            )
+
+        rot_menu = image_menu.addMenu(tr("ctx_rotation"))
+        for deg in [0, 90, 180, 270]:
+            action = rot_menu.addAction(f"{deg}°")
+            action.setCheckable(True)
+            action.setChecked(cell.rotation == deg)
+            action.triggered.connect(
+                lambda checked=False, d=deg: self._ctx_set_cell_prop(cell_id, {"rotation": d})
+            )
+
+        crop_ratio_menu = image_menu.addMenu(tr("ctx_crop_aspect_menu"))
+        _PRESETS = [
+            (tr("ctx_crop_preset_free"),          0, 0),
+            (tr("ctx_crop_preset_square"),         1, 1),
+            ("4:3",                                4, 3),
+            ("3:2",                                3, 2),
+            ("16:9",                              16, 9),
+            ("2:1",                                2, 1),
+            (tr("ctx_crop_preset_portrait_3_4"),   3, 4),
+            (tr("ctx_crop_preset_portrait_2_3"),   2, 3),
+            (tr("ctx_crop_preset_portrait_9_16"),  9, 16),
+        ]
+        for label, aw, ah in _PRESETS:
+            act = crop_ratio_menu.addAction(label)
+            act.triggered.connect(
+                lambda checked=False, _aw=aw, _ah=ah: self._ctx_crop_to_aspect(cell_id, _aw, _ah)
+            )
+
+        is_cropped = (cell.crop_left != 0.0 or cell.crop_top != 0.0
+                      or cell.crop_right != 1.0 or cell.crop_bottom != 1.0)
+        reset_crop_act = image_menu.addAction(tr("ctx_crop_reset"))
+        reset_crop_act.setEnabled(bool(has_image) and is_cropped)
+        reset_crop_act.triggered.connect(
+            lambda: self._ctx_set_cell_prop(
+                cell_id, {"crop_left": 0.0, "crop_top": 0.0, "crop_right": 1.0, "crop_bottom": 1.0}
+            )
+        )
+
+        image_menu.addSeparator()
+        self._append_reveal_image_source_action(image_menu, cell.image_path if has_image else None)
+        image_menu.addSeparator()
+        delete_img_action = image_menu.addAction(tr("action_delete_img"))
+        delete_img_action.setEnabled(bool(has_image))
+        delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
         menu.addSeparator()
 
         # --- Label submenu ---
@@ -4862,6 +4914,7 @@ class MainWindow(QMainWindow):
         label_menu.addSeparator()
 
         # Corner labels
+        corner_menu = label_menu.addMenu(tr("ctx_corner_labels_menu"))
         corner_anchors = [
             ("top_left_inside",     "ctx_corner_top_left"),
             ("top_right_inside",    "ctx_corner_top_right"),
@@ -4876,119 +4929,68 @@ class MainWindow(QMainWindow):
                 None
             )
             if existing:
-                action = label_menu.addAction(
+                action = corner_menu.addAction(
                     tr("ctx_delete_corner_label").format(name=tr(name_key)))
                 action.triggered.connect(
                     lambda checked=False, a=anchor: self._ctx_delete_corner_label(cell_id, a)
                 )
             else:
-                action = label_menu.addAction(
+                action = corner_menu.addAction(
                     tr("ctx_add_corner_label").format(name=tr(name_key)))
                 action.triggered.connect(
                     lambda checked=False, a=anchor: self._ctx_add_corner_label(cell_id, a)
                 )
 
-        # --- Image operations (only if has image) ---
-        if has_image:
-            menu.addSeparator()
-
-            # Fit Mode submenu
-            fit_menu = menu.addMenu(tr("ctx_fit_mode"))
-            for mode, key in [("contain", "ctx_fit_contain"), ("cover", "ctx_fit_cover")]:
-                action = fit_menu.addAction(tr(key))
-                action.setCheckable(True)
-                action.setChecked(cell.fit_mode == mode)
-                action.triggered.connect(
-                    lambda checked=False, m=mode: self._ctx_set_cell_prop(cell_id, {"fit_mode": m})
-                )
-
-            # Rotation submenu
-            rot_menu = menu.addMenu(tr("ctx_rotation"))
-            for deg in [0, 90, 180, 270]:
-                action = rot_menu.addAction(f"{deg}°")
-                action.setCheckable(True)
-                action.setChecked(cell.rotation == deg)
-                action.triggered.connect(
-                    lambda checked=False, d=deg: self._ctx_set_cell_prop(cell_id, {"rotation": d})
-                )
-
-            # Scale Bar toggle
-            menu.addSeparator()
-            sb_action = menu.addAction(tr("ctx_enable_scale_bar") if not cell.scale_bar_enabled else tr("ctx_disable_scale_bar"))
-            sb_action.triggered.connect(
-                lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
-            )
-
-            # Reflow ON — native editable plots that actually load.
-            # Checkable so the menu mirrors the Inspector ReflowCard.
-            from src.utils.editable_plot import plot_is_loadable
-            if plot_is_loadable(cell.image_path):
-                menu.addSeparator()
-                reflow_action = menu.addAction(tr("ctx_reflow_on"))
-                reflow_action.setCheckable(True)
-                reflow_action.setChecked(bool(getattr(cell, 'plot_reflow', False)))
-                reflow_action.triggered.connect(
-                    lambda: self._ctx_set_cell_prop(
-                        cell_id, {"plot_reflow": not cell.plot_reflow})
-                )
-
-            # SVG Text Groups (only for SVG images)
-            if cell.image_path and cell.image_path.lower().endswith('.svg'):
-                menu.addSeparator()
-                svg_txt_action = menu.addAction(tr("ctx_svg_text_inspector"))
-                _svg_path = cell.image_path
-                _svg_cell = cell
-                svg_txt_action.triggered.connect(
-                    lambda checked=False, p=_svg_path, c=_svg_cell: self._on_open_svg_text_inspector(p, c)
-                )
-
-            # Raster text size matching (pixel images; needs a configured OCR backend)
-            from src.utils.raster_text_utils import is_raster_path
-            if is_raster_path(cell.image_path):
-                from src.utils.raster_text_ocr import configured_backend
-                menu.addSeparator()
-                ocr_ready = configured_backend() is not None or bool(cell.raster_text_regions)
-                raster_action = menu.addAction(
-                    tr("ctx_raster_text_inspector") if ocr_ready else tr("ctx_raster_text_disabled"))
-                raster_action.setEnabled(ocr_ready)
-                raster_action.triggered.connect(
-                    lambda checked=False, p=cell.image_path, c=cell: self._on_open_raster_text_inspector(p, c)
-                )
-
-            # --- Crop ---
-            menu.addSeparator()
-            crop_action = menu.addAction(tr("ctx_crop_image"))
-            crop_action.triggered.connect(lambda: self._ctx_crop_image(cell_id))
-
-            crop_ratio_menu = menu.addMenu(tr("ctx_crop_aspect_menu"))
-            _PRESETS = [
-                (tr("ctx_crop_preset_free"),          0, 0),
-                (tr("ctx_crop_preset_square"),         1, 1),
-                ("4:3",                                4, 3),
-                ("3:2",                                3, 2),
-                ("16:9",                              16, 9),
-                ("2:1",                                2, 1),
-                (tr("ctx_crop_preset_portrait_3_4"),   3, 4),
-                (tr("ctx_crop_preset_portrait_2_3"),   2, 3),
-                (tr("ctx_crop_preset_portrait_9_16"),  9, 16),
-            ]
-            for label, aw, ah in _PRESETS:
-                act = crop_ratio_menu.addAction(label)
-                act.triggered.connect(
-                    lambda checked=False, _aw=aw, _ah=ah: self._ctx_crop_to_aspect(cell_id, _aw, _ah)
-                )
-
-            if cell.crop_left != 0.0 or cell.crop_top != 0.0 or cell.crop_right != 1.0 or cell.crop_bottom != 1.0:
-                reset_crop_act = menu.addAction(tr("ctx_crop_reset"))
-                reset_crop_act.triggered.connect(
-                    lambda: self._ctx_set_cell_prop(
-                        cell_id, {"crop_left": 0.0, "crop_top": 0.0, "crop_right": 1.0, "crop_bottom": 1.0}
-                    )
-                )
-
-        # --- Size Group ---
         menu.addSeparator()
-        self._append_size_group_menu(menu, cell)
+
+        sb_action = menu.addAction(tr("ctx_scale_bar"))
+        sb_action.setCheckable(True)
+        sb_action.setChecked(bool(cell.scale_bar_enabled))
+        sb_action.setEnabled(bool(has_image))
+        sb_action.triggered.connect(
+            lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
+        )
+
+        text_menu = menu.addMenu(tr("ctx_text_plot_menu"))
+        text_menu.setEnabled(bool(has_image))
+        from src.utils.raster_text_utils import is_raster_path
+        if bool(has_image) and cell.image_path.lower().endswith('.svg'):
+            text_action = text_menu.addAction(tr("ctx_svg_text_inspector"))
+            text_action.triggered.connect(
+                lambda checked=False, p=cell.image_path, c=cell: self._on_open_svg_text_inspector(p, c)
+            )
+        elif bool(has_image) and is_raster_path(cell.image_path):
+            from src.utils.raster_text_ocr import configured_backend
+            ocr_ready = configured_backend() is not None or bool(cell.raster_text_regions)
+            text_action = text_menu.addAction(
+                tr("ctx_raster_text_inspector") if ocr_ready else tr("ctx_raster_text_disabled"))
+            text_action.setEnabled(ocr_ready)
+            text_action.triggered.connect(
+                lambda checked=False, p=cell.image_path, c=cell: self._on_open_raster_text_inspector(p, c)
+            )
+        else:
+            text_menu.addAction(tr("ctx_svg_text_inspector")).setEnabled(False)
+
+        text_menu.addSeparator()
+        from src.utils.editable_plot import plot_is_loadable
+        reflow_action = text_menu.addAction(tr("ctx_reflow_on"))
+        reflow_action.setCheckable(True)
+        reflow_action.setChecked(bool(getattr(cell, 'plot_reflow', False)))
+        reflow_action.setEnabled(bool(has_image) and plot_is_loadable(cell.image_path))
+        reflow_action.triggered.connect(
+            lambda: self._ctx_set_cell_prop(cell_id, {"plot_reflow": not cell.plot_reflow})
+        )
+
+        menu.addSeparator()
+        selection_menu = menu.addMenu(tr("ctx_selection_menu"))
+        selected = [c.id for c in self._selected_leaf_cells() if c.image_path and not c.is_placeholder]
+        scope = tuple(selected if cell_id in selected else [cell_id])
+        align_action = selection_menu.addAction(tr("action_align_plots"))
+        align_action.setToolTip(tr("tooltip_align_plots"))
+        align_action.setEnabled(bool(has_image) and cell.is_leaf)
+        align_action.triggered.connect(lambda checked=False, ids=scope: self._on_align_plot_areas(list(ids)))
+        selection_menu.addSeparator()
+        self._append_size_group_menu(selection_menu, cell)
 
         # --- Insert Row / Cell ---
         menu.addSeparator()
@@ -5276,6 +5278,27 @@ class MainWindow(QMainWindow):
         cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update,
                                     f"Crop {aspect_w}:{aspect_h}")
         self.undo_stack.push(cmd)
+
+    def _ctx_auto_trim(self, cell_id: str):
+        """Crop the cell to its content box (inside the current crop), undoably."""
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        from src.utils.auto_trim import content_box, load_trim_image
+        crop = (cell.crop_left, cell.crop_top, cell.crop_right, cell.crop_bottom)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            img = load_trim_image(cell.image_path)
+            box = content_box(img, crop) if img is not None else None
+        finally:
+            QApplication.restoreOverrideCursor()
+        if box is None:
+            self.statusbar.showMessage(tr("status_auto_trim_none"), 4000)
+            return
+        changes = dict(zip(("crop_left", "crop_top", "crop_right", "crop_bottom"), box))
+        cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Auto-Trim Margins")
+        self.undo_stack.push(cmd)
+        self.statusbar.showMessage(tr("status_auto_trim_done"), 4000)
 
     def _on_cell_crop_committed(self, cell_id: str, cl: float, ct: float, cr: float, cb: float):
         """Handle crop committed from interactive crop mode — push undo command."""
