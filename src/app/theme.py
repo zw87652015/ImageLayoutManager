@@ -6,6 +6,7 @@ there is exactly one place to change colours, radii or shadows.
 
 Public API (stable — do not change signatures):
     build_palette(theme)            -> QPalette
+    apply_app_palette(app, theme)   -> None (palette + macOS colour scheme)
     get_stylesheet(theme)           -> str  (full QSS)
     get_layers_tree_stylesheet(theme) -> str
     get_tokens(theme)               -> dict (for programmatic use:
@@ -13,6 +14,8 @@ Public API (stable — do not change signatures):
                                              layer thumbnails, etc.)
 """
 import os
+import sys
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette, QColor, QFont, QFontDatabase
 
 # Resolve assets directory: works both in dev and inside a PyInstaller bundle.
@@ -790,6 +793,16 @@ def build_palette(theme: str) -> QPalette:
         # any rgba here would be a bug. All roles currently pull solid hex.
         palette.setColor(role, QColor(color_str))
     return palette
+
+
+def apply_app_palette(app, theme: str) -> None:
+    """Set the app palette for *theme*; on macOS also pin Qt's colour scheme so
+    natively drawn chrome (tab bar base, scroll bars, popups) follows the app
+    theme instead of the system appearance."""
+    if sys.platform == "darwin":
+        app.styleHints().setColorScheme(
+            Qt.ColorScheme.Dark if theme == DARK else Qt.ColorScheme.Light)
+    app.setPalette(build_palette(theme))
 
 
 def _font_tokens(scale: float) -> dict:

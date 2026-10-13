@@ -13,8 +13,8 @@ import os
 from PyQt6.QtCore import QSettings, QStandardPaths
 
 from src.app.icons import make_icon
-from src.app.theme import (DARK, LIGHT, _font_tokens, apply_font_scale,
-                           build_palette, get_tokens)
+from src.app.theme import (DARK, LIGHT, _font_tokens, apply_app_palette,
+                           apply_font_scale, get_tokens)
 
 
 def saved_theme() -> str:
@@ -58,7 +58,7 @@ def saved_font_scale() -> float:
 
 def apply_app_style(app) -> str:
     theme = saved_theme()
-    app.setPalette(build_palette(theme))
+    apply_app_palette(app, theme)
     apply_font_scale(app, saved_font_scale(), theme)
     return theme
 

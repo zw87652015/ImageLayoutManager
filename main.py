@@ -35,6 +35,38 @@ if getattr(sys, "frozen", False) and sys.platform == "win32":
 # Add src to python path to allow imports if running from root
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
+_QT_MESSAGE_HANDLER = None
+
+
+def _install_qt_message_filter():
+    """Silence Qt's macOS accessibility-bridge noise.
+
+    The Cocoa plugin warns whenever an accessibility client queries an
+    element whose widget is already gone; those are plain ``qWarning``s in
+    the default category, so they can only be dropped by a handler.
+    ``QT_LOGGING_RULES`` still overrides the table-category rule.
+    """
+    global _QT_MESSAGE_HANDLER
+    if sys.platform != "darwin":
+        return
+    from PyQt6.QtCore import (QLoggingCategory, qFormatLogMessage,
+                              qInstallMessageHandler)
+    QLoggingCategory.setFilterRules("qt.accessibility.table.warning=false")
+    noisy = ("Called attribute on invalid object",
+             "Called accessibilityLabel on invalid object")
+
+    def handler(mode, context, message):
+        if message.startswith(noisy):
+            return
+        sys.stderr.write(qFormatLogMessage(mode, context, message) + "\n")
+
+    _QT_MESSAGE_HANDLER = handler
+    qInstallMessageHandler(handler)
+
+
+if __name__ == '__main__':
+    _install_qt_message_filter()
+
 # ``--plot-editor`` launches the standalone ILM Plot Editor in this process.
 # Dispatch *before* importing MainWindow so the editor never pulls in the
 # full ILM UI (and so ``ImageLayoutManager.exe --plot-editor [file]`` works).
@@ -46,7 +78,7 @@ if __name__ == '__main__' and '--plot-editor' in sys.argv:
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QSurfaceFormat
-from src.app.theme import build_palette, apply_font_scale, LIGHT
+from src.app.theme import apply_app_palette, apply_font_scale, LIGHT
 from src.utils import crash_recovery
 
 def main():
@@ -83,7 +115,7 @@ def main():
     except (TypeError, ValueError):
         _scale = 1.0
     # Apply initial theme (light) + persisted font scale together.
-    app.setPalette(build_palette(LIGHT))
+    apply_app_palette(app, LIGHT)
     apply_font_scale(app, _scale, LIGHT)
 
     # Explorer double-click launch with a file argument: forward it to the

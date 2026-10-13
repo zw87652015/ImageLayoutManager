@@ -8,7 +8,7 @@
       #1F1E1C ink, #4F5BD5 accent, #FFFFFF panel fill, #E8EAFA accent tint,
       #6B6862 panel letters.
   -->
-  <g stroke-width="6" stroke-linejoin="round" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="30">
+  <g stroke-width="6" stroke-linejoin="round" font-family="Arial" font-size="30">
     <!-- I -->
     <rect x="10" y="10" width="140" height="177" rx="6" fill="#FFFFFF" stroke="#1F1E1C"/>
     <text x="28" y="50" fill="#6B6862">a</text>

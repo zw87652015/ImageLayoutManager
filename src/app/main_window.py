@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QEvent, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray, QEventLoop
 from PyQt6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeySequence, QUndoStack, QPalette
-from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
+from src.app.theme import apply_app_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
 from src.app.draw_palette import DrawPalette
 from src.app.i18n import tr, set_language, current_language
@@ -1776,7 +1776,7 @@ class MainWindow(QMainWindow):
         self._current_theme = theme
         self._settings.setValue("theme", theme)
         app = QApplication.instance()
-        app.setPalette(build_palette(theme))
+        apply_app_palette(app, theme)
         app.setStyleSheet(get_stylesheet(theme, self._current_font_scale()))
         tokens = get_tokens(theme)
         self.layers_panel.apply_theme(tokens)
