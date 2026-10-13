@@ -127,11 +127,6 @@ class _CollapseHandle(QSplitterHandle):
         btn = QToolButton(self)
         btn.setFixedSize(self._BTN_W, self._BTN_H)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setStyleSheet(
-            "QToolButton { border: 1px solid #AAAAAA; background: #E0E0E0;"
-            " border-radius: 3px; font-size: 9px; color: #333333; }"
-            "QToolButton:hover { background: #C8C8C8; }"
-        )
         btn.clicked.connect(self._toggle)
         self._btn = btn
 
@@ -618,7 +613,7 @@ class MainWindow(QMainWindow):
         # Toolbar
         self.toolbar = QToolBar()
         self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.toolbar.setIconSize(QSize(20, 20))
+        self.toolbar.setIconSize(QSize(18, 18))
         self.toolbar.setMovable(False)
         self.addToolBar(self.toolbar)
         self.toolbar.toggleViewAction().setEnabled(False)
@@ -1218,11 +1213,14 @@ class MainWindow(QMainWindow):
         splitter = CollapsibleSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(16)
         self.splitter = splitter
+        splitter.setObjectName("mainSplitter")
         main_layout.addWidget(splitter)
 
         # ── Left Panel: Layers + History tabs ──
         self.left_tabs = QTabWidget()
         self.left_tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self.left_tabs.setObjectName("sideTabs")
+        self.left_tabs.tabBar().setDrawBase(False)
         self.layers_panel = LayersPanel()
         self.history_view = HistoryTimeline()
         self.history_view.setCleanIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
@@ -1235,6 +1233,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.setMovable(True)
         self.tab_widget.setDocumentMode(True)
+        self.tab_widget.setObjectName("docTabs")
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         self.tab_widget.tabCloseRequested.connect(self._on_close_tab_by_index)
         splitter.addWidget(self.tab_widget)
@@ -1275,19 +1274,12 @@ class MainWindow(QMainWindow):
         self.update_available_label.setTextFormat(Qt.TextFormat.RichText)
         self.update_available_label.setOpenExternalLinks(False)
         self.update_available_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.update_available_label.setStyleSheet(
-            "color: #4A90E2; font-size: 12px; padding: 0 8px;"
-        )
         # Draw-mode pill (left-most permanent widget; only visible while the
         # mode is on). Clicking it leaves Draw mode.
         self.draw_mode_label = QLabel("")
         self.draw_mode_label.setTextFormat(Qt.TextFormat.RichText)
         self.draw_mode_label.setOpenExternalLinks(False)
         self.draw_mode_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.draw_mode_label.setStyleSheet(
-            "background-color: #4A90D9; color: #FFFFFF; font-weight: bold;"
-            "border-radius: 7px; padding: 1px 8px; margin: 2px 4px;"
-        )
         self.draw_mode_label.linkActivated.connect(
             lambda _link: self._set_draw_mode(False))
         self.draw_mode_label.hide()
@@ -1774,6 +1766,7 @@ class MainWindow(QMainWindow):
         app.setStyleSheet(get_stylesheet(theme, self._current_font_scale()))
         tokens = get_tokens(theme)
         self.layers_panel.apply_theme(tokens)
+        self._apply_chrome_tokens(tokens)
         if hasattr(self, 'inspector'):
             self.inspector.apply_theme(tokens)
         if hasattr(self, 'history_view'):
@@ -1796,6 +1789,20 @@ class MainWindow(QMainWindow):
 
         if animate and changed:
             self._flash_theme_overlay()
+
+    def _apply_chrome_tokens(self, tokens: dict) -> None:
+        for i in range(1, self.splitter.count()):
+            btn = getattr(self.splitter.handle(i), "_btn", None)
+            if btn is not None:
+                btn.setStyleSheet(
+                    "QToolButton { border: none; background: transparent; "
+                    f"color: {tokens['text_tert']}; border-radius: 5px; font-size: 8px; }} "
+                    f"QToolButton:hover {{ background: {tokens['hover']}; color: {tokens['accent']}; }}")
+        self.draw_mode_label.setStyleSheet(
+            f"background-color: {tokens['accent']}; color: {tokens['on_accent']}; "
+            "font-weight: 600; border-radius: 9px; padding: 1px 10px; margin: 3px 4px;")
+        self.update_available_label.setStyleSheet(
+            f"color: {tokens['accent']}; font-size: 12px; padding: 0 8px;")
 
     def _flash_theme_overlay(self) -> None:
         """Brief fade-out overlay to smooth the instant theme colour swap."""

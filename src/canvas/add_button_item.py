@@ -1,8 +1,14 @@
 from PyQt6.QtWidgets import QGraphicsRectItem, QGraphicsItem
-from PyQt6.QtGui import QColor, QPen, QBrush, QFont, QPainter
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtGui import QColor, QPen, QBrush, QPainter
+from PyQt6.QtCore import Qt, QPointF, QRectF
 
 from src.canvas import canvas_accent
+
+
+def _cosmetic_pen(color, width=1.0, style=Qt.PenStyle.SolidLine) -> QPen:
+    pen = QPen(color, width, style)
+    pen.setCosmetic(True)
+    return pen
 
 
 class AddButtonItem(QGraphicsRectItem):
@@ -34,26 +40,53 @@ class AddButtonItem(QGraphicsRectItem):
 
     def paint(self, painter: QPainter, option, widget=None):
         r = self.rect()
-        bg = canvas_accent.accent(180) if self._hovered else canvas_accent.accent(100)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QBrush(bg))
-        border = QPen(canvas_accent.accent(220), 1.0)
-        border.setCosmetic(True)
-        painter.setPen(border)
-        rad = min(r.width(), r.height()) * 0.25
-        painter.drawRoundedRect(r, rad, rad)
-
-        # Draw "+" centred, arm length based on shorter dimension
-        plus = QPen(Qt.GlobalColor.white, 1.5)
-        plus.setCosmetic(True)
-        plus.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(plus)
         cx, cy = r.center().x(), r.center().y()
-        arm = min(r.width(), r.height()) * 0.28
-        painter.drawLine(QRectF(cx - arm, cy, arm * 2, 0).topLeft(),
-                         QRectF(cx - arm, cy, arm * 2, 0).topRight())
-        painter.drawLine(QRectF(cx, cy - arm, 0, arm * 2).topLeft(),
-                         QRectF(cx, cy - arm, 0, arm * 2).bottomLeft())
+        accent = canvas_accent.accent()
+        hovered = self._hovered
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        min_mm = min(r.width(), r.height())
+        scale = abs(painter.worldTransform().m11()) or 1.0
+        min_px = min_mm * scale
+        half_px = 0.5 / scale
+        track = r.adjusted(half_px, half_px, -half_px, -half_px)
+        rad = min(track.width(), track.height()) / 2
+        fill = QColor(accent)
+        fill.setAlphaF(0.16 if hovered else 0.07)
+        if hovered:
+            pen = _cosmetic_pen(accent, 1.2)
+        else:
+            edge = QColor(accent)
+            edge.setAlphaF(0.55)
+            pen = _cosmetic_pen(edge, 1.0, Qt.PenStyle.CustomDashLine)
+            pen.setDashPattern([4, 3])
+        painter.setPen(pen)
+        painter.setBrush(QBrush(fill))
+        painter.drawRoundedRect(track, rad, rad)
+
+        if min_px >= 10:
+            d = min_mm * 0.82
+            badge = QRectF(cx - d / 2, cy - d / 2, d, d)
+            if hovered:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(accent))
+                glyph = canvas_accent.on_accent()
+            else:
+                ring = QColor(accent)
+                ring.setAlphaF(0.9)
+                painter.setPen(_cosmetic_pen(ring, 1.2))
+                painter.setBrush(QBrush(QColor(255, 255, 255)))
+                glyph = accent
+            painter.drawEllipse(badge)
+            arm = d * 0.24
+        else:
+            glyph = accent
+            arm = min_mm * 0.3
+
+        glyph_pen = _cosmetic_pen(glyph, 1.8)
+        glyph_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(glyph_pen)
+        painter.drawLine(QPointF(cx - arm, cy), QPointF(cx + arm, cy))
+        painter.drawLine(QPointF(cx, cy - arm), QPointF(cx, cy + arm))
 
     def hoverEnterEvent(self, event):
         self._hovered = True

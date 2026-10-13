@@ -438,10 +438,6 @@ class LayersPanel(QWidget):
 
         # Header
         self.header_label = QLabel(tr("layers_header"))
-        self.header_label.setStyleSheet(
-            "font-weight: 500; font-size: 11px; letter-spacing: 1px;"
-            " padding: 0 2px; color: #888888;"
-        )
         layout.addWidget(self.header_label)
 
         # Tree
@@ -473,6 +469,7 @@ class LayersPanel(QWidget):
         # delegate's accent bar is the only selection visual.
         pal = self.tree.palette()
         pal.setColor(QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+        pal.setColor(QPalette.ColorRole.Accent, QColor(0, 0, 0, 0))
         pal.setColor(QPalette.ColorRole.HighlightedText,
                      pal.color(QPalette.ColorRole.Text))
         self.tree.setPalette(pal)
@@ -507,6 +504,9 @@ class LayersPanel(QWidget):
     def apply_theme(self, tokens: dict) -> None:
         """Update all visuals from design tokens. Called by main_window on theme switch."""
         self._delegate.apply_tokens(tokens)
+        self.header_label.setStyleSheet(
+            "font-weight: 600; font-size: 11px; letter-spacing: 0.6px; padding: 0 2px; "
+            f"color: {tokens['label_caps']};")
         theme = "dark" if tokens.get("canvas_bg", "").startswith("#1") else "light"
         self._apply_tree_stylesheet(theme)
         self.tree.accent_color = QColor(tokens.get("accent", "#0891B2"))

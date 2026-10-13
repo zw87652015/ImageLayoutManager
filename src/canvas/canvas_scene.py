@@ -155,6 +155,7 @@ class CanvasScene(QGraphicsScene):
     def apply_theme(self, tokens: dict) -> None:
         """Update all canvas visuals from design tokens. Call on theme switch."""
         canvas_accent.set_accent(tokens["accent"])
+        canvas_accent.set_on_accent(tokens["on_accent"])
         self._canvas_bg = tokens["canvas_bg"]
         self._grid_line = tokens["grid_line"]
         self.page_item.setBrush(QBrush(Qt.GlobalColor.white))
@@ -164,6 +165,8 @@ class CanvasScene(QGraphicsScene):
         for item in list(self.cell_items.values()) + list(self.label_cell_items.values()):
             item.apply_theme_tokens(tokens)
         self.update()
+        if self._parent_hint is not None:
+            self._style_parent_hint(self._parent_hint)
         self.invalidate(self.sceneRect(), QGraphicsScene.SceneLayer.BackgroundLayer)
 
     # ------------------------------------------------------------------
@@ -1239,14 +1242,25 @@ class CanvasScene(QGraphicsScene):
             self._parent_hint = None
             return
         if hint is None or hint.scene() is not self:
-            pen = QPen(canvas_accent.accent(), 0.9, Qt.PenStyle.DashLine)
-            hint = self.addRect(rect, pen, canvas_accent.accent(14))
+            hint = self.addRect(rect)
             hint.setZValue(550)
             hint.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             self._parent_hint = hint
         else:
             hint.setRect(rect)
+        self._style_parent_hint(hint)
         hint.setVisible(not self.preview_mode)
+
+    def _style_parent_hint(self, hint) -> None:
+        line = canvas_accent.accent()
+        line.setAlphaF(0.9)
+        pen = QPen(line, 1.5, Qt.PenStyle.CustomDashLine)
+        pen.setCosmetic(True)
+        pen.setDashPattern([4, 3])
+        fill = canvas_accent.accent()
+        fill.setAlphaF(0.05)
+        hint.setPen(pen)
+        hint.setBrush(QBrush(fill))
 
     # ------------------------------------------------------------------
     # Export region
