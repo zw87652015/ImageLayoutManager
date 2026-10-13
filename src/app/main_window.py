@@ -39,6 +39,9 @@ from src.app.inspector import Inspector
 from src.app.layers_panel import LayersPanel
 from src.app.about_dialog import AboutDialog, StartupUpdateChecker
 from src.app.help_dialog import HelpDialog
+from src.app.tour_overlay import TourOverlay
+from src.app.ui_targets import flash_target
+from src.app.help_content import topic_for_context
 from src.model.enums import PageSizePreset
 from src.export.pdf_exporter import PdfExporter
 from src.export.pdf_images import coerce_image_settings, format_issue
@@ -6403,15 +6406,38 @@ class MainWindow(QMainWindow):
         dlg = AboutDialog(self)
         dlg.exec()
 
+    def _help_context(self):
+        """Context tag for F1: what the Inspector is currently showing."""
+        kind = getattr(self.inspector, "_current_item_type", None)
+        mapping = {
+            None: "none", "draw_empty": "mark", "mark": "mark", "cell": "cell",
+            "multi_cell": "multi_cell", "mixed": "multi_cell", "label_cell": "label",
+            "text": "label", "group_label": "group_label", "pip": "pip",
+        }
+        return mapping.get(kind, "none")
+
     def _on_show_help(self):
-        dlg = HelpDialog(self)
+        dlg = HelpDialog(self, topic=topic_for_context(self._help_context()))
 
         def launch_tutorial(lesson):
             dlg.accept()
             QTimer.singleShot(0, lambda: self._on_show_tutorials(lesson))
 
+        def show_me(spec):
+            dlg.accept()
+            QTimer.singleShot(0, lambda: flash_target(self, spec, tr("help_show_me_hint")))
+
+        def start_tour():
+            dlg.accept()
+            QTimer.singleShot(0, self._start_tour)
+
         dlg.tutorial_requested.connect(launch_tutorial)
+        dlg.show_me_requested.connect(show_me)
+        dlg.tour_requested.connect(start_tour)
         dlg.exec()
+
+    def _start_tour(self):
+        self._tour_overlay = TourOverlay(self)
 
     def _on_show_tutorials(self, lesson=''):
         if self._tutorial_controller is None:

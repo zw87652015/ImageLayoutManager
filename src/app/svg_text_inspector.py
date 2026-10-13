@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel, QSplitter, QWidget, QFrame, QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QByteArray, QRectF, QPointF
-from PyQt6.QtGui import QPalette, QPixmap, QPainter, QImage, QColor, QPen, QBrush, QIcon
+from PyQt6.QtGui import QKeySequence, QPalette, QPixmap, QPainter, QImage, QColor, QPen, QBrush, QIcon, QShortcut
 from PyQt6.QtSvg import QSvgRenderer
 
 from src.utils.svg_text_utils import (format_text_size, get_svg_text_elements,
@@ -24,6 +24,7 @@ from src.utils.svg_text_utils import (format_text_size, get_svg_text_elements,
                                       text_preview_rects)
 from src.utils.editable_plot import plot_reflows
 from ilmplot.document import has_plot_metadata
+from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
 from src.app.text_groups_widget import section_label
 from src.app.text_group_chips import TextGroupChips, group_colour
@@ -198,6 +199,7 @@ class SvgTextInspectorWindow(QDialog):
         self._preview_rects = {}
 
         self.setWindowTitle(tr("svgtxt_inspector_title"))
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=lambda: show_context_help(self, "text_sizes"))
         self.setWindowFlags(
             Qt.WindowType.Window |
             Qt.WindowType.WindowCloseButtonHint |

@@ -19,9 +19,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, pyqtSignal, pyqtSlot, QRectF, QItemSelectionModel, QObject, QRunnable, QThreadPool,
 )
-from PyQt6.QtGui import QPainter, QImage, QPen, QColor, QPalette, QTransform
+from PyQt6.QtGui import QKeySequence, QPainter, QImage, QPen, QColor, QPalette, QShortcut, QTransform
 from PIL import Image
 
+from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
 from src.app.motion import MotionTween, install_button_feedback
 from src.app.text_groups_widget import section_label
@@ -236,6 +237,7 @@ class RasterTextInspectorWindow(QDialog):
         self._detection = None
         self._closed = False
         self.setWindowTitle(tr("rastertxt_inspector_title"))
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=lambda: show_context_help(self, "text_sizes"))
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint |
                             Qt.WindowType.WindowMaximizeButtonHint)
         self.setMinimumSize(820, 560)

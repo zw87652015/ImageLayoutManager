@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from src.app.ui_targets import action_target, menu_holds
 from io import BytesIO
 import os
 from pathlib import Path
@@ -1267,96 +1268,12 @@ class TutorialController(QObject):
 
     @staticmethod
     def _menu_holds(menu, action):
-        for candidate in menu.actions():
-            if candidate is action:
-                return True
-            sub = candidate.menu()
-            if sub is not None and TutorialController._menu_holds(sub, action):
-                return True
-        return False
+        return menu_holds(menu, action)
 
     def _action_target(self, action):
-        """Find the visible control for *action*.
+        """Visible control for *action*; see ui_targets.action_target."""
+        return action_target(self.window, action)
 
-        Not every action has a toolbar button: some live only inside a
-        popup (Export Preview sits in the Export button's menu) or a menu
-        bar. Point at whatever the user must actually click, and follow the
-        action into its popup once that popup is open, so the step never
-        degrades into "use the keyboard shortcut".
-        """
-        if action is None:
-            return None, None, False
-        for menu in self.window.findChildren(QMenu):
-            if menu.isVisible() and action in menu.actions():
-                rect = menu.actionGeometry(action)
-                if not rect.isEmpty():
-                    return menu, rect, True
-        widget = self.window.toolbar.widgetForAction(action)
-        if widget is not None and widget.isVisible():
-            return widget, widget.rect(), True
-        for button in self.window.toolbar.findChildren(QToolButton):
-            menu = button.menu()
-            if button.isVisible() and menu is not None and self._menu_holds(menu, action):
-                return button, button.rect(), True
-        bar = self.window.menuBar()
-        for entry in bar.actions():
-            menu = entry.menu()
-            if menu is not None and self._menu_holds(menu, action):
-                rect = bar.actionGeometry(entry)
-                if not rect.isEmpty():
-                    return bar, rect, True
-        return None, None, False
-
-    #: step.action -> button caption, for actions without a dedicated
-    #: default label ('svg0'/'svg1'/'raster' fall back to "Open inspector").
-    _ACTION_LABELS = {
-        'delete_row': ('Delete second row', '删除第二行'),
-        'add_cell': ('Add a third cell', '添加第三个单元格'),
-        'load': ('Load samples', '载入示例'),
-        'label_size': ('Select a label', '选中标注'),
-        'split_cols': ('Split third panel', '拆分第三个面板'),
-        'select_subcell': ('Select the new sub-cell', '选中新的子单元格'),
-        'nested_rows': ('Divide the right sub-cell', '细分右侧子单元格'),
-        'add_sibling': ('Add a sibling on the right', '在右侧添加同级单元格'),
-        'fill_subcells': ('Fill empty sub-cells', '填充空白子单元格'),
-        'swap': ('Swap panels', '交换面板'),
-        'select_cell': ('Select a panel', '选中面板'),
-        'select_pair': ('Select two panels', '选中两个面板'),
-        'select_row': ('Select the row', '选中整行'),
-        'select_shared_top': ('Select the shared title', '选中共享标题'),
-        'show_project': ('Show project settings', '显示工程设置'),
-        'crop_square': ('Crop to square', '裁剪为正方形'),
-        'add_pip': ('Add inset', '添加插图'),
-        'select_pip': ('Select inset', '选中插图'),
-        'create_size_group': ('Create group', '创建组'),
-        'add_to_size_group': ('Add third panel', '添加第三个面板'),
-        'open_align_plots': ('Open Align Plot Areas', '打开对齐绘图区'),
-        'narrow_cell': ('Make the cell narrower', '缩小单元格'),
-        'widen_cell': ('Make the cell wider', '放大单元格'),
-        'reflow_on': ('Turn REFLOW ON', '开启 REFLOW'),
-    }
-
-    #: target -> Inspector widget attribute name, for steps that highlight a
-    #: single field once its section is on screen (visibility is checked by
-    #: the caller, since some fields only appear for the right selection).
-    _INSPECTOR_TARGETS = {
-        'label_size': 'font_size',
-        'subcell_ratio': 'subcell_ratio',
-        'freeform_x': 'freeform_x',
-        'dpi_spin': 'dpi_spin',
-        'gl_text_edit': 'gl_text_edit',
-        'fit_mode_combo': 'fit_mode_combo',
-        'pip_w': 'pip_w',
-        'scale_bar_enabled': 'scale_bar_enabled',
-        'size_group_pinned_w': 'size_group_pinned_w',
-        'override_w': 'override_w',
-        'aspect_lock': 'aspect_lock_btn',
-        # The REFLOW hero card sits above the cell section — no
-        # collapsible ancestor, so it resolves like a plain field.
-        'reflow_card': 'reflow_card',
-    }
-
-    @staticmethod
     def _rect_in_viewport(rect, viewport):
         """Fully inside on the vertical scroll axis and at least partly
         visible horizontally — the horizontal scrollbar is disabled, so a

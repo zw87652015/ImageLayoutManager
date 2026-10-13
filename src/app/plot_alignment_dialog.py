@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QTabWidget, QToolButton, QVBoxLayout, QWidget,
 )
 
+from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
 from src.app.pictogram_combo import PictogramCombo
 from src.app.plot_alignment_logic import (
@@ -1046,6 +1047,7 @@ class PlotAlignmentDialog(QDialog):
         self.project = project
         self.setObjectName("plotAlignmentDialog")
         self.setWindowTitle(tr("action_align_plots"))
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=lambda: show_context_help(self, "align_plots"))
         self.resize(1100, 720)
         self.setMinimumSize(820, 560)
         self._loading = True
