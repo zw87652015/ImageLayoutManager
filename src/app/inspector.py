@@ -16,10 +16,12 @@ from src.app.wheel_guard import install_wheel_guard
 from src.app.auto_spinbox import AutoDoubleSpinBox
 from src.app.pictogram_combo import PictogramCombo
 from src.app.pictograms import INSPECTOR_PICTOGRAMS as _PG, draw_pictogram
+from src.app.resizable_text_edit import ResizableTextEdit
 from src.app.theme import get_tokens, LIGHT
 from src.utils import mark_geometry
 from src.utils.svg_text_utils import format_text_size
 from src.utils.sub_labels import MAX_SUB_LABELS, set_divider
+from src.utils.text_content import editor_to_stored, stored_to_editor
 
 
 # Sentinel for "mixed values across a multi-selection". Inspector helpers
@@ -656,7 +658,7 @@ class ReflowCard(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         t = self._tokens
-        accent = QColor(t.get("accent", "#0891B2"))
+        accent = QColor(t.get("accent", get_tokens(LIGHT)["accent"]))
         surface = QColor(t.get("surface", "#FFFFFF"))
         border = QColor(t.get("border", "#D8D8D8"))
         text_c = QColor(t.get("text", "#1C1C1E"))
@@ -2180,9 +2182,11 @@ class Inspector(QWidget):
         self.text_group = CollapsibleSection("Selected Text")
         self.text_layout = self.text_group._form
         
-        self.text_content = QLineEdit()
-        self.text_content.editingFinished.connect(
-            lambda: self.text_property_changed.emit({"text": self.text_content.text()})
+        self.text_content = ResizableTextEdit(settings_key="inspector/text_content_height")
+        self.text_content.setObjectName("inspectorTextContent")
+        self.text_content.setToolTip(tr("tip_text_content"))
+        self.text_content.committed.connect(
+            lambda t: self.text_property_changed.emit({"text": editor_to_stored(t)})
         )
         self.text_layout.addRow(self._fl("lbl_content"), self.text_content)
         
@@ -2379,6 +2383,7 @@ class Inspector(QWidget):
         self._refresh_plot_text()
         self.svg_normalize_chk.setText(tr("chk_svg_normalize"))
         self.svg_normalize_chk.setToolTip(tr("tip_svg_normalize"))
+        self.text_content.setToolTip(tr("tip_text_content"))
 
         self.scale_bar_enabled.setText(tr("chk_scale_enabled"))
         self.scale_bar_show_text.setText(tr("chk_scale_text"))
@@ -3701,7 +3706,7 @@ class Inspector(QWidget):
             self.text_group.show()
             
             self.blockSignals(True)
-            self.text_content.setText(data.get("text", ""))
+            self.text_content.set_committed_text(stored_to_editor(data.get("text", "") or ""))
             self.font_family.setCurrentText(data.get("font_family", "Arial"))
             self.font_size.setValue(float(data.get("font_size_pt", 12.0)))
             self.is_bold.setChecked(data.get("font_weight") == "bold")

@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt, QPointF, QRectF
 from PyQt6.QtGui import QPainter, QPen, QFont, QActionGroup
 
 from src.app.i18n import tr
-from src.app.theme import token_color
+from src.app.theme import LIGHT, get_tokens, token_color
 from src.canvas.ruler_math import (
     MM_PER_UNIT, UNITS, choose_steps, ticks, format_label,
 )
@@ -98,8 +98,8 @@ class CanvasRuler(QWidget):
         bg = token_color(tk.get("panel", "#F5F5F5"))
         border = token_color(tk.get("border", "#D8D8D8"))
         fg = token_color(tk.get("text_sec", "#6E6E73"))
-        accent = token_color(tk.get("accent", "#0891B2"))
-        tint = token_color(tk.get("accent_tint", "rgba(8,145,178,0.12)"))
+        accent = token_color(tk.get("accent", get_tokens(LIGHT)["accent"]))
+        tint = token_color(tk.get("accent_tint", get_tokens(LIGHT)["accent_tint"]))
 
         p = QPainter(self)
         p.fillRect(self.rect(), bg)

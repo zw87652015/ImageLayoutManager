@@ -14,6 +14,7 @@ DESIGN_W = 24.0
 DESIGN_H = 18.0
 _PANEL_ALPHA = 25
 
+# Option keys for every pictogram combo (Inspector and Align Plot Areas), in option order.
 INSPECTOR_PICTOGRAMS = {
     "grid_mode": ["grid_stretch", "grid_fixed"],
     "row_alignment": ["row_left", "row_center", "row_right"],
@@ -36,6 +37,8 @@ INSPECTOR_PICTOGRAMS = {
     "pip_border_style": ["border_solid", "border_dashed"],
     "align_anchor": [f"anchor_{v}_{h}" for v in ("top", "center", "bottom")
                      for h in ("left", "center", "right")],
+    "plot_size": ["size_exact", "size_fit"],
+    "plot_baseline": ["baseline_rows", "baseline_single", "baseline_custom"],
 }
 
 
@@ -338,6 +341,65 @@ def _unknown(p, ink, accent):
     p.drawEllipse(QPointF(12, 9), 1.2, 1.2)
 
 
+# ── align plot areas ─────────────────────────────────────────────────────
+
+def _dash_baseline(p, x1, x2, y, accent):
+    _line(p, x1, y, x2, y, accent, 1.4, Qt.PenStyle.DashLine)
+
+
+def _star_points(cx, cy, outer, inner):
+    points = []
+    for i in range(10):
+        radius = outer if i % 2 == 0 else inner
+        angle = -math.pi / 2 + i * math.pi / 5
+        points.append((cx + radius * math.cos(angle), cy + radius * math.sin(angle)))
+    return points
+
+
+def _size_exact(p, ink, accent):
+    _outline(p, 1.5, 4, 9, 10, ink, radius=0.8)
+    _outline(p, 13.5, 4, 9, 10, ink, radius=0.8)
+    _fill_polygon(p, _star_points(6, 9, 2.6, 1.1), accent)
+    _line(p, 12, 4.5, 12, 13.5, accent, 1.3)
+    _line(p, 10.8, 5.7, 12, 4.5, accent, 1.3)
+    _line(p, 13.2, 5.7, 12, 4.5, accent, 1.3)
+    _line(p, 10.8, 12.3, 12, 13.5, accent, 1.3)
+    _line(p, 13.2, 12.3, 12, 13.5, accent, 1.3)
+
+
+def _size_fit(p, ink, accent):
+    _outline(p, 0.5, 1.5, 11, 15, ink, radius=1)
+    _outline(p, 12.5, 1.5, 11, 15, ink, radius=1)
+    _outline(p, 3, 5, 6.5, 8, accent, radius=0.6)
+    _outline(p, 14.5, 5, 6.5, 8, accent, radius=0.6)
+
+
+def _baseline_rows(p, ink, accent):
+    for top in (1.0, 9.0):
+        bottom = top + 5.5
+        _outline(p, 1, top, 8, 5.5, ink, radius=0.6)
+        _outline(p, 15, top, 8, 5.5, ink, radius=0.6)
+        _dash_baseline(p, 0.5, 23.5, bottom + 0.5, accent)
+
+
+def _baseline_single(p, ink, accent):
+    _outline(p, 1, 6, 5, 9, ink, radius=0.6)
+    _outline(p, 9, 3, 5, 12, ink, radius=0.6)
+    _outline(p, 17, 9, 5, 6, ink, radius=0.6)
+    _dash_baseline(p, 0.5, 23.5, 15.8, accent)
+
+
+def _baseline_custom(p, ink, accent):
+    _outline(p, 2, 2, 8, 7.5, ink, radius=0.6)
+    _outline(p, 13, 6, 9, 9, ink, radius=0.6)
+    _dash_baseline(p, 1, 11, 10.3, accent)
+    _dash_baseline(p, 12, 23, 15.8, accent)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QBrush(accent))
+    p.drawEllipse(QPointF(4.5, 4.5), 1.4, 1.4)
+    p.drawEllipse(QPointF(15.5, 8.5), 1.4, 1.4)
+
+
 _DRAWERS = {
     "grid_stretch": _grid_stretch,
     "grid_fixed": _grid_fixed,
@@ -384,6 +446,11 @@ _DRAWERS = {
     "arrow_bar": _arrow("bar"),
     "border_solid": _border(Qt.PenStyle.SolidLine),
     "border_dashed": _border(Qt.PenStyle.DashLine),
+    "size_exact": _size_exact,
+    "size_fit": _size_fit,
+    "baseline_rows": _baseline_rows,
+    "baseline_single": _baseline_single,
+    "baseline_custom": _baseline_custom,
 }
 for _v in ("top", "center", "bottom"):
     for _h in ("left", "center", "right"):

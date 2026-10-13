@@ -56,7 +56,7 @@ class _BranchlessTree(QTreeWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.cells_reorderable = True     # LayersPanel.refresh() sets this
-        self.accent_color = QColor("#0891B2")
+        self.accent_color = QColor(get_tokens(LIGHT)["accent"])
         self._drop_marker = None          # (QTreeWidgetItem, place_above)
 
     def drawBranches(self, painter, rect, index):
@@ -208,7 +208,7 @@ class LayersDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         t = self._tokens
-        accent     = QColor(t.get("accent",    "#0891B2"))
+        accent     = QColor(t.get("accent",    get_tokens(LIGHT)["accent"]))
         text_c     = QColor(t.get("text",      "#1C1C1E"))
         text_sec   = QColor(t.get("text_sec",  "#6E6E73"))
         ph_c       = QColor(t.get("placeholder","#AEAEB2"))
@@ -477,7 +477,7 @@ class LayersPanel(QWidget):
         # Apply initial theme (visual only — public API sets the real theme)
         self._apply_tree_stylesheet(LIGHT)
         self._delegate.apply_tokens(get_tokens(LIGHT))
-        self.tree.accent_color = QColor(get_tokens(LIGHT).get("accent", "#0891B2"))
+        self.tree.accent_color = QColor(get_tokens(LIGHT)["accent"])
 
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -509,7 +509,7 @@ class LayersPanel(QWidget):
             f"color: {tokens['label_caps']};")
         theme = "dark" if tokens.get("canvas_bg", "").startswith("#1") else "light"
         self._apply_tree_stylesheet(theme)
-        self.tree.accent_color = QColor(tokens.get("accent", "#0891B2"))
+        self.tree.accent_color = QColor(tokens["accent"])
         self.tree.update()
 
     def _apply_tree_stylesheet(self, theme: str) -> None:

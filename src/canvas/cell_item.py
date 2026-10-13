@@ -5,6 +5,7 @@ from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QFontMet
 from PyQt6.QtCore import Qt, QRectF, QRect, QPointF, pyqtSignal, QVariantAnimation, QEasingCurve, QTimer
 
 from src.canvas import canvas_accent
+from src.app.theme import LIGHT, get_tokens
 from src.app.motion import start_animation
 from src.model.enums import FitMode
 from src.utils.image_proxy import get_image_proxy
@@ -497,11 +498,14 @@ class CellItem(QGraphicsRectItem):
         self.placeholder_pen.setCosmetic(True)
         self.placeholder_pen.setDashPattern([4.0, 4.0])
 
-        self.selected_pen = QPen(QColor("#0891B2"))
+        _accent = get_tokens(LIGHT)["accent"]
+        self.selected_pen = QPen(QColor(_accent))
         self.selected_pen.setWidth(2)
         self.selected_pen.setCosmetic(True)
 
-        self.hover_brush = QBrush(QColor(8, 145, 178, 25))
+        _hover = QColor(_accent)
+        _hover.setAlpha(25)
+        self.hover_brush = QBrush(_hover)
         self.normal_brush = QBrush(Qt.GlobalColor.white)
         self.placeholder_brush = QBrush(QColor("#F5F5F5"))
         self._placeholder_fg = "#AAAAAA"
@@ -517,7 +521,7 @@ class CellItem(QGraphicsRectItem):
         self._pip_zone_hovered = False
         self._pip_drop_indicator_t = 0.0  # 0.0 = replace border, 1.0 = PiP zone border
         self._pip_anim = None
-        self._accent_color = "#0891B2"
+        self._accent_color = _accent
         self._on_accent_color = "#FFFFFF"
         self._reflow_icon = None
         self._reflow_icon_color = None
@@ -1029,11 +1033,11 @@ class CellItem(QGraphicsRectItem):
         self.placeholder_pen.setColor(QColor(tokens.get("placeholder", "#AEAEB2")))
         # Placeholder background stays light — same paper-backing rationale.
         self._placeholder_fg = tokens.get("text_tert", "#AAAAAA")
-        self.selected_pen.setColor(QColor(tokens.get("accent", "#0891B2")))
+        self.selected_pen.setColor(QColor(tokens["accent"]))
         # Cell backgrounds stay white regardless of theme — transparent images
         # need a white backing and the cell represents paper, not UI chrome.
-        accent = QColor(tokens.get("accent", "#0891B2"))
-        self._accent_color = tokens.get("accent", "#0891B2")
+        accent = QColor(tokens["accent"])
+        self._accent_color = tokens["accent"]
         self._on_accent_color = tokens.get("on_accent", "#FFFFFF")
         self.hover_brush.setColor(QColor(accent.red(), accent.green(), accent.blue(), 25))
         self.update()

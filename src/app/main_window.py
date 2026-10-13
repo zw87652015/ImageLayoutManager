@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
     QSizePolicy, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray, QEventLoop
+from PyQt6.QtCore import Qt, QEvent, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray, QEventLoop
 from PyQt6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeySequence, QUndoStack, QPalette
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
@@ -582,6 +582,22 @@ class MainWindow(QMainWindow):
         # Silent update check
         self._update_checker: StartupUpdateChecker | None = None
         QTimer.singleShot(1500, self._start_update_check)
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget)
+                and QApplication.activePopupWidget() is None
+                and obj.window().windowType() != Qt.WindowType.Popup):
+            item = self._editing_text_item()
+            if item is not None:
+                inside = False
+                view = self.view
+                if view is not None and obj is view.viewport():
+                    scene_pos = view.mapToScene(event.position().toPoint())
+                    inside = item.contains(item.mapFromScene(scene_pos))
+                if not inside:
+                    item.clearFocus()
+        return super().eventFilter(obj, event)
 
     def _start_update_check(self):
         self._update_checker = StartupUpdateChecker(self)
@@ -593,7 +609,7 @@ class MainWindow(QMainWindow):
         msg = tr("status_update_available").format(tag=latest_tag)
         # Wrap in an <a> so QLabel.linkActivated fires; href is a sentinel.
         self.update_available_label.setText(
-            f'<a href="about" style="color:#4A90E2; text-decoration:none;">🔔 {msg}</a>'
+            f'<a href="about" style="color:{get_tokens(self._current_theme)["accent"]}; text-decoration:none;">🔔 {msg}</a>'
         )
         self.update_available_label.setToolTip(tr("status_update_tooltip"))
         self.update_available_label.show()
@@ -4117,6 +4133,8 @@ class MainWindow(QMainWindow):
 
     def _on_delete_text(self):
         """Delete selected text item(s), label cell numbering labels, or cell images."""
+        if self._canvas_text_editing():
+            return
         try:
             items = self.scene.selectedItems()
         except RuntimeError:
@@ -4544,15 +4562,20 @@ class MainWindow(QMainWindow):
                 return self._clamp_to_page(*center)
         return self._clamp_to_page(*self._default_text_position())
 
-    def _canvas_text_editing(self) -> bool:
-        """True while an in-canvas text item is in editor mode."""
+    def _editing_text_item(self):
+        """The in-canvas text item in editor mode, or None."""
         try:
             focus = self.scene.focusItem() if self.scene is not None else None
         except RuntimeError:
-            focus = None
+            return None
         flags = getattr(focus, "textInteractionFlags", None)
-        return bool(flags is not None and (
-            flags() & Qt.TextInteractionFlag.TextEditorInteraction))
+        if flags is not None and flags() & Qt.TextInteractionFlag.TextEditorInteraction:
+            return focus
+        return None
+
+    def _canvas_text_editing(self) -> bool:
+        """True while an in-canvas text item is in editor mode."""
+        return self._editing_text_item() is not None
 
     def _on_paste_clipboard(self):
         """Ctrl+V: shapes in Draw mode; otherwise image into cells or text."""
@@ -6460,11 +6483,12 @@ class MainWindow(QMainWindow):
         running = (self._agent_server_controller is not None
                    and self._agent_server_controller.is_running())
         text_col = self.palette().color(QPalette.ColorRole.WindowText).name()
+        tokens = get_tokens(self._current_theme)
         if running:
-            dot, text = "#3FB950", tr("mcp_status_on")
+            dot, text = tokens["success"], tr("mcp_status_on")
             tip = tr("mcp_status_tip_on").format(url=self._mcp_last_info or "")
         else:
-            dot, text = "#8C959F", tr("mcp_status_off")
+            dot, text = tokens["text_tert"], tr("mcp_status_off")
             tip = tr("mcp_status_tip_off")
         self.mcp_status_label.setText(
             f'<a href="toggle" style="color:{text_col}; text-decoration:none;">'

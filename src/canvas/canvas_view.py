@@ -532,6 +532,13 @@ class CanvasView(QGraphicsView):
             painter.restore()
 
     def keyPressEvent(self, event: QKeyEvent):
+        scene = self.scene()
+        focus = scene.focusItem() if scene is not None else None
+        flags = getattr(focus, "textInteractionFlags", None)
+        if flags is not None and flags() & Qt.TextInteractionFlag.TextEditorInteraction:
+            super().keyPressEvent(event)
+            return
+
         key = event.key()
         mod = event.modifiers()
 

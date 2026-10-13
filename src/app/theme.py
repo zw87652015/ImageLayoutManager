@@ -13,7 +13,7 @@ Public API (stable — do not change signatures):
                                              layer thumbnails, etc.)
 """
 import os
-from PyQt6.QtGui import QPalette, QColor, QFont, QFontDatabase, QGuiApplication
+from PyQt6.QtGui import QPalette, QColor, QFont, QFontDatabase
 
 # Resolve assets directory: works both in dev and inside a PyInstaller bundle.
 def _assets_dir() -> str:
@@ -160,6 +160,28 @@ _QSS_TEMPLATE = """
         font-weight: 500;
         background: transparent;
     }
+    QPushButton#plotViewSegment {
+        background: %(surface)s;
+        border: 1px solid %(border)s;
+        border-radius: 0;
+        padding: 4px 12px;
+        color: %(text_sec)s;
+        margin-left: -1px;
+    }
+    QPushButton#plotViewSegment[segment="first"] {
+        border-top-left-radius: %(radius_button)s;
+        border-bottom-left-radius: %(radius_button)s;
+        margin-left: 0;
+    }
+    QPushButton#plotViewSegment[segment="last"] {
+        border-top-right-radius: %(radius_button)s;
+        border-bottom-right-radius: %(radius_button)s;
+    }
+    QPushButton#plotViewSegment:checked {
+        background: %(accent_tint)s;
+        color: %(accent)s;
+        border-color: %(accent)s;
+    }
     QMainWindow {
         background-color: %(panel)s;
         background: %(chrome)s;
@@ -288,7 +310,7 @@ _QSS_TEMPLATE = """
     QGroupBox QLabel { background: transparent; }
 
     /* ── Inputs ───────────────────────────────────────────────────── */
-    QLineEdit, QComboBox {
+    QLineEdit, QPlainTextEdit#inspectorTextContent, QComboBox {
         background: %(surface)s;
         border: 1px solid %(border)s;
         border-radius: %(radius_input)s;
@@ -299,13 +321,13 @@ _QSS_TEMPLATE = """
         selection-background-color: %(accent)s;
         selection-color: %(on_accent)s;
     }
-    QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
+    QLineEdit:hover, QPlainTextEdit#inspectorTextContent:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
         border-color: %(border_strong)s;
     }
-    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    QLineEdit:focus, QPlainTextEdit#inspectorTextContent:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
         border-color: %(accent)s;
     }
-    QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
+    QLineEdit:disabled, QPlainTextEdit#inspectorTextContent:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
         color: %(text_tert)s; background: %(surface_subtle)s;
     }
 
@@ -755,29 +777,6 @@ def _font_tokens(scale: float) -> dict:
     }
 
 
-_FONT_CANDIDATES = ["Segoe UI Variable Text", "Inter", "SF Pro Text", "Segoe UI"]
-_font_family = None
-
-
-def _preferred_family():
-    """First installed UI font from _FONT_CANDIDATES, once a QGuiApplication exists.
-
-    Resolved lazily and cached on success, so a font database that is not
-    yet available at import time is still queried later.
-    """
-    global _font_family
-    if _font_family:
-        return _font_family
-    if QGuiApplication.instance() is None:
-        return None
-    families = set(QFontDatabase.families())
-    for name in _FONT_CANDIDATES:
-        if name in families:
-            _font_family = name
-            break
-    return _font_family
-
-
 def get_stylesheet(theme: str, scale: float = 1.0) -> str:
     tokens = {**get_tokens(theme), **_font_tokens(scale)}
     arrow = _ARROW_DOWN_DARK if theme == DARK else _ARROW_DOWN_LIGHT
@@ -792,9 +791,6 @@ def get_stylesheet(theme: str, scale: float = 1.0) -> str:
         .replace("__ARROW_DOWN_OFF__", f"{assets}/arrow_down_{variant}_off.svg") \
         .replace("__ARROW_UP__", f"{assets}/arrow_up_{variant}.svg") \
         .replace("__ARROW_DOWN__", arrow)
-    family = _preferred_family()
-    if family:
-        qss = f'QWidget {{ font-family: "{family}"; }}\n' + qss
     return qss
 
 
@@ -812,13 +808,8 @@ FONT_SCALE_MAX = 2.0
 FONT_SCALE_STEP = 0.1
 
 
-def apply_font_scale(app, scale: float, theme: str = LIGHT) -> float:
-    """Scale the QApplication font by *scale* (clamped) and re-apply the stylesheet.
-
-    Re-applying the stylesheet is required because font-size values are
-    hardcoded as px in the QSS — app.setFont() alone is overridden by them.
-    Returns the clamped scale that was actually applied.
-    """
+def _app_font(scale: float) -> QFont:
+    """The platform system UI font at normal weight, scaled from its base size."""
     global _BASE_APP_FONT_PT
     f = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
     f.setWeight(QFont.Weight.Normal)
@@ -827,11 +818,18 @@ def apply_font_scale(app, scale: float, theme: str = LIGHT) -> float:
         if base <= 0:
             base = max(f.pixelSize(), 9) * 0.75
         _BASE_APP_FONT_PT = base
-    scale = max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, float(scale)))
     f.setPointSizeF(_BASE_APP_FONT_PT * scale)
-    family = _preferred_family()
-    if family:
-        f.setFamily(family)
-    app.setFont(f)
+    return f
+
+
+def apply_font_scale(app, scale: float, theme: str = LIGHT) -> float:
+    """Scale the QApplication font by *scale* (clamped) and re-apply the stylesheet.
+
+    Re-applying the stylesheet is required because font-size values are
+    hardcoded as px in the QSS — app.setFont() alone is overridden by them.
+    Returns the clamped scale that was actually applied.
+    """
+    scale = max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, float(scale)))
+    app.setFont(_app_font(scale))
     app.setStyleSheet(get_stylesheet(theme, scale))
     return scale

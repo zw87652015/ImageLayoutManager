@@ -20,6 +20,7 @@ from src.app.commands import DropImageCommand
 from src.app.i18n import current_language, tr
 from src.app.inspector import CollapsibleSection
 from src.app.motion import MotionTween
+from src.app.theme import DARK, LIGHT, get_tokens
 from src.model.data_model import Project, Cell, RowTemplate
 
 
@@ -226,9 +227,9 @@ LESSONS = {
         Step('intro', ('Line up the plots, not the files', '对齐绘图区，而不是文件边缘'),
              ('This practice row holds three synthetic charts saved with different margins, as if they came from different plotting tools. Auto Layout fits each file\u2019s edges, so the bottom axes sit at different heights and the plot boxes differ in size. The fix is to mark each chart\u2019s plotting area and match them. Marking is a reference, not a crop: labels stay visible and source files are never edited.',
               '这一行练习面板包含三张合成图表，它们保存时留白各不相同，就像来自不同的绘图软件。“自动布局”按文件边缘适配，因此底部坐标轴高低不一，绘图框大小也不同。解决办法是标记每张图的绘图区，然后统一匹配。标记只是参照，不是裁剪：标签仍然可见，源文件不会被修改。')),
-        Step('mark_plots', ('Mark the three plot areas and apply', '标记三个绘图区并应用'),
-             ('Click Open Align Plot Areas below. Create a New group, name it \u201cRow 1\u201d, and check the three sample panels. A group records which charts should align together.\n\nFor each checked image, draw a box around the plotting rectangle where the data are drawn, keeping tick labels, titles, and legends outside. Use Mark next image to continue. Choose panel 1 as the reference: its plot supplies the target height and bottom line.\n\nPreview alignment, compare the three bottom axes, then Apply. If the group is reduced to fit, read the notice; Fit plots within cells makes that sizing choice explicit. For your own figure, open this tool from the arrow beside Auto Layout, the Layout menu, or a panel\u2019s context menu.',
-              '点击下方“打开对齐绘图区”。点击“新建对齐组”，命名为“第一行”，勾选三张示例图。对齐组用于记录哪些图表需要一起对齐。\n\n逐张框选数据所在的绘图矩形，刻度文字、标题和图例留在框外；用“标记下一张”继续。选择面板 1 为参照图，它的绘图区提供目标高度和底部对齐线。\n\n点击“预览对齐”，比较三张图的底部坐标轴，再点击“应用”。若提示整组已缩小以适应空间，请阅读提示；“适应单元格边界”可明确采用该尺寸策略。制作自己的图时，可从自动布局旁的箭头、布局菜单或面板右键菜单打开此工具。'),
+        Step('mark_plots', ('Line up the three plots', '把三张图对齐'),
+             ('Click Open Align Plot Areas below. The three charts are already ticked as one group — the coloured chip at the top.\n\nEach card shows a dashed box where the plot was found. Click a card, then press Enter or ✓ to keep its box, or drag a better one; ‹ › moves between charts. The ★ marks the reference: the others match its plot height and bottom line.\n\nWatch the preview on the right line up, then click Apply. For your own figures, open this tool from the arrow beside Auto Layout, the Layout menu, or a panel’s right-click menu.',
+              '点击下方的“打开对齐绘图区”。三张图已作为一组勾选好了——即顶部的彩色标签。\n\n每张卡片会用虚线框显示检测到的绘图区。点击卡片，然后按 Enter 或 ✓ 保留其框选，也可以拖出更准确的框；‹ › 在图表之间切换。★ 标记参照图：其他图的绘图高度和底部线都与它对齐。\n\n观察右侧预览中的对齐效果，然后点击“应用”。若要处理自己的图，可从“自动布局”旁的箭头、“布局”菜单或面板的右键菜单打开此工具。'),
              target='_act_align_plots', action='open_align_plots'),
         Step('layout', ('Auto Layout keeps the alignment', '自动布局会保留对齐'),
              ('Click Auto Layout in the toolbar (Ctrl+Shift+A) again. The cells are rearranged, but the alignment is a saved relationship: the plot heights and bottom axes are recalculated, not lost. If a later change leaves too little room for a panel\u2019s title or labels, the whole group shrinks together so nothing is cut off, and the status bar tells you.',
@@ -356,7 +357,7 @@ def _sample_svg(index, font_px, series):
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
 <rect width="720" height="480" fill="white"/>
 <path d="M100 110 V370 H630" stroke="#444" fill="none" stroke-width="3"/>
-<polyline points="{points}" stroke="#0891b2" fill="none" stroke-width="5"/>
+<polyline points="{points}" stroke="#4F5BD5" fill="none" stroke-width="5"/>
 <g font-family="Arial" fill="#222" font-size="{font_px}">
 <text id="title" x="110" y="60">DEMO {index} - synthetic data</text>
 <text id="time" x="320" y="430">Time</text>
@@ -396,7 +397,7 @@ def _sample_misaligned_chart(variant):
         2: (f'<text x="{left + 10}" y="{top - 20}">DEMO 3 - synthetic data</text>'
             f'<text x="{(left + right) / 2 - 140:.0f}" y="{bottom + 60}">Time after treatment</text>'
             f'<text x="{(left + right) / 2 - 110:.0f}" y="{bottom + 100}">(synthetic units)</text>'
-            f'<rect x="{right + 14}" y="{top + 8}" width="20" height="20" fill="#0891b2"/>'
+            f'<rect x="{right + 14}" y="{top + 8}" width="20" height="20" fill="#4F5BD5"/>'
             f'<text x="{right + 42}" y="{top + 26}" font-size="24">series</text>'
             f'<text x="{left - 40}" y="{bottom + 12}">0</text><text x="{left - 60}" y="{top + 12}">10</text>'),
     }[variant]
@@ -404,7 +405,7 @@ def _sample_misaligned_chart(variant):
 <rect width="720" height="480" fill="white"/>
 <path d="M{left} {top} V{bottom} H{right}" stroke="#444" fill="none" stroke-width="3"/>
 {ticks}
-<polyline points="{points}" stroke="#0891b2" fill="none" stroke-width="5"/>
+<polyline points="{points}" stroke="#4F5BD5" fill="none" stroke-width="5"/>
 <g font-family="Arial" fill="#222" font-size="30">
 <text x="{left - 8}" y="{(top + bottom) / 2:.0f}" text-anchor="end" transform="rotate(-90 {left - 60} {(top + bottom) / 2:.0f})">Response</text>
 {extras}
@@ -739,7 +740,7 @@ class TutorialStatus(QLabel):
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-            color = QColor('#4ade80' if dark else '#15803d')
+            color = QColor(get_tokens(DARK if dark else LIGHT)["success"])
             fill = QColor(color)
             fill.setAlpha(round(24 * self.reveal.value))
             painter.setPen(Qt.PenStyle.NoPen)

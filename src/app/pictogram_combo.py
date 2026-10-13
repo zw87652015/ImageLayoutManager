@@ -6,7 +6,7 @@ popup and the wheel never changes the value, so scrolling the Inspector is safe.
 """
 
 from PyQt6.QtCore import QRectF, QSize, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPalette, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPalette, QPen
 from PyQt6.QtWidgets import QComboBox, QSizePolicy
 
 from src.app.pictogram_layout import row_width, tile_at, tile_rects
@@ -30,6 +30,7 @@ class PictogramCombo(QComboBox):
         super().__init__(parent)
         self._pictograms = list(pictograms)
         self._caption_suffix = caption_suffix
+        self._caption_tip = False
         self._mirror = mirror
         self._vertical = False
         self._hover = -1
@@ -138,9 +139,16 @@ class PictogramCombo(QComboBox):
         font.setPixelSize(11)
         p.setFont(font)
         p.setPen(_tint(text, 153))
+        shown = QFontMetrics(font).elidedText(caption, Qt.TextElideMode.ElideRight, int(self.width()))
+        if shown != caption:
+            self.setToolTip(caption)
+            self._caption_tip = True
+        elif self._caption_tip:
+            self.setToolTip("")
+            self._caption_tip = False
         p.drawText(QRectF(0, self.TILE_H + self.GAP, self.width(), self.CAPTION_H),
                    int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter),
-                   caption)
+                   shown)
         p.end()
 
     # ── mouse ────────────────────────────────────────────────────────────

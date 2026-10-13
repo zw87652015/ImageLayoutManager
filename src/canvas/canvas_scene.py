@@ -72,6 +72,7 @@ class CanvasScene(QGraphicsScene):
         self.group_label_items = {} # group_label_id -> GroupLabelItem
         self.text_items = {} # id -> TextGraphicsItem
         self.mark_items = {} # mark_id -> MarkItem
+        self._theme_tokens = None # last apply_theme tokens, applied to new cell items
 
         # Draw-tool state: marks are sketched at scene level like the
         # export-region rubber-band, then committed as model marks.
@@ -158,6 +159,7 @@ class CanvasScene(QGraphicsScene):
         canvas_accent.set_on_accent(tokens["on_accent"])
         self._canvas_bg = tokens["canvas_bg"]
         self._grid_line = tokens["grid_line"]
+        self._theme_tokens = dict(tokens)
         self.page_item.setBrush(QBrush(Qt.GlobalColor.white))
         self.margin_item.setPen(
             QPen(QColor(tokens.get("border", "#DDDDDD")), 0.3, Qt.PenStyle.DashLine)
@@ -304,6 +306,8 @@ class CanvasScene(QGraphicsScene):
             is_new = cell.id not in self.cell_items
             if is_new:
                 item = CellItem(cell.id)
+                if self._theme_tokens is not None:
+                    item.apply_theme_tokens(self._theme_tokens)
                 self.addItem(item)
                 self.cell_items[cell.id] = item
 
@@ -459,6 +463,8 @@ class CanvasScene(QGraphicsScene):
             lid = f"label_{cell_id}"
             if lid not in self.label_cell_items:
                 litem = CellItem(lid)
+                if self._theme_tokens is not None:
+                    litem.apply_theme_tokens(self._theme_tokens)
                 litem.is_label_cell = True
                 litem.setFlag(CellItem.GraphicsItemFlag.ItemIsSelectable, True)
                 litem.setAcceptDrops(False)
@@ -505,20 +511,21 @@ class CanvasScene(QGraphicsScene):
                 self.text_items[text_model.id] = t_item
                 
             t_item = self.text_items[text_model.id]
-            # Use setHtml to support rich text
-            t_item.setHtml(text_model.text)
-            t_item.update_style(
-                text_model.font_family,
-                text_model.font_size_pt,
-                text_model.font_weight,
-                text_model.color,
-                typography_mode=getattr(self.project, 'typography_mode', 'points'),
-            )
-            t_item.set_background(
-                getattr(text_model, 'bg_enabled', False),
-                getattr(text_model, 'bg_color', '#FFFFFF'),
-                getattr(text_model, 'bg_padding_mm', 0.6),
-            )
+            if not t_item.is_editing:
+                # Use setHtml to support rich text
+                t_item.setHtml(text_model.text)
+                t_item.update_style(
+                    text_model.font_family,
+                    text_model.font_size_pt,
+                    text_model.font_weight,
+                    text_model.color,
+                    typography_mode=getattr(self.project, 'typography_mode', 'points'),
+                )
+                t_item.set_background(
+                    getattr(text_model, 'bg_enabled', False),
+                    getattr(text_model, 'bg_color', '#FFFFFF'),
+                    getattr(text_model, 'bg_padding_mm', 0.6),
+                )
             
             # Position logic: cell-scoped labels follow their parent cell
             if text_model.scope == "cell" and text_model.parent_id:
@@ -2202,6 +2209,11 @@ class CanvasScene(QGraphicsScene):
 
     def keyPressEvent(self, event):
         """Enter/Return commits crop; Escape cancels crop or dismisses PiP handles."""
+        focus = self.focusItem()
+        flags = getattr(focus, "textInteractionFlags", None)
+        if flags is not None and flags() & Qt.TextInteractionFlag.TextEditorInteraction:
+            super().keyPressEvent(event)
+            return
         if self.draw_key_press(event):
             event.accept()
             return
