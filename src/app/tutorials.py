@@ -834,6 +834,55 @@ class _FillSubcellImageCommand(DropImageCommand):
 
 
 class TutorialController(QObject):
+    #: step.action -> button caption, for actions without a dedicated
+    #: default label ('svg0'/'svg1'/'raster' fall back to "Open inspector").
+    _ACTION_LABELS = {
+        'delete_row': ('Delete second row', '删除第二行'),
+        'add_cell': ('Add a third cell', '添加第三个单元格'),
+        'load': ('Load samples', '载入示例'),
+        'label_size': ('Select a label', '选中标注'),
+        'split_cols': ('Split third panel', '拆分第三个面板'),
+        'select_subcell': ('Select the new sub-cell', '选中新的子单元格'),
+        'nested_rows': ('Divide the right sub-cell', '细分右侧子单元格'),
+        'add_sibling': ('Add a sibling on the right', '在右侧添加同级单元格'),
+        'fill_subcells': ('Fill empty sub-cells', '填充空白子单元格'),
+        'swap': ('Swap panels', '交换面板'),
+        'select_cell': ('Select a panel', '选中面板'),
+        'select_pair': ('Select two panels', '选中两个面板'),
+        'select_row': ('Select the row', '选中整行'),
+        'select_shared_top': ('Select the shared title', '选中共享标题'),
+        'show_project': ('Show project settings', '显示工程设置'),
+        'crop_square': ('Crop to square', '裁剪为正方形'),
+        'add_pip': ('Add inset', '添加插图'),
+        'select_pip': ('Select inset', '选中插图'),
+        'create_size_group': ('Create group', '创建组'),
+        'add_to_size_group': ('Add third panel', '添加第三个面板'),
+        'open_align_plots': ('Open Align Plot Areas', '打开对齐绘图区'),
+        'narrow_cell': ('Make the cell narrower', '缩小单元格'),
+        'widen_cell': ('Make the cell wider', '放大单元格'),
+        'reflow_on': ('Turn REFLOW ON', '开启 REFLOW'),
+    }
+
+    #: target -> Inspector widget attribute name, for steps that highlight a
+    #: single field once its section is on screen (visibility is checked by
+    #: the caller, since some fields only appear for the right selection).
+    _INSPECTOR_TARGETS = {
+        'label_size': 'font_size',
+        'subcell_ratio': 'subcell_ratio',
+        'freeform_x': 'freeform_x',
+        'dpi_spin': 'dpi_spin',
+        'gl_text_edit': 'gl_text_edit',
+        'fit_mode_combo': 'fit_mode_combo',
+        'pip_w': 'pip_w',
+        'scale_bar_enabled': 'scale_bar_enabled',
+        'size_group_pinned_w': 'size_group_pinned_w',
+        'override_w': 'override_w',
+        'aspect_lock': 'aspect_lock_btn',
+        # The REFLOW hero card sits above the cell section — no
+        # collapsible ancestor, so it resolves like a plain field.
+        'reflow_card': 'reflow_card',
+    }
+
     def __init__(self, window):
         super().__init__(window)
         self.window = window
@@ -1274,6 +1323,7 @@ class TutorialController(QObject):
         """Visible control for *action*; see ui_targets.action_target."""
         return action_target(self.window, action)
 
+    @staticmethod
     def _rect_in_viewport(rect, viewport):
         """Fully inside on the vertical scroll axis and at least partly
         visible horizontally — the horizontal scrollbar is disabled, so a
