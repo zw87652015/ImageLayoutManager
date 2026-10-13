@@ -14,11 +14,13 @@ from PyQt6.QtWidgets import (
     QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
 
+from src.app.help_demo_view import DemoView
+from src.app.help_demos import DEMOS
 from src.app.help_illustrations import draw_topic
 from src.app.i18n import current_language, tr
 from src.app.help_content import TOPICS, parse_chips, search, search_shortcuts
 
-_BANNER_H = 170
+_BANNER_H = 210
 _ICON_PX = 24
 _TOUR_KEY = "tour"
 _SHORTCUTS_KEY = "shortcuts"
@@ -87,23 +89,31 @@ class _Banner(QWidget):
         painter.end()
 
 
+_BADGE_STYLE = "border-radius: 12px; background: palette({role}); color: palette(base); font-weight: 600;"
+
+
 class _StepRow(QWidget):
     def __init__(self, number, text, parent=None):
         super().__init__(parent)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
-        badge = QLabel(str(number))
+        self._badge = QLabel(str(number))
+        badge = self._badge
         badge.setFixedSize(QSize(24, 24))
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setStyleSheet(
-            "border-radius: 12px; background: palette(highlight); color: palette(base); font-weight: 600;")
+        badge.setStyleSheet(_BADGE_STYLE.format(role="highlight"))
         row.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
         body = QLabel(_chip_html(text, _colors(self)))
         body.setTextFormat(Qt.TextFormat.RichText)
         body.setWordWrap(True)
         body.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
         row.addWidget(body, 1)
+
+    def set_active(self, active):
+        """None: normal. True: accent badge (the step now playing). False: muted badge."""
+        role = "mid" if active is False else "highlight"
+        self._badge.setStyleSheet(_BADGE_STYLE.format(role=role))
 
 
 class _TopicCard(QWidget):
@@ -115,7 +125,14 @@ class _TopicCard(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 14, 18, 14)
         layout.setSpacing(12)
-        layout.addWidget(_Banner(topic.icon))
+        if topic.key in DEMOS:
+            demo = DemoView(DEMOS[topic.key])
+            demo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            demo.setFixedHeight(_BANNER_H)
+            demo.step_changed.connect(self._on_demo_step)
+            layout.addWidget(demo)
+        else:
+            layout.addWidget(_Banner(topic.icon))
 
         title = QLabel(_lang_text(topic.title))
         font = QFont(title.font())
@@ -125,8 +142,11 @@ class _TopicCard(QWidget):
         title.setWordWrap(True)
         layout.addWidget(title)
 
+        self._step_rows = []
         for number, step in enumerate(topic.steps, start=1):
-            layout.addWidget(_StepRow(number, _lang_text(step)))
+            row = _StepRow(number, _lang_text(step))
+            self._step_rows.append(row)
+            layout.addWidget(row)
 
         if topic.show_me is not None:
             show = QPushButton(tr("help_show_me"))
@@ -156,6 +176,13 @@ class _TopicCard(QWidget):
         suffix = "  \u25be" if shown else "  \u25b8"
         label = tr("help_fewer_details") if shown else tr("help_more_details")
         self._toggle.setText(label + suffix)
+
+    def _on_demo_step(self, step):
+        for number, row in enumerate(self._step_rows, start=1):
+            if step == 0:
+                row.set_active(None)
+            else:
+                row.set_active(True if number == step else False)
 
 
 class _ShortcutsPage(QWidget):

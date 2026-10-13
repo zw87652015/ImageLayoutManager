@@ -237,6 +237,12 @@ _QSS_TEMPLATE = """
     /* Menu bar + menus */
     QMenuBar { background-color: %(chrome)s; color: %(text)s; border-bottom: none; background: %(chrome)s; padding: 2px 6px; }
     QMenuBar::item { background-color: transparent; padding: 4px 10px; border-radius: %(radius_button)s; color: %(text_sec)s; }
+    QFrame#drawPalette { background: %(surface)s; border: 1px solid %(border_strong)s; border-radius: 10px; }
+    QFrame#drawPalette QToolButton { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0; color: %(text)s; }
+    QFrame#drawPalette QToolButton:hover { background: %(hover)s; }
+    QFrame#drawPalette QToolButton:checked { background: %(accent_tint)s; border-color: %(accent)s; }
+    QFrame#drawPalette QToolButton#drawPaletteDone { padding: 0 10px; font-weight: 600; color: %(accent)s; }
+    QFrame#drawPaletteSep { color: %(divider)s; }
     QMenuBar::item:selected { background-color: %(hover)s; background: %(hover)s; color: %(text)s; }
     QMenuBar::item:pressed { background: %(active)s; color: %(text)s; }
     QMenu {

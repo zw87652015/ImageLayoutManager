@@ -17,6 +17,7 @@ from PyQt6.QtCore import Qt, QEvent, QTimer, QSize, QSettings, QPropertyAnimatio
 from PyQt6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeySequence, QUndoStack, QPalette
 from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
+from src.app.draw_palette import DrawPalette
 from src.app.i18n import tr, set_language, current_language
 from src.app.history_timeline import HistoryTimeline
 from src.app.welcome_window import WelcomeWindow
@@ -950,9 +951,10 @@ class MainWindow(QMainWindow):
         self._draw_menu.addSeparator()
 
         keep_active = QAction(tr("keep_tool_active"), self)
+        keep_active.setToolTip(tr("tip_keep_tool_active"))
         keep_active.setCheckable(True)
         keep_active.setChecked(
-            self._settings.value("marks/keep_tool_active", False, type=bool))
+            self._settings.value("marks/keep_tool_active", True, type=bool))
         keep_active.toggled.connect(self._on_keep_tool_active_toggled)
         self._draw_menu.addAction(keep_active)
         self._act_keep_tool_active = keep_active
@@ -1147,27 +1149,20 @@ class MainWindow(QMainWindow):
         self._auto_layout_button.setMenu(self._auto_layout_menu)
         self.toolbar.addWidget(self._auto_layout_button)
 
-        # Draw mode toggle button: main part toggles Draw mode; the menu
-        # mirrors the Draw submenu (mode, Select Shapes, tools, options).
+        # Draw mode toggle button; the shape tools live on the floating
+        # canvas palette (DrawPalette) and in the Edit → Draw submenu.
         self._draw_button = QToolButton(self)
         self._draw_button.setDefaultAction(self._act_draw_mode)
-        self._draw_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self._draw_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._draw_button.setToolTip(tr("tip_draw_button"))
-        draw_btn_menu = QMenu(self._draw_button)
-        draw_btn_menu.addAction(self._act_draw_mode)
-        draw_btn_menu.addSeparator()
-        draw_btn_menu.addAction(self._mark_tool_actions["select"])
-        draw_btn_menu.addSeparator()
-        for tool in self._draw_tools:
-            draw_btn_menu.addAction(self._mark_tool_actions[tool])
-        draw_btn_menu.addSeparator()
-        draw_btn_menu.addAction(keep_active)
-        self._draw_button.setMenu(draw_btn_menu)
         self.toolbar.addWidget(self._draw_button)
         self.toolbar.addSeparator()
+        self._draw_palette = DrawPalette(
+            [self._mark_tool_actions[name] for name in ("select",) + self._draw_tools],
+            self._act_keep_tool_active,
+            lambda: self._set_draw_mode(False),
+            self)
 
         # ── Right-aligned toolbar group ─────────────────────────────────
         # A stretch spacer pushes the following widgets to the right edge,
@@ -1879,6 +1874,8 @@ class MainWindow(QMainWindow):
         # on the filled accent background.
         if hasattr(self, "_export_button"):
             self._export_button.setIcon(make_icon("export", tokens["on_accent"]))
+        if hasattr(self, "_draw_palette"):
+            self._draw_palette.apply_theme(tokens)
 
     def _update_toolbar_button_tooltip(self, button):
         """Append the default action's shortcuts to a toolbar button tooltip.
@@ -2056,7 +2053,10 @@ class MainWindow(QMainWindow):
                 act.setText(tr(f"tool_{name}"))
                 act.setToolTip(tr(f"tip_tool_{name}"))
             self._act_keep_tool_active.setText(tr("keep_tool_active"))
+            self._act_keep_tool_active.setToolTip(tr("tip_keep_tool_active"))
             self._draw_button.setToolTip(tr("tip_draw_button"))
+            if hasattr(self, '_draw_palette'):
+                self._draw_palette.retranslate()
             if self.scene is not None and getattr(self.scene, 'draw_mode', False):
                 tool = self.scene.draw_tool
                 self.statusbar.showMessage(
@@ -5771,6 +5771,12 @@ class MainWindow(QMainWindow):
         self._act_draw_mode.setChecked(on)
         self._act_draw_mode.blockSignals(False)
         self._apply_draw_mode_action_state(on)
+        palette = getattr(self, '_draw_palette', None)
+        if palette is not None:
+            if on and getattr(self, 'view', None) is not None:
+                palette.place(self.view)
+            else:
+                palette.hide()
         if hasattr(self, 'layers_panel'):
             self.layers_panel.set_draw_mode(on)
         if not on:

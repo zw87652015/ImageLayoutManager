@@ -2,7 +2,7 @@ import os
 from typing import List, Tuple, Dict
 from PIL import Image
 from PyQt6.QtSvg import QSvgRenderer
-from src.model.data_model import Project, RowTemplate, Cell
+from src.model.data_model import Project, Cell
 
 # Active Reflow plots can fit any panel; use a common landscape starting
 # shape instead of treating their saved SVG dimensions as a constraint.
@@ -77,29 +77,23 @@ class AutoLayout:
         return aspect_ratios
 
     @staticmethod
-    def _fixed_grid_row_heights(sorted_rows, row_final_ratios, new_row_settings,
+    def _fixed_grid_row_heights(sorted_rows, row_final_ratios,
                                 content_width: float, gap_mm: float) -> Dict[int, float]:
-        """Natural height (mm) of each row with cells in fixed grid mode.
+        """Natural height (mm) of each row in Match Cell Size mode.
 
-        Mirrors LayoutEngine: every row takes the standard column widths of the widest
-        row (first in index order) using that row's new normalised ratios.
-        A row's height is the tallest cell that fits its width at its aspect.
+        Mirrors LayoutEngine: every cell is one shared unit wide, so a row with
+        k columns is k * unit wide and its height is k * unit / Sum(aspects).
+        A row whose aspects sum to zero falls back to a square cell (unit).
         """
-        from src.model.layout_engine import LayoutEngine
         counted = [r for r in sorted_rows if r.column_count > 0]
         if not counted:
             return {}
         max_count = max(r.column_count for r in counted)
-        widest = next(r for r in counted if r.column_count == max_count)
-        norm = {r['index']: r['column_ratios'] for r in new_row_settings}
-        template = RowTemplate(index=widest.index, column_count=widest.column_count,
-                               column_ratios=list(norm[widest.index]))
-        standard = LayoutEngine._compute_col_widths(template, content_width, gap_mm)
+        unit = (content_width - (max_count - 1) * gap_mm) / max_count
         heights: Dict[int, float] = {}
         for row in counted:
-            widths = standard[:row.column_count]
-            cell_heights = [w / a for w, a in zip(widths, row_final_ratios[row.index]) if a > 0]
-            heights[row.index] = max(cell_heights) if cell_heights else max(widths, default=0.0)
+            total = sum(row_final_ratios[row.index])
+            heights[row.index] = row.column_count * unit / total if total > 0 else unit
         return heights
 
     @staticmethod
@@ -347,12 +341,12 @@ class AutoLayout:
             new_row_settings.append(r_dict)
             row_final_ratios[row.index] = final_ratios
 
-        # Fixed grid mode draws every row with the widest row's column widths (LayoutEngine),
-        # so a row's natural height comes from those widths, not from the stretch-to-page demand.
+        # Match Cell Size mode gives every row one shared cell unit (LayoutEngine), so a
+        # row's natural height comes from that unit, not from the stretch-to-page demand.
         fixed_heights = {}
         if getattr(project, "grid_mode", "stretch") == "fixed":
             fixed_heights = AutoLayout._fixed_grid_row_heights(
-                sorted_rows, row_final_ratios, new_row_settings, content_width, gap_mm)
+                sorted_rows, row_final_ratios, content_width, gap_mm)
 
         # 3. Normalize Height Ratios across all rows
         # We want the values to be nice numbers like 1.0, 1.5, etc.

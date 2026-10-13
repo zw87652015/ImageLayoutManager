@@ -824,7 +824,7 @@ class Project:
     layout_mode: str = "grid"
     
     # Grid Settings
-    grid_mode: str = "stretch" # "stretch" or "fixed"
+    grid_mode: str = "stretch" # "stretch" (Fill Page Width) or "fixed" (Match Cell Size)
     row_alignment: str = "center" # "left", "center", "right"
     
     # Layout

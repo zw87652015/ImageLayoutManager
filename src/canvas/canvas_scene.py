@@ -8,6 +8,7 @@ from PyQt6.QtGui import QColor, QFont, QPen, QBrush, QPainter, QPainterPath
 from PyQt6.QtCore import Qt, QEasingCurve, QPointF, pyqtSignal, QRectF, QVariantAnimation
 
 from src.canvas import canvas_accent
+from src.canvas.draw_cursor import tool_cursor
 from src.model.data_model import Project, Cell, mark_for_tool
 from src.canvas.cell_item import CellItem
 from src.canvas.mark_item import MarkItem
@@ -996,10 +997,6 @@ class CanvasScene(QGraphicsScene):
         sorted_rows = sorted(layout_result.row_rects.items(), key=lambda kv: kv[0])
         row_heights = layout_result.row_heights
         row_templates = {r.index: r for r in self.project.rows}
-        content_width = (self.project.page_width_mm
-                         - self.project.margin_left_mm
-                         - self.project.margin_right_mm)
-        gap = self.project.gap_mm
         from src.model.layout_engine import LayoutEngine
 
         # --- Horizontal dividers between consecutive rows ---
@@ -1015,8 +1012,8 @@ class CanvasScene(QGraphicsScene):
             gap_top = ry_a + rh_a
             gap_bot = ry_b
             cy = (gap_top + gap_bot) / 2
-            div_x = self.project.margin_left_mm
-            div_w = content_width
+            div_x = min(rx_a, rx_b)
+            div_w = max(rx_a + rw_a, rx_b + rw_b) - div_x
 
             div = DividerItem(
                 kind='row',
@@ -1035,23 +1032,20 @@ class CanvasScene(QGraphicsScene):
             if row_temp is None or row_temp.column_count < 2:
                 continue
 
-            col_widths = LayoutEngine._compute_col_widths(row_temp, content_width, gap)
-            # Determine actual row x start (may differ in fixed/alignment mode)
             row_cells = [c for c in self.project.cells if c.row_index == row_idx]
             if not row_cells:
                 continue
 
-            x_cursor = rx
-            col_ratios = (row_temp.column_ratios if row_temp.column_ratios
-                          else [1.0] * row_temp.column_count)
-            while len(col_ratios) < row_temp.column_count:
-                col_ratios.append(1.0)
-            col_ratios = list(col_ratios[:row_temp.column_count])
+            slots = layout_result.col_slots.get(row_idx, [])
+            col_ratios = (list(row_temp.column_ratios) if row_temp.column_ratios
+                          else [])
+            col_ratios = (col_ratios + [1.0] * row_temp.column_count)[:row_temp.column_count]
 
-            for ci in range(row_temp.column_count - 1):
-                x_cursor += col_widths[ci]
+            for ci in range(len(slots) - 1):
+                x_a, w_a = slots[ci]
+                x_b, w_b = slots[ci + 1]
                 # gap centre
-                cx = x_cursor + gap / 2
+                cx = (x_a + w_a + x_b) / 2
 
                 div = DividerItem(
                     kind='col',
@@ -1059,13 +1053,12 @@ class CanvasScene(QGraphicsScene):
                     ratio_a=col_ratios[ci],
                     ratio_b=col_ratios[ci + 1],
                     row_index=row_idx,
+                    span_mm=w_a + w_b,
                 )
                 div.setRect(0, 0, HIT_THICKNESS, rh)
                 div.setPos(cx - HIT_THICKNESS / 2, ry)
                 self.addItem(div)
                 self._divider_items.append(div)
-
-                x_cursor += gap
 
         # --- Dividers between subcells of split containers (recursive) ---
         # Their span covers only the children band, not the whole row — the
@@ -1875,7 +1868,7 @@ class CanvasScene(QGraphicsScene):
         if tool is not None:
             self.clearSelection()
             for view in self.views():
-                view.viewport().setCursor(Qt.CursorShape.CrossCursor)
+                view.viewport().setCursor(tool_cursor(tool, view.viewport().devicePixelRatioF()))
         else:
             for view in self.views():
                 view.viewport().unsetCursor()
@@ -1917,6 +1910,8 @@ class CanvasScene(QGraphicsScene):
         if key == Qt.Key.Key_Escape:
             if in_progress:
                 self.cancel_drawing()
+            elif self.draw_tool is not None:
+                self.set_draw_tool(None, self._draw_sticky)
             else:
                 self.set_draw_mode(False)
             return True

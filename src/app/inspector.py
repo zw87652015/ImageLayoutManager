@@ -1468,6 +1468,10 @@ class Inspector(QWidget):
         self.label_this_label_heading = QLabel(tr("lbl_this_label"))
         self.label_cell_layout.addRow(self.label_this_label_heading)
 
+        self.label_align = LabelAlignPicker()
+        self.label_align.align_changed.connect(self._on_label_align_preset_changed)
+        self.label_cell_layout.addRow(self._fl("lbl_align"), self.label_align)
+
         self._label_item_placement_options = [
             ("opt_placement_inherit", None),
             ("placement_in_cell",     "in_cell"),
@@ -1532,10 +1536,6 @@ class Inspector(QWidget):
         self.label_color = ColorPickerWidget()
         self.label_color.colorChanged.connect(self._on_label_color_changed)
         self.label_cell_layout.addRow(self._fl("lbl_color"), self.label_color)
-
-        self.label_align = LabelAlignPicker()
-        self.label_align.align_changed.connect(self._on_label_align_preset_changed)
-        self.label_cell_layout.addRow(self._fl("lbl_align"), self.label_align)
 
         self.label_offset_x = QDoubleSpinBox()
         self.label_offset_x.setRange(-100.0, 100.0)
@@ -1710,10 +1710,6 @@ class Inspector(QWidget):
         item_style_layout.addWidget(self.label_item_reset_style_btn)
         self.label_item_layout.addRow("", self.label_item_style_row)
         self.label_item_style_row.hide()
-
-        self.label_item_rotate_btn = QPushButton(tr("btn_rotate_label"))
-        self.label_item_rotate_btn.clicked.connect(self._on_label_item_rotate)
-        self.label_item_layout.addRow("", self.label_item_rotate_btn)
 
         self.layout.addWidget(self.label_item_group)
         self.label_item_group.hide()
@@ -2470,7 +2466,6 @@ class Inspector(QWidget):
         self.gl_color.retranslate_ui()
         self.gl_bracket_color.retranslate_ui()
 
-        self.label_item_rotate_btn.setText(tr("btn_rotate_label"))
         self.label_cell_rotate_btn.setText(tr("btn_rotate_label"))
         self.label_cell_reset_style_btn.setText(tr("btn_reset_tier_style"))
         self.label_cell_reset_style_btn.setToolTip(tr("tip_reset_tier_style"))
@@ -2942,6 +2937,8 @@ class Inspector(QWidget):
 
     def _emit_column_ratios(self):
         text = self.col_ratios_edit.text().strip()
+        if text == getattr(self, "_col_ratios_shown", None):
+            return  # unedited rounded display: keep the stored precision
         if not text:
             self.row_property_changed.emit({"column_ratios": []})
             return
@@ -3140,16 +3137,10 @@ class Inspector(QWidget):
         if self._label_item_id:
             self.label_item_property_changed.emit(self._label_item_id, dict(changes))
 
-    def _on_label_item_rotate(self):
-        """Cycle the selected label's rotation by 90°."""
-        new_rotation = (getattr(self, "_label_item_rotation", 0.0) + 90.0) % 360.0
-        self._emit_label_item_change({"rotation": new_rotation})
-
     def _populate_label_item_group(self, text_item_id, data: dict):
         """Fill the per-label group from a text-item dict and show it."""
         self.blockSignals(True)
         self._label_item_id = text_item_id
-        self._label_item_rotation = float(data.get("rotation", 0.0) or 0.0)
         placement = data.get("placement", None)
         idx = next(
             (i for i, (_k, v) in enumerate(self._label_item_placement_options)
@@ -3572,10 +3563,9 @@ class Inspector(QWidget):
                 self.row_height.setValue(row_data.get("height_ratio", 1.0))
                 # Column ratios
                 col_ratios = row_data.get("column_ratios", [])
-                if col_ratios:
-                    self.col_ratios_edit.setText(",".join(str(r) for r in col_ratios))
-                else:
-                    self.col_ratios_edit.setText("")
+                # Divider drags store full-precision ratios; show 2 decimals.
+                self._col_ratios_shown = ", ".join(f"{round(r, 2):g}" for r in col_ratios)
+                self.col_ratios_edit.setText(self._col_ratios_shown)
                 self.blockSignals(False)
             else:
                 self.row_group.hide()

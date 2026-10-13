@@ -104,6 +104,23 @@ def make_icon(name: str, color: str, size: int = 20) -> QIcon:
     return QIcon(_SvgIconEngine(svg_text.encode("utf-8")))
 
 
+_RENDERERS = {}
+
+
+def render_icon(painter, name: str, color: str, rect) -> None:
+    """Paint the named SVG into *rect* with *painter* (cached per name and colour)."""
+    key = (name, color)
+    renderer = _RENDERERS.get(key)
+    if renderer is None:
+        try:
+            with open(os.path.join(_icons_dir(), f"{name}.svg"), "r", encoding="utf-8") as fh:
+                svg_text = fh.read()
+        except FileNotFoundError:
+            return
+        renderer = _RENDERERS[key] = QSvgRenderer(QByteArray(svg_text.replace("currentColor", color).encode("utf-8")))
+    renderer.render(painter, QRectF(rect))
+
+
 def available_icons() -> list[str]:
     """Names of all icons found in ``assets/icons/``."""
     d = _icons_dir()
