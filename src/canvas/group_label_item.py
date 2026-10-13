@@ -18,6 +18,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QGraphicsItem, QGraphicsObject
 
+from src.canvas import canvas_accent
 from src.app.motion import start_animation
 from src.utils import group_label_render
 
@@ -135,7 +136,7 @@ class GroupLabelItem(QGraphicsObject):
 
         if not preview and (self.isSelected() or self._hover) and not self._dragging:
             painter.save()
-            colour = QColor("#4A90D9" if self.isSelected() else "#B0B0B0")
+            colour = canvas_accent.accent() if self.isSelected() else QColor("#B0B0B0")
             pen = QPen(colour, 0.3, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)

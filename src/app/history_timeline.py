@@ -1,98 +1,118 @@
 """Undo history rendered as a vertical timeline.
 
 A :class:`QUndoView` subclass with a custom delegate: every undoable step
-gets a node on a left-hand rail. Nodes above the current position (already
-applied) are filled, the current position is ringed in the accent colour,
-and steps that have been undone are hollow — so the "time axis" of the
-project is readable at a glance. Clicking any node jumps the stack to that
-index (native QUndoView behaviour).
+gets a node on a left-hand rail. Steps already applied are filled, the
+current position is marked with a halo and an accent pill, and undone steps
+are dashed and hollow. The clean (saved) state carries a success dot.
+Clicking any node jumps the stack to that index (native QUndoView behaviour).
 """
 
-from PyQt6.QtCore import QRectF, QSize, Qt
-from PyQt6.QtGui import QPainter, QPen
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPen
 from PyQt6.QtWidgets import QStyle, QStyledItemDelegate, QUndoView
 
 from src.app.theme import token_color
 
-_RAIL_X = 12        # rail centre, px from the item's left edge
-_DOT_R = 3.5        # normal node radius
-_CUR_R = 5.0        # current-node radius
-_ROW_H = 22
-
 
 class _TimelineDelegate(QStyledItemDelegate):
+    ROW_H = 28
+    RAIL_X = 16
+    TEXT_X = 30
+
     def __init__(self, view: "HistoryTimeline"):
         super().__init__(view)
         self._view = view
 
     def sizeHint(self, option, index):
-        return QSize(option.rect.width(), _ROW_H)
+        return QSize(option.rect.width(), self.ROW_H)
 
     def paint(self, painter: QPainter, option, index):
+        colors = self._view._colors
+
+        def c(key):
+            return token_color(colors[key])
+
+        stack = self._view.stack()
+        current = stack.index() if stack is not None else 0
+        clean = stack.cleanIndex() if stack is not None else -1
+        row = index.row()
+        count = index.model().rowCount()
+        r = QRectF(option.rect)
+        rail_x = r.left() + self.RAIL_X
+        cy = r.top() + r.height() / 2
+
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        colors = self._view._colors
-        stack = self._view.stack()
-        current = stack.index() if stack else 0
-        row = index.row()
-        r = option.rect
-        rail_x = r.left() + _RAIL_X
-        cy = r.center().y()
 
-        # Selection / hover wash
-        if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(r, token_color(colors["hover"]))
+        pill = r.adjusted(4, 2, -4, -2)
+        if row == current:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(c("accent_tint")))
+            painter.drawRoundedRect(pill, 6, 6)
         elif option.state & QStyle.StateFlag.State_MouseOver:
-            wash = token_color(colors["hover"])
-            if wash.alpha() > 80:
-                wash.setAlpha(80)
-            painter.fillRect(r, wash)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(c("hover")))
+            painter.drawRoundedRect(pill, 6, 6)
 
-        # Rail segments: up to previous row, down to next row
-        rail_pen = QPen(token_color(colors["border"]))
-        rail_pen.setWidthF(1.0)
-        painter.setPen(rail_pen)
+        applied_color = c("accent")
+        applied_color.setAlphaF(0.45)
+        applied = QPen(applied_color, 1.5)
+        applied.setCapStyle(Qt.PenCapStyle.FlatCap)
+        future = QPen(c("border_strong"), 1.2, Qt.PenStyle.CustomDashLine)
+        future.setDashPattern([2, 2.5])
+
         if row > 0:
-            painter.drawLine(int(rail_x), r.top(), int(rail_x), int(cy))
-        painter.drawLine(int(rail_x), int(cy), int(rail_x), r.bottom() + 1)
+            painter.setPen(applied if row <= current else future)
+            painter.drawLine(QPointF(rail_x, r.top()), QPointF(rail_x, cy))
+        if row < count - 1:
+            painter.setPen(applied if row < current else future)
+            painter.drawLine(QPointF(rail_x, cy), QPointF(rail_x, r.bottom() + 1))
 
-        # Node
-        if row == 0:
-            # Clean state — keep the classic save icon instead of a dot
-            icon = self._view.cleanIcon()
-            if not icon.isNull():
-                icon.paint(painter, int(rail_x - 6), int(cy - 6), 12, 12)
+        accent = c("accent")
+        centre = QPointF(rail_x, cy)
+        if row == current:
+            halo = QColor(accent)
+            halo.setAlphaF(0.18)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(halo))
+            painter.drawEllipse(centre, 6, 6)
+            painter.setBrush(QBrush(accent))
+            painter.drawEllipse(centre, 3.5, 3.5)
+        elif row == 0:
+            painter.setPen(QPen(c("text_sec"), 1.4))
+            painter.setBrush(QBrush(c("panel")))
+            painter.drawEllipse(centre, 3.5, 3.5)
+        elif row < current:
+            dot = QColor(accent)
+            dot.setAlphaF(0.55)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(dot))
+            painter.drawEllipse(centre, 3, 3)
         else:
-            if row == current:
-                painter.setPen(QPen(token_color(colors["accent"]), 1.6))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(QRectF(rail_x - _CUR_R, cy - _CUR_R,
-                                           _CUR_R * 2, _CUR_R * 2))
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(token_color(colors["accent"]))
-                painter.drawEllipse(QRectF(rail_x - 2, cy - 2, 4, 4))
-            elif row < current:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(token_color(colors["text_sec"]))
-                painter.drawEllipse(QRectF(rail_x - _DOT_R, cy - _DOT_R,
-                                           _DOT_R * 2, _DOT_R * 2))
-            else:
-                # Undone (future) step — hollow, muted
-                painter.setPen(QPen(token_color(colors["border"]), 1.2))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawEllipse(QRectF(rail_x - _DOT_R, cy - _DOT_R,
-                                           _DOT_R * 2, _DOT_R * 2))
+            painter.setPen(QPen(c("border_strong"), 1.2))
+            painter.setBrush(QBrush(c("panel")))
+            painter.drawEllipse(centre, 3, 3)
 
-        # Text — undone steps render muted
-        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        if row > current:
-            painter.setPen(token_color(colors["text_tert"]))
-        else:
-            painter.setPen(token_color(colors["text"]))
-        text_rect = r.adjusted(_RAIL_X + 10, 0, -6, 0)
-        painter.drawText(text_rect,
-                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                         text)
+        font = QFont(option.font)
+        if row == current:
+            font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.setPen(c("text") if row <= current else c("text_tert"))
+        text_left = r.left() + self.TEXT_X
+        right = r.right() - 6 - (14 if row == clean else 0)
+        text_rect = QRectF(text_left, r.top(), max(0.0, right - text_left), r.height())
+        text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        elided = QFontMetrics(font).elidedText(
+            text, Qt.TextElideMode.ElideRight, int(text_rect.width()))
+        painter.drawText(
+            text_rect,
+            int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
+            elided)
+
+        if row == clean:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(c("success")))
+            painter.drawEllipse(QPointF(r.right() - 10, cy), 2.5, 2.5)
         painter.restore()
 
 
@@ -102,8 +122,10 @@ class HistoryTimeline(QUndoView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._colors = {
-            "accent": "#0891B2", "text": "#1F2328", "text_sec": "#6E7781",
-            "text_tert": "#8C959F", "border": "#D0D7DE", "hover": "#F0F3F6",
+            "accent": "#4F5BD5", "accent_tint": "rgba(79, 91, 213, 0.10)",
+            "hover": "rgba(31, 30, 28, 0.05)", "border_strong": "#CFCCC6",
+            "panel": "#FBFAF9", "success": "#2F8F5B", "text": "#1F1E1C",
+            "text_sec": "#6B6862", "text_tert": "#9A968F",
         }
         self.setItemDelegate(_TimelineDelegate(self))
         self.setUniformItemSizes(True)

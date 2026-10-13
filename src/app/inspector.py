@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QScrollArea, QColorDialog, QFrame, QSizePolicy
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QPropertyAnimation, QEasingCurve, pyqtProperty, QSize, QRect, QRectF, QVariantAnimation, QLocale, QSignalBlocker
-from PyQt6.QtGui import QColor, QPainter, QPalette, QFont, QFontMetrics, QPen, QDoubleValidator
+from PyQt6.QtGui import QColor, QPainter, QPalette, QFont, QFontMetrics, QPen, QDoubleValidator, QIcon, QPixmap
 import os
 from typing import Optional
 from src.app.motion import start_animation, MotionTween
@@ -13,9 +13,17 @@ from src.model.enums import FitMode
 from src.app.scale_bar_mappings import load_mappings, mapping_names
 from src.app.i18n import tr
 from src.app.wheel_guard import install_wheel_guard
+from src.app.auto_spinbox import AutoDoubleSpinBox
+from src.app.pictogram_combo import PictogramCombo
+from src.app.numbering_preview_widget import NumberingPreview
+from src.app.scheme_picker import SchemePicker
+from src.app.pictograms import INSPECTOR_PICTOGRAMS as _PG, draw_pictogram
+from src.app.resizable_text_edit import ResizableTextEdit
+from src.app.theme import get_tokens, LIGHT
 from src.utils import mark_geometry
 from src.utils.svg_text_utils import format_text_size
 from src.utils.sub_labels import MAX_SUB_LABELS, set_divider
+from src.utils.text_content import editor_to_stored, stored_to_editor
 
 
 # Sentinel for "mixed values across a multi-selection". Inspector helpers
@@ -436,7 +444,7 @@ class CollapsibleSection(QWidget):
         outer.setSpacing(0)
         outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        self._header = QWidget()
+        self._header = QFrame()  # QFrame, not QWidget: style sheets only draw borders on frames
         self._header.setObjectName("sectionHead")
         self._header.setCursor(Qt.CursorShape.PointingHandCursor)
         self._header.setFixedHeight(34)
@@ -652,7 +660,7 @@ class ReflowCard(QFrame):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         t = self._tokens
-        accent = QColor(t.get("accent", "#0891B2"))
+        accent = QColor(t.get("accent", get_tokens(LIGHT)["accent"]))
         surface = QColor(t.get("surface", "#FFFFFF"))
         border = QColor(t.get("border", "#D8D8D8"))
         text_c = QColor(t.get("text", "#1C1C1E"))
@@ -689,10 +697,9 @@ class ReflowCard(QFrame):
             self._reflow_icon_color = icon_color
         self._reflow_icon.paint(painter, QRect(10, 7, 24, 24))
 
-        # Wordmark + state word — heavy italic, RTX style.
+        # Wordmark + state word — heavy upright weight.
         mark_font = QFont()
         mark_font.setPixelSize(15)
-        mark_font.setItalic(True)
         mark_font.setWeight(QFont.Weight.Black)
         painter.setFont(mark_font)
         fm = QFontMetrics(mark_font)
@@ -838,6 +845,7 @@ class _PlotTextSizeChip(QWidget):
 
 
 class Inspector(QWidget):
+    _label_sub_separator = ""
     # Signals for property changes
     cell_property_changed = pyqtSignal(dict) # {property: value}
     match_text_size_requested = pyqtSignal(str)  # cell id
@@ -961,7 +969,7 @@ class Inspector(QWidget):
         self.m_bottom = self._create_spinbox(0, 100, self._emit_project_margins)
         self.m_left = self._create_spinbox(0, 100, self._emit_project_margins)
         self.m_right = self._create_spinbox(0, 100, self._emit_project_margins)
-        
+
         self.project_layout.addRow(self._fl("lbl_margin_top"),    self.m_top)
         self.project_layout.addRow(self._fl("lbl_margin_bottom"), self.m_bottom)
         self.project_layout.addRow(self._fl("lbl_margin_left"),   self.m_left)
@@ -971,12 +979,12 @@ class Inspector(QWidget):
         self._sec_grid = QLabel("<b>Grid Settings</b>")
         self.project_layout.addRow(self._sec_grid)
         
-        self.grid_mode = QComboBox()
+        self.grid_mode = PictogramCombo(_PG["grid_mode"])
         self.grid_mode.addItems([tr("opt_grid_stretch"), tr("opt_grid_fixed")])
         self.grid_mode.currentIndexChanged.connect(self._on_grid_mode_changed)
         self.project_layout.addRow(self._fl("lbl_grid_mode"), self.grid_mode)
 
-        self.row_alignment = QComboBox()
+        self.row_alignment = PictogramCombo(_PG["row_alignment"])
         self.row_alignment.addItems([tr("opt_row_left"), tr("opt_row_center"), tr("opt_row_right")])
         self.row_alignment.currentIndexChanged.connect(self._on_row_alignment_changed)
         self.project_layout.addRow(self._fl("lbl_row_align"), self.row_alignment)
@@ -1010,7 +1018,7 @@ class Inspector(QWidget):
         self._sec_label_placement = QLabel(tr("sec_label_placement"))
         self.project_layout.addRow(self._sec_label_placement)
 
-        self.label_placement_combo = QComboBox()
+        self.label_placement_combo = PictogramCombo(_PG["label_placement"])
         # (i18n_key, value)
         self._label_placement_options = [
             ("placement_in_cell",   "in_cell"),
@@ -1032,7 +1040,7 @@ class Inspector(QWidget):
         self._sec_label_hierarchy = QLabel(tr("sec_label_hierarchy"))
         self.project_layout.addRow(self._sec_label_hierarchy)
 
-        self.label_sub_scheme_combo = QComboBox()
+        self.label_sub_scheme_combo = SchemePicker()
         self._label_sub_scheme_options = [("opt_scheme_none", "")] + [
             (None, s) for s in self._numbering_schemes()
         ]
@@ -1050,6 +1058,10 @@ class Inspector(QWidget):
             lambda v: self.project_property_changed.emit({"label_sub_prefix_parent": v})
         )
         self.project_layout.addRow("", self.label_sub_prefix_chk)
+        self.numbering_preview = NumberingPreview()
+        self.project_layout.addRow(self.numbering_preview)
+        self.label_sub_scheme_combo.currentIndexChanged.connect(self._update_numbering_preview)
+        self.label_sub_prefix_chk.toggled.connect(self._update_numbering_preview)
 
         # Panel Title Defaults (title tier: descriptive captions)
         self._sec_title_tier = QLabel(tr("sec_title_tier"))
@@ -1104,7 +1116,7 @@ class Inspector(QWidget):
         self.cell_group = CollapsibleSection("Selected Cell")
         self.cell_layout = self.cell_group._form
         
-        self.fit_mode_combo = QComboBox()
+        self.fit_mode_combo = PictogramCombo(_PG["fit_mode"])
         self.fit_mode_combo.addItems([m.value for m in FitMode])
         self.fit_mode_combo.currentTextChanged.connect(
             lambda t: self.cell_property_changed.emit({"fit_mode": t})
@@ -1120,7 +1132,7 @@ class Inspector(QWidget):
 
         self.cell_layout.addRow(self._fl("lbl_fit_mode"), self.fit_mode_combo)
         
-        self.rotation_combo = QComboBox()
+        self.rotation_combo = PictogramCombo(_PG["rotation"], caption_suffix="°")
         self.rotation_combo.addItems(["0", "90", "180", "270"])
         self.rotation_combo.currentTextChanged.connect(
             lambda t: self.cell_property_changed.emit({"rotation": int(t)})
@@ -1139,21 +1151,21 @@ class Inspector(QWidget):
         self.align_button_group.setExclusive(True)
         self._align_buttons: dict[tuple[str, str], QToolButton] = {}
 
-        # (row, col) -> ((align_h, align_v), glyph, tooltip_key)
+        # (row, col) -> ((align_h, align_v), tooltip_key); icons come from _refresh_align_icons
         _ALIGN_CELLS = [
-            (0, 0, "left",   "top",    "↖", "tip_align_tl"),
-            (0, 1, "center", "top",    "↑", "tip_align_tc"),
-            (0, 2, "right",  "top",    "↗", "tip_align_tr"),
-            (1, 0, "left",   "center", "←", "tip_align_ml"),
-            (1, 1, "center", "center", "•", "tip_align_mc"),
-            (1, 2, "right",  "center", "→", "tip_align_mr"),
-            (2, 0, "left",   "bottom", "↙", "tip_align_bl"),
-            (2, 1, "center", "bottom", "↓", "tip_align_bc"),
-            (2, 2, "right",  "bottom", "↘", "tip_align_br"),
+            (0, 0, "left",   "top",    "tip_align_tl"),
+            (0, 1, "center", "top",    "tip_align_tc"),
+            (0, 2, "right",  "top",    "tip_align_tr"),
+            (1, 0, "left",   "center", "tip_align_ml"),
+            (1, 1, "center", "center", "tip_align_mc"),
+            (1, 2, "right",  "center", "tip_align_mr"),
+            (2, 0, "left",   "bottom", "tip_align_bl"),
+            (2, 1, "center", "bottom", "tip_align_bc"),
+            (2, 2, "right",  "bottom", "tip_align_br"),
         ]
-        for r, c, h, v, glyph, tip_key in _ALIGN_CELLS:
+        for r, c, h, v, tip_key in _ALIGN_CELLS:
             btn = QToolButton()
-            btn.setText(glyph)
+            btn.setIconSize(QSize(18, 18))
             btn.setCheckable(True)
             btn.setAutoRaise(False)
             btn.setFixedSize(26, 26)
@@ -1165,6 +1177,7 @@ class Inspector(QWidget):
             _align_grid.addWidget(btn, r, c)
             self.align_button_group.addButton(btn)
             self._align_buttons[(h, v)] = btn
+        self._refresh_align_icons(get_tokens(LIGHT))
 
         self.cell_layout.addRow(self._fl("lbl_alignment"), self.align_grid_widget)
         
@@ -1183,8 +1196,11 @@ class Inspector(QWidget):
 
         self._sec_grid_override = QLabel("— Grid Size Override (0=Auto) —")
         self.cell_layout.addRow(self._sec_grid_override)
-        self.override_w = self._create_spinbox(0, 1000, self._on_override_w_changed)
-        self.override_h = self._create_spinbox(0, 1000, self._on_override_h_changed)
+        self.override_w = self._create_spinbox(0, 1000, self._on_override_w_changed, AutoDoubleSpinBox)
+        self.override_h = self._create_spinbox(0, 1000, self._on_override_h_changed, AutoDoubleSpinBox)
+        for spin in (self.override_w, self.override_h):
+            spin.setSuffix(" mm")
+            spin.setSpecialValueText(tr("special_auto"))
         # Ratio held by the lock when the cell has no measurable image.
         self._locked_ratio = None
         for spin in (self.override_w, self.override_h):
@@ -1213,8 +1229,11 @@ class Inspector(QWidget):
         self.cell_layout.addRow(self._fl("lbl_size_group_name"), self.size_group_name_edit)
 
         # Pinned shared W/H
-        self.size_group_pinned_w = self._create_spinbox(0, 1000, self._emit_size_group_pinned)
-        self.size_group_pinned_h = self._create_spinbox(0, 1000, self._emit_size_group_pinned)
+        self.size_group_pinned_w = self._create_spinbox(0, 1000, self._emit_size_group_pinned, AutoDoubleSpinBox)
+        self.size_group_pinned_h = self._create_spinbox(0, 1000, self._emit_size_group_pinned, AutoDoubleSpinBox)
+        for spin in (self.size_group_pinned_w, self.size_group_pinned_h):
+            spin.setSuffix(" mm")
+            spin.setSpecialValueText(tr("special_auto"))
         self.cell_layout.addRow(self._fl("lbl_size_group_pinned_w"), self.size_group_pinned_w)
         self.cell_layout.addRow(self._fl("lbl_size_group_pinned_h"), self.size_group_pinned_h)
 
@@ -1257,7 +1276,7 @@ class Inspector(QWidget):
             -100, 100, lambda v: self._emit_padding("padding_left", v))
         self.pad_right = self._create_spinbox(
             -100, 100, lambda v: self._emit_padding("padding_right", v))
-        
+
         self.cell_layout.addRow(self._fl("lbl_pad_top"),    self.pad_top)
         self.cell_layout.addRow(self._fl("lbl_pad_bottom"), self.pad_bottom)
         self.cell_layout.addRow(self._fl("lbl_pad_left"),   self.pad_left)
@@ -1360,7 +1379,7 @@ class Inspector(QWidget):
         self.scale_bar_thickness.valueChanged.connect(self._emit_scale_bar)
         self.scale_bar_layout.addRow(self._fl("lbl_thickness"), self.scale_bar_thickness)
         
-        self.scale_bar_position = QComboBox()
+        self.scale_bar_position = PictogramCombo(_PG["scale_bar_position"])
         # (i18n_key, stored value) — display translates, data stays stable
         self._scale_bar_position_options = [
             ("pos_bottom_left",   "bottom_left"),
@@ -1449,6 +1468,10 @@ class Inspector(QWidget):
         self.label_this_label_heading = QLabel(tr("lbl_this_label"))
         self.label_cell_layout.addRow(self.label_this_label_heading)
 
+        self.label_align = LabelAlignPicker()
+        self.label_align.align_changed.connect(self._on_label_align_preset_changed)
+        self.label_cell_layout.addRow(self._fl("lbl_align"), self.label_align)
+
         self._label_item_placement_options = [
             ("opt_placement_inherit", None),
             ("placement_in_cell",     "in_cell"),
@@ -1466,7 +1489,7 @@ class Inspector(QWidget):
             ("opt_tier_title", "title"),
         ]
 
-        self.label_cell_placement_combo = QComboBox()
+        self.label_cell_placement_combo = PictogramCombo(_PG["label_cell_placement"])
         for key, _val in self._label_cell_placement_options:
             self.label_cell_placement_combo.addItem(tr(key))
         self.label_cell_placement_combo.currentIndexChanged.connect(
@@ -1476,7 +1499,7 @@ class Inspector(QWidget):
         )
         self.label_cell_layout.addRow(self._fl("lbl_label_placement"), self.label_cell_placement_combo)
 
-        self.label_cell_tier_combo = QComboBox()
+        self.label_cell_tier_combo = PictogramCombo(_PG["label_tier"])
         for key, _val in self._label_item_tier_options:
             self.label_cell_tier_combo.addItem(tr(key))
         self.label_cell_tier_combo.currentIndexChanged.connect(
@@ -1513,10 +1536,6 @@ class Inspector(QWidget):
         self.label_color = ColorPickerWidget()
         self.label_color.colorChanged.connect(self._on_label_color_changed)
         self.label_cell_layout.addRow(self._fl("lbl_color"), self.label_color)
-
-        self.label_align = LabelAlignPicker()
-        self.label_align.align_changed.connect(self._on_label_align_preset_changed)
-        self.label_cell_layout.addRow(self._fl("lbl_align"), self.label_align)
 
         self.label_offset_x = QDoubleSpinBox()
         self.label_offset_x.setRange(-100.0, 100.0)
@@ -1615,15 +1634,16 @@ class Inspector(QWidget):
         self.label_all_labels_heading = QLabel(tr("lbl_all_labels"))
         self.label_cell_layout.addRow(self.label_all_labels_heading)
 
-        self.label_scheme = QComboBox()
+        self.label_scheme = SchemePicker()
         self.label_scheme.addItems(self._numbering_schemes())
         self.label_scheme.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_scheme": t})
         )
         self.label_scheme.currentTextChanged.connect(self.label_align.set_sample)
+        self.label_scheme.currentTextChanged.connect(self._update_numbering_preview)
         self.label_cell_layout.addRow(self._fl("lbl_scheme"), self.label_scheme)
 
-        self.label_row_height = QDoubleSpinBox()
+        self.label_row_height = AutoDoubleSpinBox()
         self.label_row_height.setRange(0.0, 50.0)
         self.label_row_height.setSingleStep(0.5)
         self.label_row_height.setDecimals(1)
@@ -1635,7 +1655,7 @@ class Inspector(QWidget):
         )
         self.label_cell_layout.addRow(self._fl("lbl_row_height"), self.label_row_height)
 
-        self.label_col_width_spin = QDoubleSpinBox()
+        self.label_col_width_spin = AutoDoubleSpinBox()
         self.label_col_width_spin.setRange(0.0, 200.0)
         self.label_col_width_spin.setSingleStep(0.5)
         self.label_col_width_spin.setDecimals(1)
@@ -1657,7 +1677,7 @@ class Inspector(QWidget):
         self.label_item_layout = self.label_item_group._form
         self._label_item_id = None
 
-        self.label_item_placement_combo = QComboBox()
+        self.label_item_placement_combo = PictogramCombo(_PG["label_item_placement"])
         for key, _val in self._label_item_placement_options:
             self.label_item_placement_combo.addItem(tr(key))
         self.label_item_placement_combo.currentIndexChanged.connect(
@@ -1667,7 +1687,7 @@ class Inspector(QWidget):
         )
         self.label_item_layout.addRow(self._fl("lbl_label_placement"), self.label_item_placement_combo)
 
-        self.label_item_tier_combo = QComboBox()
+        self.label_item_tier_combo = PictogramCombo(_PG["label_tier"])
         for key, _val in self._label_item_tier_options:
             self.label_item_tier_combo.addItem(tr(key))
         self.label_item_tier_combo.currentIndexChanged.connect(
@@ -1691,10 +1711,6 @@ class Inspector(QWidget):
         self.label_item_layout.addRow("", self.label_item_style_row)
         self.label_item_style_row.hide()
 
-        self.label_item_rotate_btn = QPushButton(tr("btn_rotate_label"))
-        self.label_item_rotate_btn.clicked.connect(self._on_label_item_rotate)
-        self.label_item_layout.addRow("", self.label_item_rotate_btn)
-
         self.layout.addWidget(self.label_item_group)
         self.label_item_group.hide()
 
@@ -1710,7 +1726,7 @@ class Inspector(QWidget):
         )
         self.group_label_layout.addRow(self._fl("lbl_text"), self.gl_text_edit)
 
-        self.gl_side_combo = QComboBox()
+        self.gl_side_combo = PictogramCombo(_PG["gl_side"])
         self._gl_side_options = [
             ("placement_row_above", "top"),
             ("placement_row_below", "bottom"),
@@ -1723,8 +1739,10 @@ class Inspector(QWidget):
             lambda i: self._emit_group_label_change({"side": self._gl_side_options[i][1]})
         )
         self.group_label_layout.addRow(self._fl("lbl_side"), self.gl_side_combo)
+        self.gl_side_combo.currentIndexChanged.connect(
+            lambda i: self._sync_gl_align_orientation(self._gl_side_options[i][1]))
 
-        self.gl_align_combo = QComboBox()
+        self.gl_align_combo = PictogramCombo(_PG["gl_align"])
         self.gl_align_combo.addItems([tr("opt_align_left"), tr("opt_align_center"), tr("opt_align_right")])
         self.gl_align_combo.currentIndexChanged.connect(
             lambda i: self._emit_group_label_change(
@@ -1733,7 +1751,7 @@ class Inspector(QWidget):
         )
         self.group_label_layout.addRow(self._fl("lbl_align"), self.gl_align_combo)
 
-        self.gl_thickness_spin = QDoubleSpinBox()
+        self.gl_thickness_spin = AutoDoubleSpinBox()
         self.gl_thickness_spin.setRange(0.0, 60.0)
         self.gl_thickness_spin.setSingleStep(0.5)
         self.gl_thickness_spin.setDecimals(1)
@@ -1762,7 +1780,7 @@ class Inspector(QWidget):
         self.gl_level_label = self._fl("lbl_level")
         self.group_label_layout.addRow(self.gl_level_label, self.gl_level_spin)
 
-        self.gl_rotation_spin = QDoubleSpinBox()
+        self.gl_rotation_spin = AutoDoubleSpinBox()
         self.gl_rotation_spin.setRange(-1.0, 360.0)
         self.gl_rotation_spin.setSingleStep(90.0)
         self.gl_rotation_spin.setDecimals(1)
@@ -1808,7 +1826,7 @@ class Inspector(QWidget):
         self._sec_gl_bracket = QLabel(tr("sec_bracket"))
         self.group_label_layout.addRow(self._sec_gl_bracket)
 
-        self.gl_bracket_combo = QComboBox()
+        self.gl_bracket_combo = PictogramCombo(_PG["gl_bracket"])
         self._gl_bracket_options = [
             ("bracket_none",    "none"),
             ("bracket_line",    "line"),
@@ -1923,7 +1941,7 @@ class Inspector(QWidget):
             lambda v: self._emit_mark_change({"stroke_width_pt": v}))
         self.mark_layout.addRow(self._fl("lbl_line_width"), self.mk_stroke_width)
 
-        self.mk_stroke_style = QComboBox()
+        self.mk_stroke_style = PictogramCombo(_PG["mk_stroke_style"])
         for key, _v in self._mk_line_style_options:
             self.mk_stroke_style.addItem(tr(key))
         self.mk_stroke_style.currentIndexChanged.connect(
@@ -1991,7 +2009,7 @@ class Inspector(QWidget):
                 lambda v, k=emit_key: self._emit_mark_change({k: v}))
             return s
 
-        self.mk_arrow_start = QComboBox()
+        self.mk_arrow_start = PictogramCombo(_PG["mk_arrow"], mirror=True)
         for key, _v in self._mk_arrow_options:
             self.mk_arrow_start.addItem(tr(key))
         self.mk_arrow_start.currentIndexChanged.connect(
@@ -2007,7 +2025,7 @@ class Inspector(QWidget):
             self._mk_arrow_start_dim_lbl,
             _pair_row("L", self.mk_arrow_start_len, "W", self.mk_arrow_start_wid))
 
-        self.mk_arrow_end = QComboBox()
+        self.mk_arrow_end = PictogramCombo(_PG["mk_arrow"])
         for key, _v in self._mk_arrow_options:
             self.mk_arrow_end.addItem(tr(key))
         self.mk_arrow_end.currentIndexChanged.connect(
@@ -2045,7 +2063,7 @@ class Inspector(QWidget):
             lambda v: self.row_property_changed.emit({"height_ratio": v})
         )
         self.row_layout.addRow(self._fl("lbl_height_ratio"), self.row_height)
-        
+
         # Column ratios (comma-separated, e.g. "1,2,1" for 25%-50%-25%)
         self.col_ratios_edit = QLineEdit()
         self.col_ratios_edit.setPlaceholderText(tr("placeholder_col_ratios"))
@@ -2072,7 +2090,7 @@ class Inspector(QWidget):
         self.subcell_ratio.valueChanged.connect(self._emit_subcell_ratio)
         self.subcell_layout.addRow(self._fl("lbl_size_ratio"), self.subcell_ratio)
 
-        self.subcell_fixed_size = QDoubleSpinBox()
+        self.subcell_fixed_size = AutoDoubleSpinBox()
         self.subcell_fixed_size.setRange(0.0, 2000.0)
         self.subcell_fixed_size.setSingleStep(1.0)
         self.subcell_fixed_size.setDecimals(2)
@@ -2121,7 +2139,7 @@ class Inspector(QWidget):
         )
         self.pip_layout.addRow(self.pip_border_enabled)
 
-        self.pip_border_style = QComboBox()
+        self.pip_border_style = PictogramCombo(_PG["pip_border_style"])
         self._pip_border_style_values = ["solid", "dashed"]
         self.pip_border_style.addItems([tr("opt_border_solid"), tr("opt_border_dashed")])
         self.pip_border_style.currentIndexChanged.connect(
@@ -2167,9 +2185,11 @@ class Inspector(QWidget):
         self.text_group = CollapsibleSection("Selected Text")
         self.text_layout = self.text_group._form
         
-        self.text_content = QLineEdit()
-        self.text_content.editingFinished.connect(
-            lambda: self.text_property_changed.emit({"text": self.text_content.text()})
+        self.text_content = ResizableTextEdit(settings_key="inspector/text_content_height")
+        self.text_content.setObjectName("inspectorTextContent")
+        self.text_content.setToolTip(tr("tip_text_content"))
+        self.text_content.committed.connect(
+            lambda t: self.text_property_changed.emit({"text": editor_to_stored(t)})
         )
         self.text_layout.addRow(self._fl("lbl_content"), self.text_content)
         
@@ -2280,7 +2300,7 @@ class Inspector(QWidget):
         self.text_layout.addRow(self._fl("lbl_bg_padding"), self.text_bg_padding)
 
         # Scheme selector — only shown for in-cell numbering labels (not corner labels)
-        self._incell_scheme = QComboBox()
+        self._incell_scheme = SchemePicker()
         self._incell_scheme.addItems(self._numbering_schemes())
         self._incell_scheme.currentTextChanged.connect(
             lambda t: self.project_property_changed.emit({"label_scheme": t})
@@ -2366,6 +2386,7 @@ class Inspector(QWidget):
         self._refresh_plot_text()
         self.svg_normalize_chk.setText(tr("chk_svg_normalize"))
         self.svg_normalize_chk.setToolTip(tr("tip_svg_normalize"))
+        self.text_content.setToolTip(tr("tip_text_content"))
 
         self.scale_bar_enabled.setText(tr("chk_scale_enabled"))
         self.scale_bar_show_text.setText(tr("chk_scale_text"))
@@ -2383,6 +2404,7 @@ class Inspector(QWidget):
 
         for key, lbl in self._lbl_registry:
             lbl.setText(tr(key))
+        self.numbering_preview.setToolTip(tr("numbering_preview_label"))
 
         self.no_selection_label.setText(tr("no_selection"))
         self._update_typography_labels()
@@ -2428,6 +2450,10 @@ class Inspector(QWidget):
         
         self.scale_bar_custom_text.setPlaceholderText(tr("placeholder_scale_bar_text"))
         self.label_text_edit.setPlaceholderText(tr("placeholder_label_text"))
+        self.override_w.setSpecialValueText(tr("special_auto"))
+        self.override_h.setSpecialValueText(tr("special_auto"))
+        self.size_group_pinned_w.setSpecialValueText(tr("special_auto"))
+        self.size_group_pinned_h.setSpecialValueText(tr("special_auto"))
         self.label_row_height.setSpecialValueText(tr("special_auto"))
         self.label_col_width_spin.setSpecialValueText(tr("special_auto"))
         self.col_ratios_edit.setPlaceholderText(tr("placeholder_col_ratios"))
@@ -2440,7 +2466,6 @@ class Inspector(QWidget):
         self.gl_color.retranslate_ui()
         self.gl_bracket_color.retranslate_ui()
 
-        self.label_item_rotate_btn.setText(tr("btn_rotate_label"))
         self.label_cell_rotate_btn.setText(tr("btn_rotate_label"))
         self.label_cell_reset_style_btn.setText(tr("btn_reset_tier_style"))
         self.label_cell_reset_style_btn.setToolTip(tr("tip_reset_tier_style"))
@@ -2478,6 +2503,7 @@ class Inspector(QWidget):
         color = tokens.get("text", "#333333")
         self._icon_theme_color = color
         self.reflow_card.apply_tokens(tokens)
+        self._refresh_align_icons(tokens)
         self._icon_lock_closed = make_icon("lock_closed", color, 16)
         self._icon_lock_open   = make_icon("lock_open",   color, 16)
         locked = self.aspect_lock_btn.isChecked()
@@ -2501,8 +2527,8 @@ class Inspector(QWidget):
             "margin_right_mm": self.m_right.value()
         })
 
-    def _create_spinbox(self, min_val, max_val, callback):
-        sb = QDoubleSpinBox()
+    def _create_spinbox(self, min_val, max_val, callback, cls=QDoubleSpinBox):
+        sb = cls()
         sb.setRange(min_val, max_val)
         sb.valueChanged.connect(callback)
         return sb
@@ -2530,7 +2556,27 @@ class Inspector(QWidget):
                 le.setPlaceholderText("")
             spin.setValue(value)
             if le is not None and not le.text():
-                le.setText(spin.prefix() + spin.textFromValue(spin.value()) + spin.suffix())
+                if spin.specialValueText() and spin.value() == spin.minimum():
+                    text = spin.specialValueText()
+                else:
+                    text = spin.prefix() + spin.textFromValue(spin.value()) + spin.suffix()
+                le.setText(text)
+
+    def _sync_gl_align_orientation(self, side: str):
+        self.gl_align_combo.set_orientation(
+            "vertical" if side in ("left", "right") else "horizontal")
+
+    def _refresh_align_icons(self, tokens: dict) -> None:
+        ink = QColor(tokens["text"])
+        accent = QColor(tokens["accent"])
+        for (h, v), btn in self._align_buttons.items():
+            pixmap = QPixmap(36, 36)
+            pixmap.setDevicePixelRatio(2.0)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            draw_pictogram(f"anchor_{v}_{h}", painter, QRectF(0, 0, 18, 18), ink, accent)
+            painter.end()
+            btn.setIcon(QIcon(pixmap))
 
     def _on_grid_mode_changed(self, index: int):
         mode = "stretch" if index == 0 else "fixed"
@@ -2713,6 +2759,8 @@ class Inspector(QWidget):
             self.size_group_name_edit.blockSignals(False)
             self.size_group_pinned_w.blockSignals(True)
             self.size_group_pinned_h.blockSignals(True)
+            self.size_group_pinned_w.set_auto_value(g_data.get("effective_width_mm"))
+            self.size_group_pinned_h.set_auto_value(g_data.get("effective_height_mm"))
             self.size_group_pinned_w.setValue(g_data.get("pinned_width_mm", 0.0))
             self.size_group_pinned_h.setValue(g_data.get("pinned_height_mm", 0.0))
             self.size_group_pinned_w.blockSignals(False)
@@ -2889,6 +2937,8 @@ class Inspector(QWidget):
 
     def _emit_column_ratios(self):
         text = self.col_ratios_edit.text().strip()
+        if text == getattr(self, "_col_ratios_shown", None):
+            return  # unedited rounded display: keep the stored precision
         if not text:
             self.row_property_changed.emit({"column_ratios": []})
             return
@@ -3070,6 +3120,14 @@ class Inspector(QWidget):
 
     # --- Label item (per-label overrides) helpers ---
 
+    def _update_numbering_preview(self, *_):
+        main = self.label_scheme.currentText() if hasattr(self, "label_scheme") else "(a)"
+        index = self.label_sub_scheme_combo.currentIndex()
+        options = self._label_sub_scheme_options
+        sub = options[index][1] if 0 <= index < len(options) else ""
+        self.numbering_preview.set_scheme(main, sub, self.label_sub_prefix_chk.isChecked(),
+                                          self._label_sub_separator)
+
     @staticmethod
     def _numbering_schemes() -> list:
         from src.utils.label_numbering import SCHEMES
@@ -3079,16 +3137,10 @@ class Inspector(QWidget):
         if self._label_item_id:
             self.label_item_property_changed.emit(self._label_item_id, dict(changes))
 
-    def _on_label_item_rotate(self):
-        """Cycle the selected label's rotation by 90°."""
-        new_rotation = (getattr(self, "_label_item_rotation", 0.0) + 90.0) % 360.0
-        self._emit_label_item_change({"rotation": new_rotation})
-
     def _populate_label_item_group(self, text_item_id, data: dict):
         """Fill the per-label group from a text-item dict and show it."""
         self.blockSignals(True)
         self._label_item_id = text_item_id
-        self._label_item_rotation = float(data.get("rotation", 0.0) or 0.0)
         placement = data.get("placement", None)
         idx = next(
             (i for i, (_k, v) in enumerate(self._label_item_placement_options)
@@ -3123,10 +3175,13 @@ class Inspector(QWidget):
         )
         align_map = {"left": 0, "center": 1, "right": 2}
         self.gl_align_combo.setCurrentIndex(align_map.get(data.get("align", "center"), 1))
+        self._sync_gl_align_orientation(side)
+        self.gl_thickness_spin.set_auto_value(data.get("_effective_thickness_mm"))
         self.gl_thickness_spin.setValue(float(data.get("thickness_mm", 0.0)))
         self.gl_gap_spin.setValue(float(data.get("gap_mm", 1.0)))
         self.gl_level_spin.setValue(int(data.get("level", 0)))
         rotation = data.get("rotation")
+        self.gl_rotation_spin.set_auto_value(data.get("_effective_rotation"))
         self.gl_rotation_spin.setValue(-1.0 if rotation is None else float(rotation))
         self.gl_font_combo.setCurrentText(data.get("font_family", "Arial"))
         self.gl_size_spin.setValue(float(data.get("font_size_pt", 12.0)))
@@ -3364,6 +3419,8 @@ class Inspector(QWidget):
                 # each override field emits only its own key.
                 self._current_cell_aspect_ratio = None
                 self._locked_ratio = None
+                self.override_w.set_auto_value(None)
+                self.override_h.set_auto_value(None)
                 self._set_spin(self.override_w, data.get("override_width_mm", 0.0))
                 self._set_spin(self.override_h, data.get("override_height_mm", 0.0))
                 self.aspect_lock_btn.blockSignals(True)
@@ -3442,6 +3499,8 @@ class Inspector(QWidget):
                     else data.get("label_align", "center"))
                 self.label_offset_x.setValue(data.get("label_offset_x", 0.0))
                 self.label_offset_y.setValue(data.get("label_offset_y", 0.0))
+                self.label_row_height.set_auto_value(data.get("_effective_row_height_mm"))
+                self.label_col_width_spin.set_auto_value(data.get("_effective_col_width_mm"))
                 self.label_row_height.setValue(data.get("label_row_height", 0.0))
                 self.label_col_width_spin.setValue(data.get("label_col_width", 0.0))
                 self._populate_sub_labels(data)
@@ -3504,10 +3563,9 @@ class Inspector(QWidget):
                 self.row_height.setValue(row_data.get("height_ratio", 1.0))
                 # Column ratios
                 col_ratios = row_data.get("column_ratios", [])
-                if col_ratios:
-                    self.col_ratios_edit.setText(",".join(str(r) for r in col_ratios))
-                else:
-                    self.col_ratios_edit.setText("")
+                # Divider drags store full-precision ratios; show 2 decimals.
+                self._col_ratios_shown = ", ".join(f"{round(r, 2):g}" for r in col_ratios)
+                self.col_ratios_edit.setText(self._col_ratios_shown)
                 self.blockSignals(False)
             else:
                 self.row_group.hide()
@@ -3532,6 +3590,7 @@ class Inspector(QWidget):
                     ratio_label.setText(f"{dim} Ratio:")
                 self._subcell_fixed_size_label.setText(f"Fixed {dim}:")
                 fixed_key = "override_height_mm" if direction == "vertical" else "override_width_mm"
+                self.subcell_fixed_size.set_auto_value(subcell_data.get("effective_size_mm"))
                 self.subcell_fixed_size.setValue(subcell_data.get(fixed_key, 0.0))
                 self.blockSignals(False)
             else:
@@ -3560,6 +3619,8 @@ class Inspector(QWidget):
             # consult it, and a stale value would rewrite the loaded sizes.
             self._current_cell_aspect_ratio = data.get("_image_aspect_ratio")
             self._locked_ratio = None
+            self.override_w.set_auto_value(data.get("_effective_width_mm"))
+            self.override_h.set_auto_value(data.get("_effective_height_mm"))
             self._set_spin(self.override_w, data.get("override_width_mm", 0.0))
             self._set_spin(self.override_h, data.get("override_height_mm", 0.0))
             locked = data.get("aspect_ratio_locked", False)
@@ -3651,7 +3712,7 @@ class Inspector(QWidget):
             self.text_group.show()
             
             self.blockSignals(True)
-            self.text_content.setText(data.get("text", ""))
+            self.text_content.set_committed_text(stored_to_editor(data.get("text", "") or ""))
             self.font_family.setCurrentText(data.get("font_family", "Arial"))
             self.font_size.setValue(float(data.get("font_size_pt", 12.0)))
             self.is_bold.setChecked(data.get("font_weight") == "bold")
@@ -3804,6 +3865,7 @@ class Inspector(QWidget):
                         idx_found = i
                         break
                 self.label_placement_combo.setCurrentIndex(idx_found)
+                self.label_col_width_spin.set_auto_value(effective_project_data.get("_effective_col_width_mm"))
                 self.label_col_width_spin.setValue(
                     float(effective_project_data.get("label_col_width", 10.0))
                 )
@@ -3819,6 +3881,10 @@ class Inspector(QWidget):
                 self.label_sub_prefix_chk.setChecked(
                     bool(effective_project_data.get("label_sub_prefix_parent", False))
                 )
+                self._label_sub_separator = effective_project_data.get("label_sub_separator", "")
+                with QSignalBlocker(self.label_scheme):
+                    self.label_scheme.setCurrentText(effective_project_data.get("label_scheme", "(a)"))
+                self._update_numbering_preview()
 
                 # Panel title defaults
                 self.title_label_font.setCurrentText(

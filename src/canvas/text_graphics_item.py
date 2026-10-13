@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from PyQt6.QtWidgets import QGraphicsTextItem, QGraphicsItem, QStyleOptionGraphicsItem
-from PyQt6.QtGui import QFont, QColor, QPainter, QPixmap
+from PyQt6.QtGui import QFont, QColor, QPainter, QPixmap, QTextCursor
 from PyQt6.QtCore import Qt, QRectF, pyqtSignal
 
 class TextGraphicsItem(QGraphicsTextItem):
@@ -34,6 +34,7 @@ class TextGraphicsItem(QGraphicsTextItem):
 
         # State
         self.is_editing = False
+        self._press_pos = None
 
         # Cell-scoped label info (set by canvas_scene for constrained movement)
         self.cell_bounds = None  # (cx, cy, cw, ch) - content area bounds
@@ -137,15 +138,38 @@ class TextGraphicsItem(QGraphicsTextItem):
             rect = rect.adjusted(-pad, -pad, pad, pad)
         return rect
 
+    def mousePressEvent(self, event):
+        self._press_pos = self.pos()
+        super().mousePressEvent(event)
+
     def mouseDoubleClickEvent(self, event):
         if self.textInteractionFlags() == Qt.TextInteractionFlag.NoTextInteraction:
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
             self.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
             self.setFocus()
             self.is_editing = True
+            pos = self.document().documentLayout().hitTest(
+                event.pos(), Qt.HitTestAccuracy.FuzzyHit)
+            cursor = self.textCursor()
+            if pos < 0 or self._math_pixmap is not None:
+                cursor.movePosition(QTextCursor.MoveOperation.End)
+            else:
+                cursor.setPosition(pos)
+            self.setTextCursor(cursor)
+            event.accept()
+            return
         super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event):
+        if self.is_editing and event.key() == Qt.Key.Key_Escape:
+            self.clearFocus()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def focusOutEvent(self, event):
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         if self.is_editing:
             self.is_editing = False
             # Emit change
@@ -164,7 +188,9 @@ class TextGraphicsItem(QGraphicsTextItem):
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        if self.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable:
+        if self.is_editing:
+            return
+        if self.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable and self.pos() != self._press_pos:
             if self.scope == "cell" and self.cell_bounds and self.anchor:
                 # For cell-scoped labels, calculate offset from anchor position
                 cx, cy, cw, ch = self.cell_bounds

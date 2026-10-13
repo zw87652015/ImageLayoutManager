@@ -6,6 +6,7 @@ there is exactly one place to change colours, radii or shadows.
 
 Public API (stable — do not change signatures):
     build_palette(theme)            -> QPalette
+    apply_app_palette(app, theme)   -> None (palette + macOS colour scheme)
     get_stylesheet(theme)           -> str  (full QSS)
     get_layers_tree_stylesheet(theme) -> str
     get_tokens(theme)               -> dict (for programmatic use:
@@ -13,6 +14,8 @@ Public API (stable — do not change signatures):
                                              layer thumbnails, etc.)
 """
 import os
+import sys
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPalette, QColor, QFont, QFontDatabase
 
 # Resolve assets directory: works both in dev and inside a PyInstaller bundle.
@@ -24,7 +27,6 @@ def _assets_dir() -> str:
         base = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
     return os.path.join(base, "assets").replace("\\", "/")
 
-_CHECK_ON = f"{_assets_dir()}/check_on.svg"
 _ARROW_DOWN_DARK = f"{_assets_dir()}/arrow_down_dark.svg"
 _ARROW_DOWN_LIGHT = f"{_assets_dir()}/arrow_down_light.svg"
 
@@ -32,78 +34,77 @@ DARK = "dark"
 LIGHT = "light"
 
 # ── Design tokens ────────────────────────────────────────────────────────
-# Source of truth for every colour/radius used by the app. Names match the
-# CSS variables in afl-macos-mockup.html / afl-windows-mockup.html 1:1 so
-# future designers can port styles directly.
+# Source of truth for every colour/radius used by the app: a neutral,
+# indigo-accented palette.
 
 _TOKENS_LIGHT = {
     # Surfaces
-    "chrome":        "#ECECEC",
-    "panel":         "#F5F5F5",
-    "panel_alt":     "#FAFAFA",
-    "canvas_bg":     "#E8E8E8",
+    "chrome":        "#F6F5F3",
+    "panel":         "#FBFAF9",
+    "panel_alt":     "#FFFFFF",
+    "canvas_bg":     "#E9EAED",
     "surface":       "#FFFFFF",
-    "surface_subtle":"#F9F9F9",
+    "surface_subtle":"#F5F4F1",
     # Borders / dividers
-    "border":        "#D8D8D8",
-    "border_strong": "#C4C4C4",
-    "divider":       "#E4E4E4",
+    "border":        "#E3E1DD",
+    "border_strong": "#CFCCC6",
+    "divider":       "#ECEAE6",
     # Text
-    "text":          "#1D1D1F",
-    "text_sec":      "#6E6E73",
-    "text_tert":     "#8E8E93",
-    "label_caps":    "#86868B",
+    "text":          "#1F1E1C",
+    "text_sec":      "#6B6862",
+    "text_tert":     "#9A968F",
+    "label_caps":    "#8A867F",
     # Interactive states (rgba on the owning surface)
-    "hover":         "rgba(0, 0, 0, 0.05)",
-    "active":        "rgba(0, 0, 0, 0.09)",
+    "hover":         "rgba(31, 30, 28, 0.05)",
+    "active":        "rgba(31, 30, 28, 0.09)",
     # Brand
-    "accent":        "#0891B2",
-    "accent_hover":  "#0E7490",
-    "accent_press":  "#164E63",
-    "accent_tint":   "rgba(8, 145, 178, 0.12)",
-    "accent_ring":   "rgba(8, 145, 178, 0.35)",
+    "accent":        "#4F5BD5",
+    "accent_hover":  "#4350C4",
+    "accent_press":  "#3640A6",
+    "accent_tint":   "rgba(79, 91, 213, 0.10)",
+    "accent_ring":   "rgba(79, 91, 213, 0.32)",
     "on_accent":     "#FFFFFF",
     # Semantic
-    "danger":        "#DC2626",
-    "success":       "#15803D",
+    "danger":        "#D64545",
+    "success":       "#2F8F5B",
     # Canvas helpers (not QSS — consumed by cell_item / canvas_view paint)
-    "placeholder":   "#AEAEB2",
-    "grid_line":     "#C7C7CC",
+    "placeholder":   "#B4B0A9",
+    "grid_line":     "#D3D4D8",
     # Geometry
-    "radius_panel":  "6px",
-    "radius_button": "4px",
-    "radius_input":  "4px",
+    "radius_panel":  "8px",
+    "radius_button": "6px",
+    "radius_input":  "6px",
 }
 
 _TOKENS_DARK = {
-    "chrome":        "#2C2C2E",
-    "panel":         "#242426",
-    "panel_alt":     "#1F1F21",
-    "canvas_bg":     "#1A1A1C",
-    "surface":       "#2F2F31",
-    "surface_subtle":"#2A2A2C",
-    "border":        "#3A3A3C",
-    "border_strong": "#48484A",
-    "divider":       "#323234",
-    "text":          "#F5F5F7",
-    "text_sec":      "#A1A1A6",
-    "text_tert":     "#6E6E73",
-    "label_caps":    "#8E8E93",
-    "hover":         "rgba(255, 255, 255, 0.06)",
-    "active":        "rgba(255, 255, 255, 0.10)",
-    "accent":        "#22D3EE",
-    "accent_hover":  "#06B6D4",
-    "accent_press":  "#0E7490",
-    "accent_tint":   "rgba(34, 211, 238, 0.14)",
-    "accent_ring":   "rgba(34, 211, 238, 0.40)",
-    "on_accent":     "#001018",
-    "danger":        "#F87171",
-    "success":       "#4ADE80",
-    "placeholder":   "#8E8E93",
-    "grid_line":     "#48484A",
-    "radius_panel":  "6px",
-    "radius_button": "4px",
-    "radius_input":  "4px",
+    "chrome":        "#18191C",
+    "panel":         "#1E1F23",
+    "panel_alt":     "#222328",
+    "canvas_bg":     "#131417",
+    "surface":       "#26282D",
+    "surface_subtle":"#222328",
+    "border":        "#33353B",
+    "border_strong": "#43464D",
+    "divider":       "#2A2C31",
+    "text":          "#ECEBE8",
+    "text_sec":      "#A3A19C",
+    "text_tert":     "#75736F",
+    "label_caps":    "#8C8A85",
+    "hover":         "rgba(255, 255, 255, 0.05)",
+    "active":        "rgba(255, 255, 255, 0.09)",
+    "accent":        "#8C96FF",
+    "accent_hover":  "#A2AAFF",
+    "accent_press":  "#6E79E8",
+    "accent_tint":   "rgba(140, 150, 255, 0.14)",
+    "accent_ring":   "rgba(140, 150, 255, 0.38)",
+    "on_accent":     "#0E1030",
+    "danger":        "#F07171",
+    "success":       "#5CCB8C",
+    "placeholder":   "#6F6D69",
+    "grid_line":     "#2E3036",
+    "radius_panel":  "8px",
+    "radius_button": "6px",
+    "radius_input":  "6px",
 }
 
 
@@ -125,6 +126,7 @@ def _palette_tokens_to_roles(tokens: dict) -> dict:
         QPalette.ColorRole.Highlight:       tokens["accent"],
         QPalette.ColorRole.HighlightedText: tokens["on_accent"],
         QPalette.ColorRole.PlaceholderText: tokens["placeholder"],
+        QPalette.ColorRole.Accent:          tokens["accent"],
     }
 
 
@@ -161,7 +163,35 @@ _QSS_TEMPLATE = """
         font-weight: 500;
         background: transparent;
     }
-    QMainWindow, QWidget {
+    QPushButton#plotViewSegment {
+        background: %(surface)s;
+        border: 1px solid %(border)s;
+        border-radius: 0;
+        padding: 4px 12px;
+        color: %(text_sec)s;
+        margin-left: -1px;
+    }
+    QPushButton#plotViewSegment[segment="first"] {
+        border-top-left-radius: %(radius_button)s;
+        border-bottom-left-radius: %(radius_button)s;
+        margin-left: 0;
+    }
+    QPushButton#plotViewSegment[segment="last"] {
+        border-top-right-radius: %(radius_button)s;
+        border-bottom-right-radius: %(radius_button)s;
+    }
+    QPushButton#plotViewSegment:checked {
+        background: %(accent_tint)s;
+        color: %(accent)s;
+        border-color: %(accent)s;
+    }
+    QMainWindow {
+        background-color: %(panel)s;
+        background: %(chrome)s;
+        color: %(text)s;
+        font-size: %(font_base)s;
+    }
+    QWidget {
         background-color: %(panel)s;
         color: %(text)s;
         font-size: %(font_base)s;
@@ -172,66 +202,87 @@ _QSS_TEMPLATE = """
     QSplitter::handle:hover { background: %(accent)s; }
     QMainWindow::separator { background: transparent; }
 
+    QSplitter#mainSplitter { background: %(panel)s; }
+    QSplitter#mainSplitter::handle { background: %(panel)s; }
+    QSplitter#mainSplitter::handle:hover { background: %(hover)s; }
+
     /* ── Toolbar ───────────────────────────────────────────────────── */
     QToolBar {
         border: none;
         background: %(chrome)s;
-        padding: 8px 12px;
+        padding: 6px 10px;
         border-bottom: 1px solid %(divider)s;
-        spacing: 2px;
+        spacing: 4px;
     }
     QToolBar::separator {
-        background: %(border)s;
+        background: %(divider)s;
         width: 1px; height: 22px;
-        margin: 0 6px;
+        margin: 6px 8px;
     }
     QToolBar QToolButton {
-        border-radius: %(radius_button)s;
-        padding: 6px 10px;
+        border-radius: 7px;
+        padding: 5px 9px;
         color: %(text)s;
+        border: 1px solid transparent;
         background: transparent;
         margin: 0 1px;
     }
     QToolBar QToolButton:hover  { background: %(hover)s; }
-    QToolBar QToolButton:pressed,
-    QToolBar QToolButton:checked { background: %(accent_tint)s; color: %(accent)s; }
+    QToolBar QToolButton:pressed { background: %(accent_tint)s; color: %(accent)s; background: %(active)s; }
+    QToolBar QToolButton:checked { background: %(accent_tint)s; color: %(accent)s; background: %(surface)s; border: 1px solid %(border)s; }
+    QToolBar QToolButton[popupMode="1"] { padding-right: 20px; }
+    QToolBar QToolButton::menu-button { border: none; border-left: 1px solid transparent; border-top-right-radius: 7px; border-bottom-right-radius: 7px; width: 16px; background: transparent; }
+    QToolBar QToolButton::menu-button:hover { background: %(hover)s; border-left-color: %(divider)s; }
+    QToolBar QToolButton::menu-button:pressed { background: %(accent_tint)s; border-left-color: %(divider)s; }
+    QToolBar QToolButton::menu-arrow { image: url(__ARROW_DOWN__); width: 10px; height: 10px; }
+    QToolBar QToolButton::menu-arrow:open, QToolBar QToolButton::menu-arrow:pressed { image: url(__ARROW_DOWN_PRESSED__); }
 
     /* Menu bar + menus */
-    QMenuBar { background-color: %(chrome)s; color: %(text)s; border-bottom: 1px solid %(divider)s; }
-    QMenuBar::item { background-color: transparent; padding: 4px 10px; border-radius: %(radius_button)s; }
-    QMenuBar::item:selected { background-color: %(hover)s; }
+    QMenuBar { background-color: %(chrome)s; color: %(text)s; border-bottom: none; background: %(chrome)s; padding: 2px 6px; }
+    QMenuBar::item { background-color: transparent; padding: 4px 10px; border-radius: %(radius_button)s; color: %(text_sec)s; }
+    QFrame#drawPalette { background: %(surface)s; border: 1px solid %(border_strong)s; border-radius: 10px; }
+    QFrame#drawPalette QToolButton { background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 0; color: %(text)s; }
+    QFrame#drawPalette QToolButton:hover { background: %(hover)s; }
+    QFrame#drawPalette QToolButton:checked { background: %(accent_tint)s; border-color: %(accent)s; }
+    QFrame#drawPalette QToolButton#drawPaletteDone { padding: 0 10px; font-weight: 600; color: %(accent)s; }
+    QFrame#drawPaletteSep { color: %(divider)s; }
+    QMenuBar::item:selected { background-color: %(hover)s; background: %(hover)s; color: %(text)s; }
+    QMenuBar::item:pressed { background: %(active)s; color: %(text)s; }
     QMenu {
         background-color: %(surface)s;
         border: 1px solid %(border)s;
         border-radius: %(radius_panel)s;
-        padding: 4px;
+        padding: 6px;
         color: %(text)s;
+        background: %(surface)s;
     }
-    QMenu::item { padding: 6px 22px; border-radius: %(radius_button)s; }
-    QMenu::item:selected { background-color: %(accent_tint)s; color: %(accent)s; }
-    QMenu::separator { height: 1px; background: %(divider)s; margin: 4px 8px; }
+    QMenu::item { padding: 6px 28px 6px 14px; border-radius: %(radius_button)s; margin: 1px 0; }
+    QMenu::item:selected { background-color: %(accent_tint)s; color: %(on_accent)s; background: %(accent)s; }
+    QMenu::item:disabled { color: %(text_tert)s; background: transparent; }
+    QMenu::separator { height: 1px; background: %(divider)s; margin: 5px 10px; }
 
     /* ── Inspector collapsible sections ──────────────────────────── */
     QWidget#collapsibleSection {
         background: transparent;
     }
-    QWidget#sectionHead {
+    QFrame#sectionHead {
         background: %(surface_subtle)s;
-        border-left: 3px solid %(accent)s;
-        border-bottom: 1px solid %(divider)s;
+        border: none;
+        border-top: 1px solid %(border_strong)s;
+        border-bottom: 1px solid %(border)s;
     }
-    QWidget#sectionHead:hover {
+    QFrame#sectionHead:hover {
         background: %(accent_tint)s;
     }
     QLabel#sectionTitle {
         font-size: %(font_md)s;
-        font-weight: 500;
+        font-weight: 700;
         color: %(text)s;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.4px;
         background: transparent;
     }
     QLabel#sectionChevron {
-        color: %(text_tert)s;
+        color: %(text_sec)s;
         font-size: %(font_xs)s;
         background: transparent;
     }
@@ -239,7 +290,7 @@ _QSS_TEMPLATE = """
         background: transparent;
     }
     QFrame#sectionDivider {
-        background: %(divider)s;
+        background: transparent;
         border: none;
         max-height: 1px;
     }
@@ -268,7 +319,7 @@ _QSS_TEMPLATE = """
     QGroupBox QLabel { background: transparent; }
 
     /* ── Inputs ───────────────────────────────────────────────────── */
-    QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+    QLineEdit, QPlainTextEdit#inspectorTextContent, QComboBox {
         background: %(surface)s;
         border: 1px solid %(border)s;
         border-radius: %(radius_input)s;
@@ -279,19 +330,38 @@ _QSS_TEMPLATE = """
         selection-background-color: %(accent)s;
         selection-color: %(on_accent)s;
     }
-    QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
+    QLineEdit:hover, QPlainTextEdit#inspectorTextContent:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {
         border-color: %(border_strong)s;
     }
-    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
+    QLineEdit:focus, QPlainTextEdit#inspectorTextContent:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
         border-color: %(accent)s;
     }
-    QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
+    QLineEdit:disabled, QPlainTextEdit#inspectorTextContent:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
         color: %(text_tert)s; background: %(surface_subtle)s;
     }
 
     /* Spin buttons: side by side on the right, with hover/pressed feedback. */
-    QSpinBox, QDoubleSpinBox { padding-right: 46px; }
-    QSpinBox::up-button, QDoubleSpinBox::up-button,
+    QSpinBox, QDoubleSpinBox {
+        background: %(surface)s;
+        border: 1px solid %(border)s;
+        border-radius: %(radius_input)s;
+        padding: 2px 8px;
+        color: %(text)s;
+        min-height: 24px;
+        font-size: %(font_md)s;
+        selection-background-color: %(accent)s;
+        selection-color: %(on_accent)s;
+        padding-right: 46px;
+    }
+    QSpinBox::up-button, QDoubleSpinBox::up-button {
+        subcontrol-origin: border;
+        subcontrol-position: center right;
+        width: 20px; height: 18px;
+        border: none;
+        border-radius: %(radius_button)s;
+        background: transparent;
+        right: 24px;
+    }
     QSpinBox::down-button, QDoubleSpinBox::down-button {
         subcontrol-origin: border;
         subcontrol-position: center right;
@@ -299,9 +369,8 @@ _QSS_TEMPLATE = """
         border: none;
         border-radius: %(radius_button)s;
         background: transparent;
+        right: 3px;
     }
-    QSpinBox::down-button, QDoubleSpinBox::down-button { right: 3px; }
-    QSpinBox::up-button, QDoubleSpinBox::up-button { right: 24px; }
     QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
     QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
         background: %(active)s;
@@ -356,34 +425,34 @@ _QSS_TEMPLATE = """
     QPushButton {
         background: %(surface)s;
         border: 1px solid %(border)s;
-        border-radius: %(radius_button)s;
-        padding: 5px 12px;
+        border-radius: 7px;
+        padding: 5px 14px;
         color: %(text)s;
         font-weight: 400;
     }
-    QPushButton:hover  { background: %(hover)s; border-color: %(border_strong)s; }
+    QPushButton:hover  { background: %(surface_subtle)s; border-color: %(border_strong)s; }
     QPushButton:pressed { background: %(active)s; }
     QPushButton:disabled { color: %(text_tert)s; background: %(surface_subtle)s; }
 
     QPushButton[accent="true"] {
         background: %(accent)s;
-        border-color: %(accent)s;
+        border-color: %(accent_press)s;
         color: %(on_accent)s;
-        font-weight: 500;
+        font-weight: 600;
         padding: 5px 14px;
     }
     QPushButton[accent="true"]:hover  { background: %(accent_hover)s; border-color: %(accent_hover)s; }
     QPushButton[accent="true"]:pressed { background: %(accent_press)s; border-color: %(accent_press)s; }
 
-    /* Primary QToolButton variant (e.g. toolbar Export). Matches the
-       mockup's .tb-btn.primary: solid accent pill with white glyph/text. */
+    /* Primary QToolButton variant (e.g. toolbar Export): solid accent
+       button with white glyph/text. */
     QToolButton[primary="true"] {
         background: %(accent)s;
         color: %(on_accent)s;
-        border: 1px solid %(accent)s;
+        border: 1px solid %(accent_press)s;
         border-radius: %(radius_button)s;
         padding: 5px 14px;
-        font-weight: 500;
+        font-weight: 600;
     }
     QToolButton[primary="true"]:hover  { background: %(accent_hover)s; border-color: %(accent_hover)s; }
     QToolButton[primary="true"]:pressed,
@@ -397,6 +466,26 @@ _QSS_TEMPLATE = """
 
     /* Startup welcome page — compact "high-DPI" density; element sizes
        follow importance: modest title, small actions, tiny hints. */
+    QDialog#mcpGuide { background: %(panel)s; }
+    QDialog#mcpGuide QLabel { background: transparent; }
+    QLabel#mcpTitle { font-size: 15px; font-weight: 600; color: %(text)s; }
+    QLabel#mcpSubtitle, QLabel#mcpStepBody, QLabel#mcpSafety { font-size: %(font_md)s; color: %(text_sec)s; }
+    QFrame#mcpStepCard { background: %(surface)s; border: 1px solid %(border)s; border-radius: %(radius_panel)s; }
+    QDialog#mcpGuide QLabel#mcpStepBadge { background: %(accent)s; color: %(on_accent)s; border-radius: 11px; font-weight: 600; }
+    QLabel#mcpStepTitle { font-size: %(font_base)s; font-weight: 600; color: %(text)s; }
+    QLabel#mcpStatusPill { border-radius: 10px; padding: 2px 10px; font-size: %(font_sm)s; border: 1px solid %(border)s; color: %(text_tert)s; }
+    QLabel#mcpStatusPill[on="true"] { border-color: %(success)s; color: %(success)s; }
+    QLabel#mcpHost { font-size: %(font_sm)s; color: %(text_tert)s; padding-right: 10px; }
+    QLabel#mcpHost[found="true"] { color: %(text)s; }
+    QLabel#mcpFeedback { font-size: %(font_sm)s; color: %(success)s; }
+    QPushButton#mcpPrompt { text-align: left; padding: 6px 10px; background: %(surface_subtle)s; border: 1px solid %(border)s; border-radius: 12px; color: %(text)s; font-weight: 400; }
+    QPushButton#mcpPrompt:hover { border-color: %(accent)s; }
+    QToolButton#mcpDetailsToggle { border: none; background: transparent; color: %(text_sec)s; font-weight: 500; padding: 4px 0; }
+    QToolButton#mcpDetailsToggle:hover { color: %(text)s; }
+    QPlainTextEdit#mcpCode { background: %(surface_subtle)s; border: 1px solid %(border)s; border-radius: %(radius_input)s; color: %(text)s; }
+    QLabel#mcpLocHost { font-weight: 600; color: %(text)s; }
+    QLabel#mcpLocPath { color: %(text_sec)s; }
+    QDialog#mcpGuide QLabel#mcpChip { background: %(surface_subtle)s; border: 1px solid %(border)s; border-radius: 10px; padding: 2px 8px; font-size: %(font_sm)s; color: %(text)s; }
     QWidget#welcomePage { background: %(panel)s; }
     QLabel#welcomeTitle { font-size: 13pt; font-weight: 500; color: %(text)s; }
     QLabel#welcomeDropHint { font-size: 10px; color: %(text_tert)s; }
@@ -408,10 +497,10 @@ _QSS_TEMPLATE = """
         background: %(accent)s;
         color: %(on_accent)s;
         border: 1px solid %(accent)s;
-        border-radius: %(radius_button)s;
-        padding: 5px 14px;
+        border-radius: 8px;
+        padding: 7px 16px;
         font-size: %(font_base)s;
-        font-weight: 500;
+        font-weight: 600;
         min-width: 180px;
     }
     QPushButton#welcomePrimary:hover { background: %(accent_hover)s; }
@@ -471,23 +560,36 @@ _QSS_TEMPLATE = """
         font-weight: 500;
     }
 
+    QTabWidget#sideTabs::pane { border: none; border-top: 1px solid %(divider)s; border-radius: 0; background: %(panel)s; top: 0px; }
+    QTabWidget#sideTabs QTabBar { background: %(panel)s; }
+    QTabWidget#sideTabs QTabBar::tab { background: transparent; color: %(text_sec)s; border: 1px solid transparent; border-radius: %(radius_button)s; padding: 4px 12px; margin: 6px 2px 6px 0; font-weight: 500; }
+    QTabWidget#sideTabs QTabBar::tab:first { margin-left: 8px; }
+    QTabWidget#sideTabs QTabBar::tab:hover { color: %(text)s; background: %(hover)s; }
+    QTabWidget#sideTabs QTabBar::tab:selected { background: %(surface)s; color: %(text)s; border: 1px solid %(border)s; }
+
+    QTabWidget#docTabs::pane { border: none; }
+    QTabWidget#docTabs QTabBar { background: %(panel)s; }
+    QTabWidget#docTabs QTabBar::tab { background: transparent; color: %(text_sec)s; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 7px 14px 6px; margin: 0 2px; font-weight: 500; }
+    QTabWidget#docTabs QTabBar::tab:hover { color: %(text)s; background: transparent; }
+    QTabWidget#docTabs QTabBar::tab:selected { color: %(text)s; background: transparent; border-bottom: 2px solid %(accent)s; }
+
     /* ── Scrollbars ───────────────────────────────────────────────── */
-    QScrollBar:vertical   { background: transparent; width: 12px; margin: 0; }
+    QScrollBar:vertical   { background: transparent; width: 10px; margin: 0; }
     QScrollBar::handle:vertical {
         background: %(border_strong)s;
-        border-radius: 5px;
-        min-height: 24px;
+        border-radius: 3px;
+        min-height: 28px;
         margin: 2px;
     }
     QScrollBar::handle:vertical:hover { background: %(text_tert)s; }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
 
-    QScrollBar:horizontal { background: transparent; height: 12px; margin: 0; }
+    QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; }
     QScrollBar::handle:horizontal {
         background: %(border_strong)s;
-        border-radius: 5px;
-        min-width: 24px;
+        border-radius: 3px;
+        min-width: 28px;
         margin: 2px;
     }
     QScrollBar::handle:horizontal:hover { background: %(text_tert)s; }
@@ -499,43 +601,37 @@ _QSS_TEMPLATE = """
 
     /* ── Checkboxes ───────────────────────────────────────────────── */
     QCheckBox { spacing: 6px; color: %(text)s; }
-    QCheckBox::indicator {
-        width: 14px; height: 14px;
-        border: 1.5px solid %(border_strong)s;
-        border-radius: 3px;
+    QCheckBox::indicator, QGroupBox::indicator {
+        width: 13px; height: 13px;
+        border: 1px solid %(border_strong)s;
+        border-radius: 4px;
         background-color: %(surface)s;
     }
-    QCheckBox::indicator:hover { border-color: %(accent)s; }
-    QCheckBox::indicator:checked {
-        border: none;
+    QCheckBox::indicator:hover, QGroupBox::indicator:hover { border-color: %(accent)s; }
+    QCheckBox::indicator:checked, QGroupBox::indicator:checked {
+        border: 1px solid %(accent)s;
+        background-color: %(accent)s;
         image: url(__CHECK_ON__);
     }
-    QGroupBox::indicator {
-        width: 14px; height: 14px;
-        border: 1.5px solid %(border_strong)s;
-        border-radius: 3px;
-        background-color: %(surface)s;
-    }
-    QGroupBox::indicator:checked {
-        border: none;
-        image: url(__CHECK_ON__);
-    }
+    QCheckBox::indicator:checked:hover, QGroupBox::indicator:checked:hover { border-color: %(accent_hover)s; background-color: %(accent_hover)s; }
+    QCheckBox::indicator:disabled, QGroupBox::indicator:disabled { border-color: %(border)s; background-color: %(surface_subtle)s; }
+    QCheckBox::indicator:checked:disabled, QGroupBox::indicator:checked:disabled { border-color: %(border_strong)s; background-color: %(border_strong)s; }
 
     /* ── Radio buttons ────────────────────────────────────────────── */
     QRadioButton { spacing: 6px; color: %(text)s; }
     QRadioButton::indicator {
-        width: 14px; height: 14px;
-        border: 1.5px solid %(border_strong)s;
-        border-radius: 8px;
+        width: 13px; height: 13px;
+        border: 1px solid %(border_strong)s;
+        border-radius: 7px;
         background-color: %(surface)s;
     }
     QRadioButton::indicator:hover { border-color: %(accent)s; }
     QRadioButton::indicator:checked {
-        border: 1.5px solid %(accent)s;
+        border: 1px solid %(accent)s;
         background-color: qradialgradient(
             cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
-            stop:0 %(accent)s, stop:0.45 %(accent)s,
-            stop:0.55 %(surface)s, stop:1 %(surface)s);
+            stop:0 %(on_accent)s, stop:0.34 %(on_accent)s,
+            stop:0.42 %(accent)s, stop:1 %(accent)s);
     }
     QRadioButton::indicator:disabled {
         border-color: %(border)s;
@@ -544,14 +640,15 @@ _QSS_TEMPLATE = """
 
     /* ── Status bar ───────────────────────────────────────────────── */
     QStatusBar {
-        background: %(panel)s;
-        color: %(text_sec)s;
+        background: %(chrome)s;
+        color: %(text_tert)s;
         border-top: 1px solid %(divider)s;
         font-size: %(font_sm)s;
-        min-height: 24px;
-        max-height: 24px;
+        min-height: 26px;
+        max-height: 26px;
     }
     QStatusBar::item { border: none; }
+    QStatusBar QLabel { color: %(text_sec)s; padding: 0 6px; }
     QFrame#statusDivider {
         background: %(border)s;
         border: none;
@@ -571,11 +668,11 @@ _QSS_TEMPLATE = """
 
     /* ── Tooltips ─────────────────────────────────────────────────── */
     QToolTip {
-        background-color: %(surface)s;
-        color: %(text)s;
-        border: 1px solid %(border)s;
+        background-color: %(text)s;
+        color: %(panel)s;
+        border: none;
         border-radius: %(radius_button)s;
-        padding: 4px 8px;
+        padding: 5px 9px;
     }
 
     QDialog#tutorialCenter { background: %(panel)s; }
@@ -698,6 +795,16 @@ def build_palette(theme: str) -> QPalette:
     return palette
 
 
+def apply_app_palette(app, theme: str) -> None:
+    """Set the app palette for *theme*; on macOS also pin Qt's colour scheme so
+    natively drawn chrome (tab bar base, scroll bars, popups) follows the app
+    theme instead of the system appearance."""
+    if sys.platform == "darwin":
+        app.styleHints().setColorScheme(
+            Qt.ColorScheme.Dark if theme == DARK else Qt.ColorScheme.Light)
+    app.setPalette(build_palette(theme))
+
+
 def _font_tokens(scale: float) -> dict:
     """Return font-size tokens as px strings for the given scale factor."""
     scale = max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, float(scale)))
@@ -715,14 +822,15 @@ def get_stylesheet(theme: str, scale: float = 1.0) -> str:
     variant = "dark" if theme == DARK else "light"
     assets = _assets_dir()
     # Longer placeholders first so "__ARROW_DOWN__" never clips "__ARROW_DOWN_OFF__".
-    return (_QSS_TEMPLATE % tokens) \
-        .replace("__CHECK_ON__", _CHECK_ON) \
+    qss = (_QSS_TEMPLATE % tokens) \
+        .replace("__CHECK_ON__", f"{assets}/check_mark_{variant}.svg") \
         .replace("__ARROW_UP_PRESSED__", f"{assets}/arrow_up_accent_{variant}.svg") \
         .replace("__ARROW_DOWN_PRESSED__", f"{assets}/arrow_down_accent_{variant}.svg") \
         .replace("__ARROW_UP_OFF__", f"{assets}/arrow_up_{variant}_off.svg") \
         .replace("__ARROW_DOWN_OFF__", f"{assets}/arrow_down_{variant}_off.svg") \
         .replace("__ARROW_UP__", f"{assets}/arrow_up_{variant}.svg") \
         .replace("__ARROW_DOWN__", arrow)
+    return qss
 
 
 def get_layers_tree_stylesheet(theme: str, scale: float = 1.0) -> str:
@@ -739,6 +847,20 @@ FONT_SCALE_MAX = 2.0
 FONT_SCALE_STEP = 0.1
 
 
+def _app_font(scale: float) -> QFont:
+    """The platform system UI font at normal weight, scaled from its base size."""
+    global _BASE_APP_FONT_PT
+    f = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
+    f.setWeight(QFont.Weight.Normal)
+    if _BASE_APP_FONT_PT is None:
+        base = f.pointSizeF()
+        if base <= 0:
+            base = max(f.pixelSize(), 9) * 0.75
+        _BASE_APP_FONT_PT = base
+    f.setPointSizeF(_BASE_APP_FONT_PT * scale)
+    return f
+
+
 def apply_font_scale(app, scale: float, theme: str = LIGHT) -> float:
     """Scale the QApplication font by *scale* (clamped) and re-apply the stylesheet.
 
@@ -746,16 +868,7 @@ def apply_font_scale(app, scale: float, theme: str = LIGHT) -> float:
     hardcoded as px in the QSS — app.setFont() alone is overridden by them.
     Returns the clamped scale that was actually applied.
     """
-    global _BASE_APP_FONT_PT
-    f = QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont)
-    f.setWeight(QFont.Weight.Light)
-    if _BASE_APP_FONT_PT is None:
-        base = f.pointSizeF()
-        if base <= 0:
-            base = max(f.pixelSize(), 9) * 0.75
-        _BASE_APP_FONT_PT = base
     scale = max(FONT_SCALE_MIN, min(FONT_SCALE_MAX, float(scale)))
-    f.setPointSizeF(_BASE_APP_FONT_PT * scale)
-    app.setFont(f)
+    app.setFont(_app_font(scale))
     app.setStyleSheet(get_stylesheet(theme, scale))
     return scale

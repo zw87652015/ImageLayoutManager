@@ -19,6 +19,8 @@ class LayoutResult:
     row_rects: Dict[int, Tuple[float, float, float, float]] = field(default_factory=dict)  # row_index -> (x, y, w, h)
     # group_label_id -> (x, y, w, h) band the label draws into, in mm.
     group_label_rects: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
+    # row_index -> [(x, w)] per column slot, before side label strips and size overrides.
+    col_slots: Dict[int, List[Tuple[float, float]]] = field(default_factory=dict)
 
 class LayoutEngine:
     @staticmethod
@@ -528,32 +530,19 @@ class LayoutEngine:
         grid_mode = getattr(project, "grid_mode", "stretch")
         row_alignment = getattr(project, "row_alignment", "center")
         
-        # Calculate standard column width for fixed grid mode
-        max_col_count = max((r.column_count for r in row_templates), default=1)
-        standard_col_widths = []
-        if grid_mode == "fixed" and max_col_count > 0:
-            # Create a dummy row template with max columns to compute standard widths
-            # We assume all rows in fixed mode share the column ratios of the widest row
-            # If multiple rows have the same max width but different ratios, we just use the first one
-            widest_row = next(r for r in row_templates if r.column_count == max_col_count)
-            standard_col_widths = LayoutEngine._compute_col_widths(widest_row, content_width, gap_mm)
-            
-        # 5. Calculate cell rectangles and label cell rectangles
-        cell_rects = {}
-        label_rects: Dict[str, Tuple[float, float, float, float]] = {}
-        
-        for (above_y, above_h, below_y, below_h, pic_y, pic_h,
-             r_temp, _band_slots, _row_top, _row_bottom) in calculated_row_geometries:
-            col_count = r_temp.column_count
-            if col_count <= 0:
-                continue
+        # Match Cell Size: every row shares one cell unit width, so a row
+        # with k columns spans k * unit + (k - 1) * gap and keeps its own ratios.
+        max_col_count = max((r.column_count for r in row_templates if r.column_count > 0), default=0)
+        fixed = grid_mode == "fixed" and max_col_count > 0
+        unit_width = ((content_width - (max_col_count - 1) * gap_mm) / max_col_count) if fixed else 0.0
 
-            if grid_mode == "fixed" and max_col_count > 0:
-                # Use standard column widths up to this row's column count
-                col_widths = standard_col_widths[:col_count]
-                row_width = sum(col_widths) + (col_count - 1) * gap_mm if col_count > 1 else sum(col_widths)
-                
-                # Apply row alignment offset
+        # Per-row geometry, computed once and reused by the cells, slots and row rects.
+        row_geometry: Dict[int, Tuple[float, List[float], List[float]]] = {}
+        for (_a_y, _a_h, _b_y, _b_h, _p_y, _p_h,
+             r_temp, _band_slots, _row_top, _row_bottom) in calculated_row_geometries:
+            if fixed:
+                k = r_temp.column_count
+                row_width = k * unit_width + max(k - 1, 0) * gap_mm
                 if row_alignment == "left":
                     x_offset = content_x
                 elif row_alignment == "right":
@@ -562,9 +551,29 @@ class LayoutEngine:
                     x_offset = content_x + (content_width - row_width) / 2.0
             else:
                 # Stretch mode (default behavior)
-                col_widths = LayoutEngine._compute_col_widths(r_temp, content_width, gap_mm)
                 x_offset = content_x
                 row_width = content_width
+            col_widths = LayoutEngine._compute_col_widths(r_temp, row_width, gap_mm)
+            row_geometry[r_temp.index] = (x_offset, row_width, col_widths)
+
+        # 5. Calculate cell rectangles and label cell rectangles
+        cell_rects = {}
+        label_rects: Dict[str, Tuple[float, float, float, float]] = {}
+        col_slots: Dict[int, List[Tuple[float, float]]] = {}
+        
+        for (above_y, above_h, below_y, below_h, pic_y, pic_h,
+             r_temp, _band_slots, _row_top, _row_bottom) in calculated_row_geometries:
+            col_count = r_temp.column_count
+            if col_count <= 0:
+                continue
+
+            x_offset, _row_width, col_widths = row_geometry[r_temp.index]
+            slots: List[Tuple[float, float]] = []
+            x_slot = x_offset
+            for slot_w in col_widths:
+                slots.append((x_slot, slot_w))
+                x_slot += slot_w + gap_mm
+            col_slots[r_temp.index] = slots
 
             row_cells = [c for c in project.cells if c.row_index == r_temp.index]
             
@@ -664,21 +673,7 @@ class LayoutEngine:
         row_spans: Dict[int, Tuple[float, float]] = {}
         for (_above_y, _above_h, _below_y, _below_h, _pic_y, _pic_h,
              r_temp, _band_slots, row_top, row_bottom) in calculated_row_geometries:
-            col_count = r_temp.column_count
-            
-            # Re-calculate x_offset and row_width for bounding rect
-            if grid_mode == "fixed" and max_col_count > 0:
-                col_widths = standard_col_widths[:col_count]
-                row_width = sum(col_widths) + (col_count - 1) * gap_mm if col_count > 1 else sum(col_widths)
-                if row_alignment == "left":
-                    x_offset = content_x
-                elif row_alignment == "right":
-                    x_offset = content_x + content_width - row_width
-                else: # center
-                    x_offset = content_x + (content_width - row_width) / 2.0
-            else:
-                x_offset = content_x
-                row_width = content_width
+            x_offset, row_width, _col_widths = row_geometry[r_temp.index]
 
             # row_top/row_bottom already span any reserved group-label bands,
             # so add-row/add-cell buttons never land inside a shared label's band.
@@ -692,7 +687,8 @@ class LayoutEngine:
 
         return LayoutResult(cell_rects, row_heights, figure_rects=figure_rects,
                             label_rects=label_rects, row_rects=row_rects,
-                            group_label_rects=group_label_rects)
+                            group_label_rects=group_label_rects,
+                            col_slots=col_slots)
 
     @staticmethod
     def _compute_group_label_rects(

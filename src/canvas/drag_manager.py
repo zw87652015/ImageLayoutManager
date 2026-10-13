@@ -4,6 +4,7 @@ from PyQt6.QtCore import (QObject, QEvent, QPointF, QRectF,
                           QElapsedTimer,
                           pyqtSignal, Qt, QVariantAnimation, QEasingCurve)
 
+from src.canvas import canvas_accent
 from src.app.motion import motion_duration, start_animation
 
 
@@ -26,8 +27,6 @@ class DragManager(QObject):
     GHOST_OPACITY = 0.82
     GHOST_SCALE = 1.0          # Slight lift enlargement (target)
     GHOST_PX_WIDTH = 300        # Capture resolution
-    HIGHLIGHT_FILL = QColor(0, 122, 204, 60)
-    HIGHLIGHT_BORDER = QColor(0, 122, 204, 180)
     REJECT_FILL = QColor(204, 0, 0, 40)
     REJECT_BORDER = QColor(204, 0, 0, 140)
     DROP_DURATION_MS = 180
@@ -248,7 +247,7 @@ class DragManager(QObject):
 
         # White outer ring (so the badge reads on dark images too).
         painter.setPen(QPen(QColor(255, 255, 255, 230), 3))
-        painter.setBrush(QBrush(QColor(0, 122, 204, 235)))
+        painter.setBrush(QBrush(canvas_accent.accent(235)))
         painter.drawEllipse(QPointF(cx, cy), diameter / 2.0, diameter / 2.0)
 
         # Count text.
@@ -625,8 +624,8 @@ class DragManager(QObject):
             self._fade_highlight(h, h.opacity(), 0.0, remove_on_finish=True)
         self._highlights.clear()
 
-        fill = self.HIGHLIGHT_FILL if valid else self.REJECT_FILL
-        border = self.HIGHLIGHT_BORDER if valid else self.REJECT_BORDER
+        fill = canvas_accent.accent(60) if valid else self.REJECT_FILL
+        border = canvas_accent.accent(180) if valid else self.REJECT_BORDER
 
         for t in targets:
             h = QGraphicsRectItem(t.rect())

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from src.app.ui_targets import action_target, menu_holds
 from io import BytesIO
 import os
 from pathlib import Path
@@ -20,6 +21,7 @@ from src.app.commands import DropImageCommand
 from src.app.i18n import current_language, tr
 from src.app.inspector import CollapsibleSection
 from src.app.motion import MotionTween
+from src.app.theme import DARK, LIGHT, get_tokens
 from src.model.data_model import Project, Cell, RowTemplate
 
 
@@ -77,20 +79,20 @@ LESSONS = {
              ('Charts exported from different tools can have mismatched axis text even after their images fit the page. In this practice figure, two SVG charts and one PNG chart deliberately use different text sizes. We will make their \u201cTime\u201d labels share one target size.\n\nA text-size group links text that should have the same size across panels. Its value is in points (pt) in the final figure, not source pixels. We will try 9 pt as a practice target, not a publication rule. Source files are not overwritten.',
               '来自不同软件的图表，即使图片已经放得合适，坐标轴文字也可能大小不一。本练习图中的两张 SVG 和一张 PNG 故意使用不同字号；目标是让三张图的“Time”文字采用同一个目标大小。\n\n“文字组”把不同面板中需要相同字号的文字关联起来。组字号的单位是最终成图中的磅（pt），不是源图片像素。本课用 9 pt 练习，并非投稿通用标准；源文件不会被覆盖。')),
         Step('svg_open', ('Inspect the first SVG', '检查第一张 SVG'),
-             ('Right-click the first panel → Match Text Size, or use Open inspector below. Only actual SVG text is listed; outlined lettering is not editable text.',
-              '右键第一张面板 → 匹配文字大小，或点击下方“打开检查器”。列表只显示真正的 SVG 文字，已转为轮廓的文字不可编辑。'), target='svg0', action='svg0'),
+             ('Right-click the first panel → Text & Plot → Match Text Size, or use Open inspector below. Only actual SVG text is listed; outlined lettering is not editable text.',
+              '右键第一张面板 → 文字与图表 → 匹配文字大小，或点击下方“打开检查器”。列表只显示真正的 SVG 文字，已转为轮廓的文字不可编辑。'), target='svg0', action='svg0'),
         Step('svg_assign', ('Create and assign a 9 pt group', '创建并分配 9 pt 文字组'),
-             ('Create the shared size rule before assigning text to it. In the Match Text Size window, click Add Group, name it \u201cAxis labels\u201d, and set its size to 9 pt.\n\nSelect Time in the text-element list, choose Axis labels in Assign to, then click Assign selected to group. That text now follows the group\u2019s size. Changes take effect immediately; closing this window does not cancel them.',
-              '先建立共同的字号设置，再指定哪些文字使用它。在“匹配文字大小”窗口点击“添加组”，命名为“坐标轴标题”，将字号设为 9 pt。\n\n在文字元素列表中选中 Time，在“分配到”中选择“坐标轴标题”，然后点击“将所选分配到组”。这处文字便使用该组字号。修改即时生效，关闭窗口不会取消修改。'), target='svg0', action='svg0'),
+             ('Create the shared size rule before assigning text to it. In the Match Text Size window, select the Time text in the preview or the list, then click the Axis labels chip \u2014 the chips at the top of the group panel show each group\u2019s colour, size and member count. Create the group first with the + chip, name it \u201cAxis labels\u201d by double-clicking its name, and set its size to 9 pt by double-clicking the size.\n\nChanges take effect immediately; closing this window does not change the groups.',
+              '先建立共同的字号设置，再指定哪些文字使用它。在“匹配文字大小”窗口中，先在预览或列表中选中 Time，再点击“坐标轴标题”文字组芯片。顶部的芯片显示每个组的颜色、字号和成员数。先用 + 芯片建组，双击名称改名为“坐标轴标题”，再双击字号将其设为 9 pt。\n\n修改即时生效，关闭窗口不会改变文字组。'), target='svg0', action='svg0'),
         Step('svg_shared', ('Reuse the group in the second SVG', '在第二张 SVG 中复用同一组'),
-             ('Open the second panel’s inspector with the button below or its context menu. Assign its Time element to the same 9 pt group. Do not create a second group: one shared group keeps panels consistent.',
-              '通过下方按钮或第二张面板的右键菜单打开检查器。将其 Time 元素分配到同一个 9 pt 组，不要另建组；共享组可保持各面板文字一致。'), target='svg1', action='svg1'),
+             ('Open the second panel\u2019s inspector with the button below or its context menu. Select its Time text and click the same Axis labels chip. Do not create a second group: one shared group keeps panels consistent.',
+              '通过下方按钮或第二张面板的右键菜单打开检查器。选中其 Time 文字，然后点击同一个“坐标轴标题”芯片。不要另建组：共享组可保持各面板文字一致。'), target='svg1', action='svg1'),
         Step('raster_detect', ('Locate raster text with OCR', '用 OCR 定位位图文字'),
              ('The PNG panel stores its lettering as pixels, so ILM must locate the text before resizing it. OCR (optical character recognition) finds candidate text regions; it does not retype the chart.\n\nOpen the raster inspector below and click Detect text (OCR). RapidOCR is the default detector. If detection is unavailable, check Preferences \u2192 Text Detection and Apply any changes, or skip this step. Wait for the regions to appear; detection can be cancelled.',
               'PNG 面板中的文字由像素组成，因此缩放前要先找到文字所在区域。OCR（光学字符识别）用于定位可能的文字区域，并不会重新打字替换图表。\n\n点击下方按钮打开位图文字窗口，再点击“检测文字（OCR）”。默认检测器为 RapidOCR。如果不可用，请在“偏好设置 → 文字检测”中检查配置并应用，或跳过此步。等待检测区域出现；检测过程可以取消。'), target='raster', action='raster'),
         Step('raster_assign', ('Assign and review a raster region', '分配并审查位图区域'),
-             ('Select the detected Time region and choose the same group used by the two SVG panels. Keep the region\u2019s checkbox enabled: selecting a row chooses what to edit, while ticking it permits resizing.\n\nCheck the preview and the region\u2019s status. A review warning asks you to inspect the result; it does not by itself disable the region. If resizing would overlap other content or leave the image, ILM may skip it. Check that nearby lines and data remain intact.',
-              '选中检测到的 Time 区域，选择两张 SVG 使用的同一个文字组，并保持该区域勾选。选中一行表示要编辑它，勾选则表示允许它缩放，两者不同。\n\n查看预览和该区域的状态。审查提示要求你检查效果，本身并不禁用区域；如果缩放会覆盖其他内容或超出图片，ILM 可能跳过处理。请确认附近线条和数据仍然完整。'), target='raster', action='raster'),
+             ('Select the detected Time region, then click the same Axis labels chip the two SVG panels use. Keep the region\u2019s checkbox enabled: selecting a row chooses what to edit, while ticking it permits resizing.\n\nCheck the preview and the region\u2019s status. A review warning asks you to inspect the result; it does not by itself disable the region. If resizing would overlap other content or leave the image, ILM may skip it. Check that nearby lines and data remain intact.',
+              '选中检测到的 Time 区域，然后点击两张 SVG 使用的同一个“坐标轴标题”芯片，并保持该区域勾选。选中一行表示要编辑它，勾选则表示允许它缩放，两者不同。\n\n查看预览和该区域的状态。审查提示要求你检查效果，本身并不禁用区域；如果缩放会覆盖其他内容或超出图片，ILM 可能跳过处理。请确认附近线条和数据仍然完整。'), target='raster', action='raster'),
         Step('review', ('Compare with the original', '与原图对比'),
              ('Toggle Show original in the raster inspector, then turn it off again. A group assignment does not prove the pixels are correct. Inspect each changed label; raster size estimates are approximate and enlargement cannot restore lost detail.',
               '在位图检查器中勾选“显示原图”，再取消勾选。分组成功并不代表像素处理正确。逐处检查修改的文字；位图字号估计是近似值，放大无法恢复缺失细节。'), target='raster', action='raster'),
@@ -135,8 +137,8 @@ LESSONS = {
               '点击下方“交换面板”，交换前两个面板的图片。实际使用时，把画布上的一个面板拖到另一个上即可交换；按住 Ctrl 可多选几个单元格一起交换。位置、标注和插图都留在原单元格——只有图片内容会移动。'),
              action='swap'),
         Step('crop', ('Crop a panel\u2019s image', '裁剪面板图片'),
-             ('Cropping chooses which part of an image is visible; it does not change the source file. We will use a square crop just to make the effect easy to see, not because these charts require a square shape.\n\nClick Crop to square below, then check which edges disappear. In your own work, use right-click \u2192 Crop \u2192 a ratio preset, or Crop Image for handles. Reset Crop restores the full image. Do not hide important chart labels or data.',
-              '裁剪决定图片的哪一部分可见，不会改动源文件。本步用正方形裁剪，是为了方便观察效果，并不是说这些图表应该裁成正方形。\n\n点击下方“裁剪为正方形”，看看哪些边缘被隐藏。使用自己的图片时，可右键 → 裁剪 → 选择比例预设，或用“裁剪图片”拖动手柄。“重置裁剪”恢复完整图片。请不要裁掉重要标注或数据。'),
+             ('Cropping chooses which part of an image is visible; it does not change the source file. We will use a square crop just to make the effect easy to see, not because these charts require a square shape.\n\nClick Crop to square below, then check which edges disappear. In your own work, use right-click \u2192 Image \u2192 Crop to Aspect Ratio \u2192 a ratio preset, or Crop Image for handles. Reset Crop restores the full image. Do not hide important chart labels or data.',
+              '裁剪决定图片的哪一部分可见，不会改动源文件。本步用正方形裁剪，是为了方便观察效果，并不是说这些图表应该裁成正方形。\n\n点击下方“裁剪为正方形”，看看哪些边缘被隐藏。使用自己的图片时，可右键 → 图片 → 按比例裁剪 → 选择比例预设，或用“裁剪图片”拖动手柄。“重置裁剪”恢复完整图片。请不要裁掉重要标注或数据。'),
              action='crop_square'),
         Step('fit_mode', ('Fit and align the image in its cell', '调整图片的填充与对齐方式'),
              ('The image and its cell can have different proportions. Fit Mode decides whether to show the whole image or fill the cell.\n\nClick Select a panel below. In Image Cell Properties, try cover in Fit Mode: it fills the cell but may hide image edges. contain keeps the whole current crop visible and may leave blank space. Change the 3\u00d73 alignment control to choose where that space, or the hidden edge, falls. Watch the first panel as you compare.',
@@ -211,8 +213,8 @@ LESSONS = {
               '点击下方“添加插图”，在第一个面板上放置一个示例图标。它是独立图片，并不是原图某处的放大。\n\n使用自己的文件时，将单张图片拖到已有图片的单元格上，在右上角标有“插图”的投放区松开。拖到该单元格的其他位置会替换主图。拖动插图主体可调整它在主面板内的位置，下一步再改变大小。'),
              action='add_pip'),
         Step('resize_inset', ('Resize the inset', '调整插图大小'),
-             ('The inset should be large enough to read without covering important parts of its host image. Click Select inset below to show its resize handles, then drag a corner or edit Width in the Inspector\u2019s Inset Image Properties.\n\nX, Y, Width, and Height are percentages of the host panel\u2019s content area, not millimetres. For example, Width 25% takes one quarter of that area\u2019s width. In normal use, select the inset on the canvas or its own child row in Layers to edit these fields.',
-              '插图既要足够清楚，也不应遮挡主图的重要内容。点击下方“选中插图”显示调整手柄，然后拖动角部手柄，或在检查器的“插图属性”中修改宽度。\n\nX、Y、宽度和高度都是相对于主面板内容区域的百分比，不是毫米。例如宽度 25% 表示占该区域宽度的四分之一。平时可点击画布上的插图，或在图层中选择它自己的子条目，再编辑这些字段。'),
+             ('The inset should be large enough to read without covering important parts of its host image. Click the inset (or Select inset below) to show its resize handles, then drag a corner or edit Width in the Inspector\u2019s Inset Image Properties.\n\nX, Y, Width, and Height are percentages of the host panel\u2019s content area, not millimetres. For example, Width 25% takes one quarter of that area\u2019s width. In normal use, select the inset on the canvas or its own child row in Layers to edit these fields.',
+              '插图既要足够清楚，也不应遮挡主图的重要内容。点击插图（或下方“选中插图”）显示调整手柄，然后拖动角部手柄，或在检查器的“插图属性”中修改宽度。\n\nX、Y、宽度和高度都是相对于主面板内容区域的百分比，不是毫米。例如宽度 25% 表示占该区域宽度的四分之一。平时可点击画布上的插图，或在图层中选择它自己的子条目，再编辑这些字段。'),
              target='pip_w', action='select_pip'),
         Step('scale_bar', ('Draw a calibrated scale bar', '绘制校准比例尺'),
              ('A scale bar needs two different values: calibration says how many micrometres one source-image pixel represents; Length says the real distance you want the bar to show. Screen zoom cannot supply calibration.\n\nClick Select a panel below, expand Scale Bar, and enable it to see the layout controls. Calibration \u2192 Manage lets you store a known pixel size from your image acquisition data. For this synthetic sample, the displayed bar is a layout demonstration only, not a measurement. Use verified calibration before adding a bar to real data.',
@@ -226,9 +228,9 @@ LESSONS = {
         Step('intro', ('Line up the plots, not the files', '对齐绘图区，而不是文件边缘'),
              ('This practice row holds three synthetic charts saved with different margins, as if they came from different plotting tools. Auto Layout fits each file\u2019s edges, so the bottom axes sit at different heights and the plot boxes differ in size. The fix is to mark each chart\u2019s plotting area and match them. Marking is a reference, not a crop: labels stay visible and source files are never edited.',
               '这一行练习面板包含三张合成图表，它们保存时留白各不相同，就像来自不同的绘图软件。“自动布局”按文件边缘适配，因此底部坐标轴高低不一，绘图框大小也不同。解决办法是标记每张图的绘图区，然后统一匹配。标记只是参照，不是裁剪：标签仍然可见，源文件不会被修改。')),
-        Step('mark_plots', ('Mark the three plot areas and apply', '标记三个绘图区并应用'),
-             ('Click Open Align Plot Areas below. Create a New group, name it \u201cRow 1\u201d, and check the three sample panels. A group records which charts should align together.\n\nFor each checked image, draw a box around the plotting rectangle where the data are drawn, keeping tick labels, titles, and legends outside. Use Mark next image to continue. Choose panel 1 as the reference: its plot supplies the target height and bottom line.\n\nPreview alignment, compare the three bottom axes, then Apply. If the group is reduced to fit, read the notice; Fit plots within cells makes that sizing choice explicit. For your own figure, open this tool from the arrow beside Auto Layout, the Layout menu, or a panel\u2019s context menu.',
-              '点击下方“打开对齐绘图区”。点击“新建对齐组”，命名为“第一行”，勾选三张示例图。对齐组用于记录哪些图表需要一起对齐。\n\n逐张框选数据所在的绘图矩形，刻度文字、标题和图例留在框外；用“标记下一张”继续。选择面板 1 为参照图，它的绘图区提供目标高度和底部对齐线。\n\n点击“预览对齐”，比较三张图的底部坐标轴，再点击“应用”。若提示整组已缩小以适应空间，请阅读提示；“适应单元格边界”可明确采用该尺寸策略。制作自己的图时，可从自动布局旁的箭头、布局菜单或面板右键菜单打开此工具。'),
+        Step('mark_plots', ('Line up the three plots', '把三张图对齐'),
+             ('Click Open Align Plot Areas below. The three charts are already ticked as one group — the coloured chip at the top.\n\nEach card shows a dashed box where the plot was found. Click a card, then press Enter or ✓ to keep its box, or drag a better one; ‹ › moves between charts. The ★ marks the reference: the others match its plot height and bottom line.\n\nWatch the preview on the right line up, then click Apply. For your own figures, open this tool from the arrow beside Auto Layout, the Layout menu, or Selected Cells in a panel’s right-click menu.',
+              '点击下方的“打开对齐绘图区”。三张图已作为一组勾选好了——即顶部的彩色标签。\n\n每张卡片会用虚线框显示检测到的绘图区。点击卡片，然后按 Enter 或 ✓ 保留其框选，也可以拖出更准确的框；‹ › 在图表之间切换。★ 标记参照图：其他图的绘图高度和底部线都与它对齐。\n\n观察右侧预览中的对齐效果，然后点击“应用”。若要处理自己的图，可从“自动布局”旁的箭头、“布局”菜单或面板右键菜单中的“所选单元格”打开此工具。'),
              target='_act_align_plots', action='open_align_plots'),
         Step('layout', ('Auto Layout keeps the alignment', '自动布局会保留对齐'),
              ('Click Auto Layout in the toolbar (Ctrl+Shift+A) again. The cells are rearranged, but the alignment is a saved relationship: the plot heights and bottom axes are recalculated, not lost. If a later change leaves too little room for a panel\u2019s title or labels, the whole group shrinks together so nothing is cut off, and the status bar tells you.',
@@ -251,8 +253,8 @@ LESSONS = {
               '如果面板尚未选中，请先选中——或点击下方“缩小单元格”，它会选中该面板并应用一个可撤销的宽度修改。\n\nReflow 关闭时（默认），保存的 SVG 会按新宽度整体缩放：文字和线宽随图片一起缩小，与任何普通图片完全相同。\n\n检查器“图像单元格属性”中，“手动尺寸覆盖”的高亮“宽度 (mm)”字段可设置精确宽度；填 0 恢复自动。'),
              target='override_w', action='narrow_cell'),
         Step('reflow_on', ('Switch REFLOW ON', '开启 REFLOW'),
-             ('The REFLOW card is at the top of the Inspector. Click Turn REFLOW ON below, click the card itself, or right-click the panel \u2192 Reflow ON.\n\nThe card lights up, the panel re-renders to fit its cell, and a Reflow icon appears on the canvas (screen-only — it never appears in exports). Now text and line widths keep their true point sizes no matter how the cell is resized.',
-              'REFLOW 卡片位于检查器顶部。点击下方“开启 REFLOW”、直接点击卡片，或右键面板 → “Reflow ON”。\n\n卡片会点亮，面板按单元格大小重新渲染，画布上出现 Reflow 图标（仅在屏幕显示，导出文件中不会出现）。此后无论单元格如何缩放，文字和线宽都保持真实磅值。'),
+             ('The REFLOW card is at the top of the Inspector. Click Turn REFLOW ON below, click the card itself, or right-click the panel \u2192 Text & Plot \u2192 Reflow ON.\n\nThe card lights up, the panel re-renders to fit its cell, and a Reflow icon appears on the canvas (screen-only — it never appears in exports). Now text and line widths keep their true point sizes no matter how the cell is resized.',
+              'REFLOW 卡片位于检查器顶部。点击下方“开启 REFLOW”、直接点击卡片，或右键面板 → “文字与图表” → “Reflow ON”。\n\n卡片会点亮，面板按单元格大小重新渲染，画布上出现 Reflow 图标（仅在屏幕显示，导出文件中不会出现）。此后无论单元格如何缩放，文字和线宽都保持真实磅值。'),
              target='reflow_card', action='reflow_on'),
         Step('resize_on', ('Resize again — watch the difference', '再缩放一次——观察差别'),
              ('Make the cell narrower or wider again — click Make the cell wider below, or edit Width (mm) directly.\n\nThis time the plot re-lays itself out for the new shape: axes, margins, and legend refit the space while every letter stays at its true point size. Toggle REFLOW off any time to get the saved picture back.',
@@ -274,20 +276,20 @@ LESSONS = {
              ('When several images should occupy equally sized slots, changing each cell separately is easy to get wrong. A Size Group links the member cells\u2019 width and height so you can set those dimensions once. It does not align the axes drawn inside their images; that is the Align Plot Areas lesson.\n\nIn this separate practice tab, we will group the first two sample panels, set a shared size, then add the third. The group changes layout, not the source files.',
               '当几张图片需要占据同样大小的位置时，逐个调整单元格容易出现差异。“尺寸组”将成员单元格的宽度和高度关联起来，只需设置一次。它不会对齐图片内部画出的坐标轴；那是“对齐绘图区”课程的内容。\n\n本课在独立练习页中，先把前两个示例面板归组并设置共同尺寸，再加入第三个。分组只影响布局，不修改源文件。')),
         Step('create_group', ('Group two panels together', '将两个面板归入一组'),
-             ('Click Create group below to group the first two panels. To do this yourself, Ctrl+click two or more cells, then right-click \u2192 Create Size Group.\n\nThe group begins with automatic dimensions: it uses the smallest available member width and the smallest available member height, calculated separately. In the next step, you will replace those automatic choices with a size you specify.',
-              '点击下方“创建组”，将前两个面板归为一组。手动操作时，按住 Ctrl 点选两个或更多单元格，再右键 → 创建尺寸组。\n\n分组最初使用自动尺寸：宽度取成员可用宽度的最小值，高度另取可用高度的最小值。下一步将用自己指定的尺寸替代自动值。'),
+             ('Click Create group below to group the first two panels. To do this yourself, Ctrl+click two or more cells, then right-click \u2192 Selected Cells \u2192 Create Size Group.\n\nThe group begins with automatic dimensions: it uses the smallest available member width and the smallest available member height, calculated separately. In the next step, you will replace those automatic choices with a size you specify.',
+              '点击下方“创建组”，将前两个面板归为一组。手动操作时，按住 Ctrl 点选两个或更多单元格，再右键 → 所选单元格 → 创建尺寸组。\n\n分组最初使用自动尺寸：宽度取成员可用宽度的最小值，高度另取可用高度的最小值。下一步将用自己指定的尺寸替代自动值。'),
              action='create_size_group'),
         Step('pin_size', ('Pin an exact shared size', '固定统一尺寸'),
              ('Pinning means giving the whole group an explicit dimension instead of letting the layout choose it. Click Select a panel below. In Image Cell Properties, find Pinned W and Pinned H beside the size-group controls.\n\nTry a width that fits the page, then watch both members change together. Values are millimetres; 0 means automatic for that dimension, not zero width or height. The value belongs to the group, even though one member is selected.',
               '“固定尺寸”是指为整组指定数值，而不再由布局自动决定。点击下方“选中面板”，在“图像单元格属性”的尺寸组控件处找到“固定宽度”和“固定高度”。\n\n尝试一个页面能容纳的宽度，观察两个成员是否一起改变。单位是毫米；0 表示该维度自动决定，并不是宽或高为零。虽然只选中了一个成员，这个数值属于整组。'),
              target='size_group_pinned_w', action='select_cell'),
         Step('add_member', ('Add a third panel to the group', '将第三个面板加入组'),
-             ('Click Add third panel below. In real use: select the panel(s) to add, right-click → Add to Size Group → pick the group by name. A group can have any number of members, and a panel can only belong to one group at a time.',
-              '点击下方“添加第三个面板”。实际使用时：选中要加入的面板，右键 → 添加到尺寸组 → 按名称选择目标组。一个组可以包含任意数量的成员，但每个面板同一时间只能属于一个组。'),
+             ('Click Add third panel below. In real use: select the panel(s) to add, right-click → Selected Cells → Add to Size Group → pick the group by name. A group can have any number of members, and a panel can only belong to one group at a time.',
+              '点击下方“添加第三个面板”。实际使用时：选中要加入的面板，右键 → 所选单元格 → 添加到尺寸组 → 按名称选择目标组。一个组可以包含任意数量的成员，但每个面板同一时间只能属于一个组。'),
              action='add_to_size_group'),
         Step('finish', ('Ready to keep your own panels aligned', '可以开始统一你自己的面板尺寸了'),
-             ('A Size Group keeps its members\u2019 cell dimensions linked; it does not make their image content identical. Use different groups for panels that need different shared sizes.\n\nRight-click a member \u2192 Remove from Size Group to unlink just that cell. Delete Group in the Inspector removes the link for all members; their sizes are then determined by their own layout settings. Finish keeps this practice tab.',
-              '尺寸组关联的是成员单元格的尺寸，不会把图片内容变成一样。不同面板若需要不同的共同尺寸，可分别建组。\n\n右键成员 → 从尺寸组移除，只解除该单元格的关联。检查器中的“删除组”解除所有成员的关联，之后尺寸由各自布局设置决定。完成后会保留练习页。')),
+             ('A Size Group keeps its members\u2019 cell dimensions linked; it does not make their image content identical. Use different groups for panels that need different shared sizes.\n\nRight-click a member \u2192 Selected Cells \u2192 Remove from Size Group to unlink just that cell. Delete Group in the Inspector removes the link for all members; their sizes are then determined by their own layout settings. Finish keeps this practice tab.',
+              '尺寸组关联的是成员单元格的尺寸，不会把图片内容变成一样。不同面板若需要不同的共同尺寸，可分别建组。\n\n右键成员 → 所选单元格 → 从尺寸组移除，只解除该单元格的关联。检查器中的“删除组”解除所有成员的关联，之后尺寸由各自布局设置决定。完成后会保留练习页。')),
     ),
 }
 
@@ -356,7 +358,7 @@ def _sample_svg(index, font_px, series):
     return f'''<svg xmlns="http://www.w3.org/2000/svg" width="720" height="480" viewBox="0 0 720 480">
 <rect width="720" height="480" fill="white"/>
 <path d="M100 110 V370 H630" stroke="#444" fill="none" stroke-width="3"/>
-<polyline points="{points}" stroke="#0891b2" fill="none" stroke-width="5"/>
+<polyline points="{points}" stroke="#4F5BD5" fill="none" stroke-width="5"/>
 <g font-family="Arial" fill="#222" font-size="{font_px}">
 <text id="title" x="110" y="60">DEMO {index} - synthetic data</text>
 <text id="time" x="320" y="430">Time</text>
@@ -396,7 +398,7 @@ def _sample_misaligned_chart(variant):
         2: (f'<text x="{left + 10}" y="{top - 20}">DEMO 3 - synthetic data</text>'
             f'<text x="{(left + right) / 2 - 140:.0f}" y="{bottom + 60}">Time after treatment</text>'
             f'<text x="{(left + right) / 2 - 110:.0f}" y="{bottom + 100}">(synthetic units)</text>'
-            f'<rect x="{right + 14}" y="{top + 8}" width="20" height="20" fill="#0891b2"/>'
+            f'<rect x="{right + 14}" y="{top + 8}" width="20" height="20" fill="#4F5BD5"/>'
             f'<text x="{right + 42}" y="{top + 26}" font-size="24">series</text>'
             f'<text x="{left - 40}" y="{bottom + 12}">0</text><text x="{left - 60}" y="{top + 12}">10</text>'),
     }[variant]
@@ -404,7 +406,7 @@ def _sample_misaligned_chart(variant):
 <rect width="720" height="480" fill="white"/>
 <path d="M{left} {top} V{bottom} H{right}" stroke="#444" fill="none" stroke-width="3"/>
 {ticks}
-<polyline points="{points}" stroke="#0891b2" fill="none" stroke-width="5"/>
+<polyline points="{points}" stroke="#4F5BD5" fill="none" stroke-width="5"/>
 <g font-family="Arial" fill="#222" font-size="30">
 <text x="{left - 8}" y="{(top + bottom) / 2:.0f}" text-anchor="end" transform="rotate(-90 {left - 60} {(top + bottom) / 2:.0f})">Response</text>
 {extras}
@@ -739,7 +741,7 @@ class TutorialStatus(QLabel):
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
             dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-            color = QColor('#4ade80' if dark else '#15803d')
+            color = QColor(get_tokens(DARK if dark else LIGHT)["success"])
             fill = QColor(color)
             fill.setAlpha(round(24 * self.reveal.value))
             painter.setPen(Qt.PenStyle.NoPen)
@@ -832,6 +834,55 @@ class _FillSubcellImageCommand(DropImageCommand):
 
 
 class TutorialController(QObject):
+    #: step.action -> button caption, for actions without a dedicated
+    #: default label ('svg0'/'svg1'/'raster' fall back to "Open inspector").
+    _ACTION_LABELS = {
+        'delete_row': ('Delete second row', '删除第二行'),
+        'add_cell': ('Add a third cell', '添加第三个单元格'),
+        'load': ('Load samples', '载入示例'),
+        'label_size': ('Select a label', '选中标注'),
+        'split_cols': ('Split third panel', '拆分第三个面板'),
+        'select_subcell': ('Select the new sub-cell', '选中新的子单元格'),
+        'nested_rows': ('Divide the right sub-cell', '细分右侧子单元格'),
+        'add_sibling': ('Add a sibling on the right', '在右侧添加同级单元格'),
+        'fill_subcells': ('Fill empty sub-cells', '填充空白子单元格'),
+        'swap': ('Swap panels', '交换面板'),
+        'select_cell': ('Select a panel', '选中面板'),
+        'select_pair': ('Select two panels', '选中两个面板'),
+        'select_row': ('Select the row', '选中整行'),
+        'select_shared_top': ('Select the shared title', '选中共享标题'),
+        'show_project': ('Show project settings', '显示工程设置'),
+        'crop_square': ('Crop to square', '裁剪为正方形'),
+        'add_pip': ('Add inset', '添加插图'),
+        'select_pip': ('Select inset', '选中插图'),
+        'create_size_group': ('Create group', '创建组'),
+        'add_to_size_group': ('Add third panel', '添加第三个面板'),
+        'open_align_plots': ('Open Align Plot Areas', '打开对齐绘图区'),
+        'narrow_cell': ('Make the cell narrower', '缩小单元格'),
+        'widen_cell': ('Make the cell wider', '放大单元格'),
+        'reflow_on': ('Turn REFLOW ON', '开启 REFLOW'),
+    }
+
+    #: target -> Inspector widget attribute name, for steps that highlight a
+    #: single field once its section is on screen (visibility is checked by
+    #: the caller, since some fields only appear for the right selection).
+    _INSPECTOR_TARGETS = {
+        'label_size': 'font_size',
+        'subcell_ratio': 'subcell_ratio',
+        'freeform_x': 'freeform_x',
+        'dpi_spin': 'dpi_spin',
+        'gl_text_edit': 'gl_text_edit',
+        'fit_mode_combo': 'fit_mode_combo',
+        'pip_w': 'pip_w',
+        'scale_bar_enabled': 'scale_bar_enabled',
+        'size_group_pinned_w': 'size_group_pinned_w',
+        'override_w': 'override_w',
+        'aspect_lock': 'aspect_lock_btn',
+        # The REFLOW hero card sits above the cell section — no
+        # collapsible ancestor, so it resolves like a plain field.
+        'reflow_card': 'reflow_card',
+    }
+
     def __init__(self, window):
         super().__init__(window)
         self.window = window
@@ -1266,94 +1317,11 @@ class TutorialController(QObject):
 
     @staticmethod
     def _menu_holds(menu, action):
-        for candidate in menu.actions():
-            if candidate is action:
-                return True
-            sub = candidate.menu()
-            if sub is not None and TutorialController._menu_holds(sub, action):
-                return True
-        return False
+        return menu_holds(menu, action)
 
     def _action_target(self, action):
-        """Find the visible control for *action*.
-
-        Not every action has a toolbar button: some live only inside a
-        popup (Export Preview sits in the Export button's menu) or a menu
-        bar. Point at whatever the user must actually click, and follow the
-        action into its popup once that popup is open, so the step never
-        degrades into "use the keyboard shortcut".
-        """
-        if action is None:
-            return None, None, False
-        for menu in self.window.findChildren(QMenu):
-            if menu.isVisible() and action in menu.actions():
-                rect = menu.actionGeometry(action)
-                if not rect.isEmpty():
-                    return menu, rect, True
-        widget = self.window.toolbar.widgetForAction(action)
-        if widget is not None and widget.isVisible():
-            return widget, widget.rect(), True
-        for button in self.window.toolbar.findChildren(QToolButton):
-            menu = button.menu()
-            if button.isVisible() and menu is not None and self._menu_holds(menu, action):
-                return button, button.rect(), True
-        bar = self.window.menuBar()
-        for entry in bar.actions():
-            menu = entry.menu()
-            if menu is not None and self._menu_holds(menu, action):
-                rect = bar.actionGeometry(entry)
-                if not rect.isEmpty():
-                    return bar, rect, True
-        return None, None, False
-
-    #: step.action -> button caption, for actions without a dedicated
-    #: default label ('svg0'/'svg1'/'raster' fall back to "Open inspector").
-    _ACTION_LABELS = {
-        'delete_row': ('Delete second row', '删除第二行'),
-        'add_cell': ('Add a third cell', '添加第三个单元格'),
-        'load': ('Load samples', '载入示例'),
-        'label_size': ('Select a label', '选中标注'),
-        'split_cols': ('Split third panel', '拆分第三个面板'),
-        'select_subcell': ('Select the new sub-cell', '选中新的子单元格'),
-        'nested_rows': ('Divide the right sub-cell', '细分右侧子单元格'),
-        'add_sibling': ('Add a sibling on the right', '在右侧添加同级单元格'),
-        'fill_subcells': ('Fill empty sub-cells', '填充空白子单元格'),
-        'swap': ('Swap panels', '交换面板'),
-        'select_cell': ('Select a panel', '选中面板'),
-        'select_pair': ('Select two panels', '选中两个面板'),
-        'select_row': ('Select the row', '选中整行'),
-        'select_shared_top': ('Select the shared title', '选中共享标题'),
-        'show_project': ('Show project settings', '显示工程设置'),
-        'crop_square': ('Crop to square', '裁剪为正方形'),
-        'add_pip': ('Add inset', '添加插图'),
-        'select_pip': ('Select inset', '选中插图'),
-        'create_size_group': ('Create group', '创建组'),
-        'add_to_size_group': ('Add third panel', '添加第三个面板'),
-        'open_align_plots': ('Open Align Plot Areas', '打开对齐绘图区'),
-        'narrow_cell': ('Make the cell narrower', '缩小单元格'),
-        'widen_cell': ('Make the cell wider', '放大单元格'),
-        'reflow_on': ('Turn REFLOW ON', '开启 REFLOW'),
-    }
-
-    #: target -> Inspector widget attribute name, for steps that highlight a
-    #: single field once its section is on screen (visibility is checked by
-    #: the caller, since some fields only appear for the right selection).
-    _INSPECTOR_TARGETS = {
-        'label_size': 'font_size',
-        'subcell_ratio': 'subcell_ratio',
-        'freeform_x': 'freeform_x',
-        'dpi_spin': 'dpi_spin',
-        'gl_text_edit': 'gl_text_edit',
-        'fit_mode_combo': 'fit_mode_combo',
-        'pip_w': 'pip_w',
-        'scale_bar_enabled': 'scale_bar_enabled',
-        'size_group_pinned_w': 'size_group_pinned_w',
-        'override_w': 'override_w',
-        'aspect_lock': 'aspect_lock_btn',
-        # The REFLOW hero card sits above the cell section — no
-        # collapsible ancestor, so it resolves like a plain field.
-        'reflow_card': 'reflow_card',
-    }
+        """Visible control for *action*; see ui_targets.action_target."""
+        return action_target(self.window, action)
 
     @staticmethod
     def _rect_in_viewport(rect, viewport):

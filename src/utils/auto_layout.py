@@ -2,7 +2,7 @@ import os
 from typing import List, Tuple, Dict
 from PIL import Image
 from PyQt6.QtSvg import QSvgRenderer
-from src.model.data_model import Project, RowTemplate, Cell
+from src.model.data_model import Project, Cell
 
 # Active Reflow plots can fit any panel; use a common landscape starting
 # shape instead of treating their saved SVG dimensions as a constraint.
@@ -75,6 +75,26 @@ class AutoLayout:
                 except Exception:
                     pass
         return aspect_ratios
+
+    @staticmethod
+    def _fixed_grid_row_heights(sorted_rows, row_final_ratios,
+                                content_width: float, gap_mm: float) -> Dict[int, float]:
+        """Natural height (mm) of each row in Match Cell Size mode.
+
+        Mirrors LayoutEngine: every cell is one shared unit wide, so a row with
+        k columns is k * unit wide and its height is k * unit / Sum(aspects).
+        A row whose aspects sum to zero falls back to a square cell (unit).
+        """
+        counted = [r for r in sorted_rows if r.column_count > 0]
+        if not counted:
+            return {}
+        max_count = max(r.column_count for r in counted)
+        unit = (content_width - (max_count - 1) * gap_mm) / max_count
+        heights: Dict[int, float] = {}
+        for row in counted:
+            total = sum(row_final_ratios[row.index])
+            heights[row.index] = row.column_count * unit / total if total > 0 else unit
+        return heights
 
     @staticmethod
     def optimize_layout(project: Project) -> Dict[str, any]:
@@ -256,6 +276,11 @@ class AutoLayout:
         # We need to collect all row "height demands" first to normalize them later
         row_height_demands = {} # row_index -> float
         
+        content_width = project.page_width_mm - project.margin_left_mm - project.margin_right_mm
+        gap_mm = project.gap_mm
+
+        row_final_ratios = {}  # row_index -> aspect per column slot, placeholders filled
+
         for row in sorted_rows:
             # Find top-level cells in this row
             row_cells = sorted(
@@ -301,25 +326,42 @@ class AutoLayout:
             min_r = min(final_ratios)
             norm_col_ratios = [round(r / min_r, 2) for r in final_ratios]
             
-            # 2. Calculate Natural Row Height Demand
-            # H_demand ~ 1 / Sum(aspects)
+            # 2. Calculate Natural Row Height (mm)
+            # The row's cells fill the content width minus its horizontal gaps:
+            # H_row = (W_content - (n - 1) * gap) / Sum(aspects)
             total_row_aspect = sum(final_ratios)
             if total_row_aspect <= 0: total_row_aspect = 1.0
             
-            height_demand = 1.0 / total_row_aspect
-            row_height_demands[row.index] = height_demand
+            row_gap_total = (col_count - 1) * gap_mm if col_count > 1 else 0.0
+            row_height_demands[row.index] = (content_width - row_gap_total) / total_row_aspect
             
             # Store partial result
             r_dict = row.to_dict()
             r_dict['column_ratios'] = norm_col_ratios
             new_row_settings.append(r_dict)
+            row_final_ratios[row.index] = final_ratios
+
+        # Match Cell Size mode gives every row one shared cell unit (LayoutEngine), so a
+        # row's natural height comes from that unit, not from the stretch-to-page demand.
+        fixed_heights = {}
+        if getattr(project, "grid_mode", "stretch") == "fixed":
+            fixed_heights = AutoLayout._fixed_grid_row_heights(
+                sorted_rows, row_final_ratios, content_width, gap_mm)
 
         # 3. Normalize Height Ratios across all rows
         # We want the values to be nice numbers like 1.0, 1.5, etc.
         # Let's scale them so the *tallest* row (max demand) is roughly 1.0? 
         # Or just normalize so min is 1.0.
         
-        if row_height_demands:
+        if fixed_heights:
+            min_h = min(fixed_heights.values())
+            if min_h < 0.0001: min_h = 1.0
+
+            for r_dict in new_row_settings:
+                idx = r_dict['index']
+                if idx in fixed_heights:
+                    r_dict['height_ratio'] = round(fixed_heights[idx] / min_h, 2)
+        elif row_height_demands:
             min_h = min(row_height_demands.values())
             if min_h < 0.0001: min_h = 1.0
             
@@ -335,9 +377,6 @@ class AutoLayout:
         # For each row, the natural height is: H_row = W_content / sum(aspects_in_row)
         # Total natural height = sum(H_row) + gaps + margins
         
-        content_width = project.page_width_mm - project.margin_left_mm - project.margin_right_mm
-        gap_mm = project.gap_mm
-        
         total_natural_height = 0
         for r_dict in new_row_settings:
             col_ratios = r_dict.get('column_ratios', [1.0])
@@ -345,9 +384,11 @@ class AutoLayout:
             # But we normalized them, so we need to use the original sum
             row_idx = r_dict['index']
             if row_idx in row_height_demands:
-                # height_demand = 1 / sum(aspects), so natural_height = content_width * height_demand
-                natural_row_height = content_width * row_height_demands[row_idx]
-                total_natural_height += natural_row_height
+                # Stretch rows already carry their natural height (gaps included).
+                if row_idx in fixed_heights:
+                    total_natural_height += fixed_heights[row_idx]
+                else:
+                    total_natural_height += row_height_demands[row_idx]
         
         # Add gaps between rows
         num_rows = len(new_row_settings)

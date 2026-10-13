@@ -56,7 +56,7 @@ class _BranchlessTree(QTreeWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.cells_reorderable = True     # LayersPanel.refresh() sets this
-        self.accent_color = QColor("#0891B2")
+        self.accent_color = QColor(get_tokens(LIGHT)["accent"])
         self._drop_marker = None          # (QTreeWidgetItem, place_above)
 
     def drawBranches(self, painter, rect, index):
@@ -208,7 +208,7 @@ class LayersDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
         t = self._tokens
-        accent     = QColor(t.get("accent",    "#0891B2"))
+        accent     = QColor(t.get("accent",    get_tokens(LIGHT)["accent"]))
         text_c     = QColor(t.get("text",      "#1C1C1E"))
         text_sec   = QColor(t.get("text_sec",  "#6E6E73"))
         ph_c       = QColor(t.get("placeholder","#AEAEB2"))
@@ -438,10 +438,6 @@ class LayersPanel(QWidget):
 
         # Header
         self.header_label = QLabel(tr("layers_header"))
-        self.header_label.setStyleSheet(
-            "font-weight: 500; font-size: 11px; letter-spacing: 1px;"
-            " padding: 0 2px; color: #888888;"
-        )
         layout.addWidget(self.header_label)
 
         # Tree
@@ -473,6 +469,7 @@ class LayersPanel(QWidget):
         # delegate's accent bar is the only selection visual.
         pal = self.tree.palette()
         pal.setColor(QPalette.ColorRole.Highlight, QColor(0, 0, 0, 0))
+        pal.setColor(QPalette.ColorRole.Accent, QColor(0, 0, 0, 0))
         pal.setColor(QPalette.ColorRole.HighlightedText,
                      pal.color(QPalette.ColorRole.Text))
         self.tree.setPalette(pal)
@@ -480,7 +477,7 @@ class LayersPanel(QWidget):
         # Apply initial theme (visual only — public API sets the real theme)
         self._apply_tree_stylesheet(LIGHT)
         self._delegate.apply_tokens(get_tokens(LIGHT))
-        self.tree.accent_color = QColor(get_tokens(LIGHT).get("accent", "#0891B2"))
+        self.tree.accent_color = QColor(get_tokens(LIGHT)["accent"])
 
         self.tree.itemSelectionChanged.connect(self._on_selection_changed)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -507,9 +504,12 @@ class LayersPanel(QWidget):
     def apply_theme(self, tokens: dict) -> None:
         """Update all visuals from design tokens. Called by main_window on theme switch."""
         self._delegate.apply_tokens(tokens)
+        self.header_label.setStyleSheet(
+            "font-weight: 600; font-size: 11px; letter-spacing: 0.6px; padding: 0 2px; "
+            f"color: {tokens['label_caps']};")
         theme = "dark" if tokens.get("canvas_bg", "").startswith("#1") else "light"
         self._apply_tree_stylesheet(theme)
-        self.tree.accent_color = QColor(tokens.get("accent", "#0891B2"))
+        self.tree.accent_color = QColor(tokens["accent"])
         self.tree.update()
 
     def _apply_tree_stylesheet(self, theme: str) -> None:
@@ -704,18 +704,25 @@ class LayersPanel(QWidget):
     # ── selection ─────────────────────────────────────────────────────────────
 
     def select_item(self, target_id):
+        self.select_items([] if target_id is None else [target_id])
+
+    def select_items(self, target_ids):
+        """Select the first row of each id (label cells map to their cell) and scroll to the first."""
         self._is_updating = True
         self.tree.clearSelection()
-        if target_id is not None:
-            lookup_id = target_id.removeprefix("label_")
-            it = QTreeWidgetItemIterator(self.tree)
-            while it.value():
-                item = it.value()
-                if item.data(0, _ROLE_ID) == lookup_id:
-                    item.setSelected(True)
+        remaining = {target_id.removeprefix("label_") for target_id in target_ids}
+        scrolled = False
+        it = QTreeWidgetItemIterator(self.tree)
+        while remaining and it.value():
+            item = it.value()
+            item_id = item.data(0, _ROLE_ID)
+            if item_id in remaining:
+                remaining.discard(item_id)
+                item.setSelected(True)
+                if not scrolled:
                     self.tree.scrollToItem(item)
-                    break
-                it += 1
+                    scrolled = True
+            it += 1
         self._is_updating = False
 
     # ── i18n ──────────────────────────────────────────────────────────────────

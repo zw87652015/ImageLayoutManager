@@ -9,6 +9,9 @@ HIT_THICKNESS = 4.0
 VIS_THICKNESS = 1.5
 
 
+from src.canvas import canvas_accent
+
+
 class DividerItem(QGraphicsRectItem):
     """An invisible drag handle placed in the gap between rows or columns.
 
@@ -35,6 +38,7 @@ class DividerItem(QGraphicsRectItem):
                  sub_a: int = -1, sub_b: int = -1,
                  sub_a_id: str = '', sub_b_id: str = '',
                  orientation: str = '',
+                 span_mm: float = 0.0,
                  parent=None):
         super().__init__(parent)
         self.kind = kind          # 'row' | 'col' | 'subcell'
@@ -42,13 +46,14 @@ class DividerItem(QGraphicsRectItem):
         self.row_b = row_b        # index of the row below  (row divider)
         self.col_a = col_a        # col_index of left cell  (col divider)
         self.col_b = col_b        # col_index of right cell (col divider)
-        self.row_index = row_index  # which row this col divider belongs to
+        self.row_index = row_index  # row this col divider belongs to (its column_ratios are edited)
         self.parent_cell_id = parent_cell_id  # split container (subcell divider)
         self.sub_a = sub_a        # left/upper child index  (subcell divider)
         self.sub_b = sub_b        # right/lower child index (subcell divider)
         self.sub_a_id = sub_a_id  # left/upper child cell id
         self.sub_b_id = sub_b_id  # right/lower child cell id
         self.orientation = orientation  # parent split_direction (subcell)
+        self.span_mm = span_mm          # combined width of the two columns (col divider)
         self.ratio_a = ratio_a
         self.ratio_b = ratio_b
 
@@ -87,7 +92,7 @@ class DividerItem(QGraphicsRectItem):
         r = self.rect()
         # Subcell dividers paint lighter: the nested gaps are a deeper level.
         alpha = 110 if self.kind == 'subcell' else 180
-        color = QColor(0, 122, 204, alpha)
+        color = canvas_accent.accent(alpha)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setBrush(QBrush(color))
         painter.setPen(QPen(Qt.PenStyle.NoPen))
@@ -203,16 +208,4 @@ class DividerItem(QGraphicsRectItem):
             ha = last_result.row_heights.get(self.row_a, 0.0)
             hb = last_result.row_heights.get(self.row_b, 0.0)
             return ha + hb
-        else:
-            # Sum of the two adjacent column widths in this row
-            row_temp = next((r for r in project.rows if r.index == self.row_index), None)
-            if row_temp is None:
-                return 0.0
-            from src.model.layout_engine import LayoutEngine
-            content_width = (project.page_width_mm
-                             - project.margin_left_mm
-                             - project.margin_right_mm)
-            col_widths = LayoutEngine._compute_col_widths(row_temp, content_width, project.gap_mm)
-            wa = col_widths[self.col_a] if self.col_a < len(col_widths) else 0.0
-            wb = col_widths[self.col_b] if self.col_b < len(col_widths) else 0.0
-            return wa + wb
+        return self.span_mm

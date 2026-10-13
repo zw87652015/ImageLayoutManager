@@ -1,25 +1,22 @@
-"""SVG text font-size manager — single dialog replacing the old two-dialog flow.
+"""SVG text font-size manager: a live preview with clickable text, and text group chips.
 
 Layout
 ------
-Left : live SVG preview (shows normalization + group overrides applied).
-Right: two sections stacked vertically —
-  1. Text Elements list — shows every <text> element with its current group.
-     Selecting one or more elements and picking a group from the dropdown
-     below assigns them immediately (one click, no "Assign" button dialog).
-  2. Groups list — each group is one row: editable name | font-size spinner
-     (live — updates the preview on every keystroke/spin) | Delete button.
-     A footer "+ New Group" button appends a group instantly.
+Left : interactive preview of the SVG. Each text is outlined in its group's colour
+       (ungrouped: dashed grey). Click selects a text, Ctrl toggles, and dragging a
+       rubber band selects every text it crosses. Hovering shows the text, its size and group.
+Right: the element list (a colour dot shows each text's group) above the group chips.
+       A click on a chip assigns the selected texts to that group; "+" makes a group
+       at the selection's size; "∅" removes the selection from its groups.
 """
 
 import os
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPushButton, QLabel, QComboBox,
-    QSplitter, QWidget, QScrollArea, QFrame, QSizePolicy,
+    QLabel, QSplitter, QWidget, QFrame, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QByteArray
-from PyQt6.QtGui import QPixmap, QPainter, QImage, QColor, QPen
+from PyQt6.QtCore import Qt, pyqtSignal, QByteArray, QRectF, QPointF
+from PyQt6.QtGui import QKeySequence, QPalette, QPixmap, QPainter, QImage, QColor, QPen, QBrush, QIcon, QShortcut
 from PyQt6.QtSvg import QSvgRenderer
 
 from src.utils.svg_text_utils import (format_text_size, get_svg_text_elements,
@@ -27,13 +24,167 @@ from src.utils.svg_text_utils import (format_text_size, get_svg_text_elements,
                                       text_preview_rects)
 from src.utils.editable_plot import plot_reflows
 from ilmplot.document import has_plot_metadata
-from src.model.data_model import SvgTextMember
+from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
-from src.app.text_groups_widget import TextGroupsWidget, section_label
+from src.app.text_groups_widget import section_label
+from src.app.text_group_chips import TextGroupChips, group_colour
+from src.utils.text_group_assign import assign_svg, new_svg_group, ungroup_svg
+
+_RENDER_MAX = 480
+
+
+class SvgTextPreview(QWidget):
+    """Clickable preview of the SVG with per-group outlines (modelled on RasterTextPreview)."""
+
+    selection_changed = pyqtSignal(list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._image = None
+        self._rects = {}
+        self._colours = {}
+        self._tips = {}
+        self._selected = []
+        self._failed = ""
+        self._hover = None
+        self._rubber = None
+        self._rubber_additive = False
+        self.setMinimumSize(280, 280)
+        self.setMouseTracking(True)
+        self.setAccessibleName(tr("svgtxt_preview_label"))
+
+    def set_content(self, image, rects, colours, tips):
+        self._image = image
+        self._rects = dict(rects)
+        self._colours = dict(colours)
+        self._tips = dict(tips)
+        self._failed = ""
+        self._hover = None
+        self.update()
+
+    def set_failed(self, text):
+        self._image = None
+        self._rects = {}
+        self._failed = text
+        self.update()
+
+    def set_selected(self, keys):
+        self._selected = list(keys)
+        self.update()
+
+    def _transform(self):
+        if self._image is None or self._image.isNull():
+            return None
+        bounds = QRectF(self.rect()).adjusted(8, 8, -8, -8)
+        scale = min(bounds.width() / self._image.width(), bounds.height() / self._image.height())
+        left = bounds.center().x() - self._image.width() * scale / 2
+        top = bounds.center().y() - self._image.height() * scale / 2
+        return scale, left, top
+
+    def _to_widget(self, rect):
+        scale, left, top = self._transform()
+        return QRectF(left + rect.x() * scale, top + rect.y() * scale, rect.width() * scale, rect.height() * scale)
+
+    def _key_at(self, pos):
+        if self._transform() is None:
+            return None
+        for key, rect in self._rects.items():
+            if self._to_widget(rect).contains(pos):
+                return key
+        return None
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        pal = self.palette()
+        painter.fillRect(self.rect(), pal.color(pal.ColorRole.AlternateBase))
+        if self._image is None:
+            painter.setPen(pal.color(pal.ColorRole.Text))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._failed or tr("svgtxt_preview_failed"))
+            painter.end()
+            return
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        scale, left, top = self._transform()
+        target = QRectF(left, top, self._image.width() * scale, self._image.height() * scale)
+        painter.drawImage(target, self._image)
+        highlight = pal.color(QPalette.ColorRole.Highlight)
+        for key, rect in self._rects.items():
+            widget_rect = self._to_widget(rect).adjusted(-2, -2, 2, 2)
+            selected = key in self._selected
+            colour = self._colours.get(key)
+            if colour:
+                fill = QColor(colour)
+                fill.setAlpha(46)
+                painter.setPen(QPen(QColor(colour), 3 if selected else 1.5))
+                painter.setBrush(QBrush(fill))
+            elif selected:
+                painter.setPen(QPen(highlight, 3))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+            else:
+                painter.setPen(QPen(pal.color(QPalette.ColorRole.Mid), 1, Qt.PenStyle.DashLine))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(widget_rect)
+        if self._rubber is not None:
+            painter.setPen(QPen(highlight, 1, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(QRectF(self._rubber[0], self._rubber[1]).normalized())
+        painter.end()
+
+    def mousePressEvent(self, event):
+        self.setFocus()
+        if event.button() != Qt.MouseButton.LeftButton or self._transform() is None:
+            return
+        key = self._key_at(event.position())
+        additive = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if key is None:
+            self._rubber = (event.position(), event.position())
+            self._rubber_additive = additive
+            if not additive:
+                self._selected = []
+                self.selection_changed.emit([])
+            self.update()
+            return
+        if additive:
+            keys = [k for k in self._selected if k != key] if key in self._selected else self._selected + [key]
+        else:
+            keys = [key]
+        self._selected = keys
+        self.selection_changed.emit(list(keys))
+        self.update()
+
+    def mouseMoveEvent(self, event):
+        if self._rubber is not None:
+            self._rubber = (self._rubber[0], event.position())
+            self.update()
+            return
+        key = self._key_at(event.position())
+        if key != self._hover:
+            self._hover = key
+            self.setToolTip(self._tips.get(key, "") if key else "")
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if self._rubber is None or event.button() != Qt.MouseButton.LeftButton:
+            return
+        area = QRectF(self._rubber[0], self._rubber[1]).normalized()
+        self._rubber = None
+        hits = [k for k, rect in self._rects.items() if self._to_widget(rect).intersects(area)]
+        if self._rubber_additive:
+            keys = self._selected + [k for k in hits if k not in self._selected]
+        else:
+            keys = hits
+        self._selected = keys
+        self.selection_changed.emit(list(keys))
+        self.update()
+
+    def leaveEvent(self, event):
+        self._hover = None
+        self.setToolTip("")
+        super().leaveEvent(event)
+
 
 
 class SvgTextInspectorWindow(QDialog):
-    """Unified SVG text manager: assign elements to groups and set font sizes."""
+    """Unified SVG text manager: select texts in the preview, assign them to groups, set sizes."""
 
     groups_changed = pyqtSignal()
 
@@ -48,6 +199,7 @@ class SvgTextInspectorWindow(QDialog):
         self._preview_rects = {}
 
         self.setWindowTitle(tr("svgtxt_inspector_title"))
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=lambda: show_context_help(self, "text_sizes"))
         self.setWindowFlags(
             Qt.WindowType.Window |
             Qt.WindowType.WindowCloseButtonHint |
@@ -80,75 +232,43 @@ class SvgTextInspectorWindow(QDialog):
         lv.addWidget(QLabel(tr("svgtxt_preview_label")))
 
         self._norm_label = QLabel()
-        self._norm_label.setStyleSheet("color: #b07800; font-style: italic;")
+        self._norm_label.setStyleSheet("color: palette(link); font-style: italic;")
         self._norm_label.setWordWrap(True)
         lv.addWidget(self._norm_label)
 
-        self._preview_label = QLabel()
-        self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_label.setStyleSheet("background: #f0f0f0; border: 1px solid #ccc;")
-        self._preview_label.setMinimumSize(280, 280)
-        scroll = QScrollArea()
-        scroll.setWidget(self._preview_label)
-        scroll.setWidgetResizable(True)
-        lv.addWidget(scroll, 1)
+        self._preview_label = SvgTextPreview()
+        self._preview_label.selection_changed.connect(self._on_preview_selection)
+        lv.addWidget(self._preview_label, 1)
         splitter.addWidget(left)
 
-        # ── Right: elements + groups ───────────────────────────────────
+        # ── Right: elements + group chips ──────────────────────────────
         right = QWidget()
         rv = QVBoxLayout(right)
         rv.setContentsMargins(0, 0, 0, 0)
         rv.setSpacing(8)
 
-        # Section 1 — Elements list
         rv.addWidget(self._section_label(tr("svgtxt_elements_label")))
 
         self._size_hint = QLabel()
         self._size_hint.setWordWrap(True)
-        self._size_hint.setStyleSheet("color: #666;")
         rv.addWidget(self._size_hint)
 
         self._elem_list = QListWidget()
         self._elem_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self._elem_list.setMinimumHeight(120)
-        self._elem_list.itemSelectionChanged.connect(self._update_size_button)
-        self._elem_list.itemSelectionChanged.connect(self._update_highlight)
+        self._elem_list.itemSelectionChanged.connect(self._on_list_selection)
         rv.addWidget(self._elem_list, 2)
 
-        # Assignment row (below elements): [combo] [Assign] [Remove]
-        assign_row = QHBoxLayout()
-        assign_row.setSpacing(6)
-        assign_row.addWidget(QLabel(tr("svgtxt_assign_to") + ":"))
-        self._group_combo = QComboBox()
-        self._group_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._group_combo.setMinimumContentsLength(8)
-        self._group_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        assign_row.addWidget(self._group_combo, 1)
-        self._btn_assign = QPushButton(tr("svgtxt_assign_btn"))
-        self._btn_assign.clicked.connect(self._on_assign)
-        assign_row.addWidget(self._btn_assign)
-        rv.addLayout(assign_row)
-        action_row = QHBoxLayout()
-        action_row.setSpacing(6)
-        self._btn_ungroup = QPushButton(tr("svgtxt_remove_from_group_btn"))
-        self._btn_ungroup.clicked.connect(self._on_ungroup)
-        action_row.addWidget(self._btn_ungroup)
-        self._btn_size_group = QPushButton(tr("svgtxt_new_group_size_btn"))
-        self._btn_size_group.clicked.connect(self._on_new_group_at_size)
-        action_row.addWidget(self._btn_size_group)
-        action_row.addStretch(1)
-        rv.addLayout(action_row)
-
-        # Divider
         div = QFrame()
         div.setFrameShape(QFrame.Shape.HLine)
-        div.setStyleSheet("color: #ccc;")
         rv.addWidget(div)
 
-        # Section 2 — Groups
-        self._groups_widget = TextGroupsWidget(self.project)
+        rv.addWidget(self._section_label(tr("text_chips_label")))
+        self._groups_widget = TextGroupChips(self.project)
+        self._groups_widget.assign_requested.connect(self._on_assign)
+        self._groups_widget.new_group_requested.connect(self._on_new_group)
         self._groups_widget.groups_changed.connect(self._on_groups_edited)
-        self._groups_widget.group_added.connect(self._on_group_added)
+        self._groups_widget.members_requested.connect(self._on_members_requested)
         rv.addWidget(self._groups_widget, 1)
 
         splitter.addWidget(right)
@@ -166,11 +286,11 @@ class SvgTextInspectorWindow(QDialog):
     # ──────────────────────────────────────────────────────────────────
 
     def _refresh_all(self):
-        self._refresh_preview()
         self._refresh_size_hint()
         self._refresh_elements()
-        self._refresh_group_combo()
-        self._rebuild_group_rows()
+        self._refresh_preview()
+        self._groups_widget.refresh()
+        self._update_selection_info()
 
     def _refresh_size_hint(self):
         native = self._cell is not None and has_plot_metadata(self.svg_path)
@@ -186,17 +306,21 @@ class SvgTextInspectorWindow(QDialog):
                     for e in get_svg_text_elements(self.svg_path)]
         return svg_text_rows(self.project, self._cell)
 
-    def _update_size_button(self):
-        keys = self._selected_keys()
-        self._btn_size_group.setEnabled(
-            bool(keys) and self._sizes.get(keys[0]) is not None)
-
     def _svg_file_bytes(self):
         try:
             with open(self.svg_path, 'rb') as fh:
                 return fh.read()
         except OSError:
             return None
+
+    def _group_of_key(self):
+        """element key -> (group id, group name) for this SVG."""
+        return {
+            m.element_key: (g.id, g.name)
+            for g in self.project.svg_text_groups
+            for m in g.members
+            if m.svg_path == self.svg_path
+        }
 
     def _refresh_preview(self):
         source = svg_text_preview_source(self.project, self._cell) if self._cell else None
@@ -213,14 +337,14 @@ class SvgTextInspectorWindow(QDialog):
 
         renderer = QSvgRenderer(QByteArray(processed)) if processed else QSvgRenderer(self.svg_path)
         if not renderer.isValid():
-            self._preview_label.setText(tr("svgtxt_preview_failed"))
+            self._preview_label.set_failed(tr("svgtxt_preview_failed"))
             self._preview_base = None
             self._preview_rects = {}
             return
         sz = renderer.defaultSize()
         if sz.isEmpty():
             sz.setWidth(400); sz.setHeight(400)
-        scale = min(480 / sz.width(), 480 / sz.height(), 1.0)
+        scale = min(_RENDER_MAX / sz.width(), _RENDER_MAX / sz.height(), 1.0)
         w, h = int(sz.width() * scale), int(sz.height() * scale)
         img = QImage(w, h, QImage.Format.Format_ARGB32)
         img.fill(Qt.GlobalColor.transparent)
@@ -230,124 +354,127 @@ class SvgTextInspectorWindow(QDialog):
         self._preview_base = img
         self._preview_rects = (text_preview_rects(key_bytes, None, w, h, positioned)
                                if key_bytes else {})
-        self._update_highlight()
-        self._preview_label.resize(w, h)
-
-    def _update_highlight(self):
-        """Repaint the cached preview with the selected texts outlined.
-
-        Uses the base image and element rects from the last ``_refresh_preview``,
-        so selection changes never re-render the SVG.
-        """
-        if self._preview_base is None:
-            return
-        img = self._preview_base.copy()
-        keys = self._selected_keys()
-        if keys:
-            painter = QPainter(img)
-            painter.setPen(QPen(QColor(217, 72, 15), 2))
-            painter.setBrush(QColor(255, 120, 0, 90))
-            for key in keys:
-                rect = self._preview_rects.get(key)
-                if rect is not None:
-                    painter.drawRect(rect.adjusted(-2, -2, 2, 2))
-            painter.end()
-        self._preview_label.setPixmap(QPixmap.fromImage(img))
+        groups = self._group_of_key()
+        texts = {r['key']: r['text'] for r in self._element_rows()}
+        colours = {}
+        tips = {}
+        for key, rect in self._preview_rects.items():
+            text = texts.get(key, key)
+            size = self._sizes.get(key)
+            group = groups.get(key)
+            colours[key] = group_colour(self.project, group[0]) if group else None
+            size_text = f" · {format_text_size(size)} pt" if size is not None else ""
+            tips[key] = f"{text[:60]}{size_text} · {group[1] if group else tr('text_chip_ungrouped')}"
+        self._preview_label.set_content(img, self._preview_rects, colours, tips)
+        self._preview_label.set_selected(self._selected_keys())
 
     def _refresh_elements(self):
-        sel_keys = {item.data(Qt.ItemDataRole.UserRole) for item in self._elem_list.selectedItems()}
+        sel_keys = set(self._selected_keys())
         self._elem_list.blockSignals(True)
         self._elem_list.clear()
-        key_to_group = {
-            m.element_key: g.name
-            for g in self.project.svg_text_groups
-            for m in g.members
-            if m.svg_path == self.svg_path
-        }
+        groups = self._group_of_key()
         self._sizes = {}
         for el in self._element_rows():
             label = el['text'][:60]
             if el['size_pt'] is not None:
                 self._sizes[el['key']] = round(el['size_pt'], 1)
                 label = f"{label} · {format_text_size(el['size_pt'])} pt"
-            grp = key_to_group.get(el['key'])
-            suffix = f"  [{grp}]" if grp else ""
+            group = groups.get(el['key'])
+            suffix = f"  [{group[1]}]" if group else ""
             item = QListWidgetItem(f"{label}{suffix}")
             item.setData(Qt.ItemDataRole.UserRole, el['key'])
+            colour = group_colour(self.project, group[0]) if group else None
+            if colour:
+                item.setIcon(self._dot_icon(colour))
             self._elem_list.addItem(item)
             if el['key'] in sel_keys:
                 item.setSelected(True)
         self._elem_list.blockSignals(False)
-        self._update_size_button()
-        self._update_highlight()
 
-    def _refresh_group_combo(self):
-        self._groups_widget.fill_combo(self._group_combo)
+    @staticmethod
+    def _dot_icon(colour):
+        pixmap = QPixmap(12, 12)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(colour))
+        painter.drawEllipse(QRectF(1, 1, 10, 10))
+        painter.end()
+        return QIcon(pixmap)
 
-    def _rebuild_group_rows(self):
-        self._groups_widget.refresh()
+    def _update_selection_info(self):
+        keys = self._selected_keys()
+        size = self._sizes.get(keys[0]) if keys else None
+        self._groups_widget.set_selection_info(len(keys), size)
 
     def _on_groups_edited(self):
-        # Sync combo + element list labels
-        self._refresh_group_combo()
+        self._groups_widget.refresh()
         self._refresh_elements()
         self._refresh_preview()
+        self._update_selection_info()
         self.groups_changed.emit()
 
-    def _on_group_added(self, gid):
-        # Auto-select the new group in the combo
-        self._refresh_group_combo()
-        idx = self._group_combo.findData(gid)
-        if idx >= 0:
-            self._group_combo.setCurrentIndex(idx)
+    def _on_members_requested(self, group_id):
+        group = next((g for g in self.project.svg_text_groups if g.id == group_id), None)
+        if group is None:
+            return
+        keys = [m.element_key for m in group.members if m.svg_path == self.svg_path]
+        self._select_keys(keys)
+
+    def _select_keys(self, keys):
+        self._elem_list.blockSignals(True)
+        for index in range(self._elem_list.count()):
+            item = self._elem_list.item(index)
+            item.setSelected(item.data(Qt.ItemDataRole.UserRole) in keys)
+        self._elem_list.blockSignals(False)
+        self._update_highlight()
 
     # ──────────────────────────────────────────────────────────────────
-    # Slots
+    # Selection
     # ──────────────────────────────────────────────────────────────────
 
     def _selected_keys(self):
         return [item.data(Qt.ItemDataRole.UserRole) for item in self._elem_list.selectedItems()
                 if item.data(Qt.ItemDataRole.UserRole)]
 
-    def _on_assign(self):
-        keys = self._selected_keys()
-        if not keys:
-            return
-        group_id = self._group_combo.currentData()
-        if not group_id:
-            return
-        group = next((g for g in self.project.svg_text_groups if g.id == group_id), None)
-        if not group:
-            return
-        for g in self.project.svg_text_groups:
-            g.members = [m for m in g.members
-                         if not (m.svg_path == self.svg_path and m.element_key in keys)]
-        for key in keys:
-            group.members.append(SvgTextMember(svg_path=self.svg_path, element_key=key))
-        self._refresh_elements()
-        self._refresh_preview()
-        self.groups_changed.emit()
+    def _on_list_selection(self):
+        self._update_highlight()
 
-    def _on_new_group_at_size(self):
+    def _on_preview_selection(self, keys):
+        self._select_keys(keys)
+
+    def _update_highlight(self):
+        keys = self._selected_keys()
+        self._preview_label.set_selected(keys)
+        self._update_selection_info()
+
+    # ──────────────────────────────────────────────────────────────────
+    # Membership (same effect as the former combo / buttons)
+    # ──────────────────────────────────────────────────────────────────
+
+    def _on_assign(self, group_id):
+        keys = self._selected_keys()
+        if group_id is None:
+            if ungroup_svg(self.project, self.svg_path, keys):
+                self._on_groups_edited()
+            return
+        if assign_svg(self.project, self.svg_path, keys, group_id):
+            self._on_groups_edited()
+
+    def _on_new_group(self):
         keys = self._selected_keys()
         size = self._sizes.get(keys[0]) if keys else None
-        if size is None:
-            return
-        self._groups_widget.add_group(
-            name=tr("svgtxt_plot_group_name").format(
-                pt=format_text_size(size)),
-            font_size_pt=size)
-
-    def _on_ungroup(self):
-        keys = self._selected_keys()
-        if not keys:
-            return
-        for g in self.project.svg_text_groups:
-            g.members = [m for m in g.members
-                         if not (m.svg_path == self.svg_path and m.element_key in keys)]
-        self._refresh_elements()
-        self._refresh_preview()
-        self.groups_changed.emit()
+        if size is not None:
+            name = tr("svgtxt_plot_group_name").format(pt=format_text_size(size))
+            font_size = size
+        else:
+            name = tr("svgtxt_default_group_name")
+            font_size = 12.0
+        gid = new_svg_group(self.project, name, font_size)
+        if keys:
+            assign_svg(self.project, self.svg_path, keys, gid)
+        self._on_groups_edited()
 
     def refresh(self):
         """Re-populate after external changes (e.g. project reload)."""

@@ -19,12 +19,15 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import (
     Qt, pyqtSignal, pyqtSlot, QRectF, QItemSelectionModel, QObject, QRunnable, QThreadPool,
 )
-from PyQt6.QtGui import QPainter, QImage, QPen, QColor, QPalette, QTransform
+from PyQt6.QtGui import QKeySequence, QPainter, QImage, QPen, QColor, QPalette, QShortcut, QTransform
 from PIL import Image
 
+from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
 from src.app.motion import MotionTween, install_button_feedback
-from src.app.text_groups_widget import TextGroupsWidget, section_label
+from src.app.text_groups_widget import section_label
+from src.app.text_group_chips import TextGroupChips, group_colour
+from src.utils.text_group_assign import assign_raster, new_svg_group, ungroup_raster
 from src.utils.raster_text_ocr import configured_backend, detect_text, OcrUnavailable, backend_status
 from src.utils.raster_text_utils import (
     apply_raster_text_overrides, build_raster_override_spec, regions_from_detections,
@@ -117,9 +120,10 @@ class RasterTextPreview(QWidget):
             selected = overlay['id'] in self._selected
             hovered = overlay['id'] == self._hovered
             fill_tween, border_tween = self._feedback[overlay['id']]
-            fill = QColor(accent)
+            tint = QColor(overlay['color']) if overlay.get('color') else accent
+            fill = QColor(tint)
             fill.setAlpha(round(fill_tween.value))
-            border = QColor(accent)
+            border = QColor(tint)
             border.setAlpha(round(border_tween.value))
             pen = QPen(border, 3.0 if selected or hovered else 2.0)
             pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -233,6 +237,7 @@ class RasterTextInspectorWindow(QDialog):
         self._detection = None
         self._closed = False
         self.setWindowTitle(tr("rastertxt_inspector_title"))
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, activated=lambda: show_context_help(self, "text_sizes"))
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowCloseButtonHint |
                             Qt.WindowType.WindowMaximizeButtonHint)
         self.setMinimumSize(820, 560)
@@ -284,7 +289,7 @@ class RasterTextInspectorWindow(QDialog):
         self._btn_cancel.hide()
         detect_row.addWidget(self._btn_cancel)
         self._ocr_status = QLabel()
-        self._ocr_status.setStyleSheet("color: #b07800;")
+        self._ocr_status.setStyleSheet("color: palette(link);")
         self._ocr_status.setWordWrap(True)
         detect_row.addWidget(self._ocr_status, 1)
         rv.addLayout(detect_row)
@@ -323,27 +328,17 @@ class RasterTextInspectorWindow(QDialog):
         ctl.addWidget(self._btn_remove)
         rv.addLayout(ctl)
 
-        assign_row = QHBoxLayout()
-        assign_row.addWidget(QLabel(tr("svgtxt_assign_to") + ":"))
-        self._group_combo = QComboBox()
-        self._group_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        assign_row.addWidget(self._group_combo, 1)
-        btn_assign = QPushButton(tr("svgtxt_assign_btn"))
-        btn_assign.clicked.connect(self._on_assign)
-        assign_row.addWidget(btn_assign)
-        btn_ungroup = QPushButton(tr("svgtxt_remove_from_group_btn"))
-        btn_ungroup.clicked.connect(self._on_ungroup)
-        assign_row.addWidget(btn_ungroup)
-        rv.addLayout(assign_row)
 
         div = QFrame()
         div.setFrameShape(QFrame.Shape.HLine)
-        div.setStyleSheet("color: #ccc;")
         rv.addWidget(div)
 
-        self._groups_widget = TextGroupsWidget(self.project)
+        rv.addWidget(section_label(tr("text_chips_label")))
+        self._groups_widget = TextGroupChips(self.project)
+        self._groups_widget.assign_requested.connect(self._on_chip_assign)
+        self._groups_widget.new_group_requested.connect(self._on_chip_new_group)
         self._groups_widget.groups_changed.connect(self._on_groups_edited)
-        self._groups_widget.group_added.connect(self._on_group_added)
+        self._groups_widget.members_requested.connect(self._on_chip_members)
         rv.addWidget(self._groups_widget, 1)
 
         splitter.addWidget(right)
@@ -361,8 +356,8 @@ class RasterTextInspectorWindow(QDialog):
             self._refresh_ocr_status()
         self._refresh_preview()
         self._refresh_list()
-        self._groups_widget.fill_combo(self._group_combo)
         self._groups_widget.refresh()
+        self._update_chip_selection()
 
     def _refresh_ocr_status(self):
         busy = self._detection is not None
@@ -412,7 +407,8 @@ class RasterTextInspectorWindow(QDialog):
             elif region.warning:
                 tooltip += '\n' + tr('rastertxt_reason_' + region.warning)
             overlays.append({'id': region.id, 'path': path, 'tooltip': tooltip,
-                             'enabled': region.enabled and (status is None or status == 'applied')})
+                             'enabled': region.enabled and (status is None or status == 'applied'),
+                             'color': group_colour(self.project, region.group_id) if region.group_id else None})
         data = img.tobytes('raw', 'RGBA')
         qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888).copy()
         self._preview_label.set_content(qimg, overlays)
@@ -519,6 +515,11 @@ class RasterTextInspectorWindow(QDialog):
         self.groups_changed.emit()
         self._refresh_preview()
         self._refresh_list()
+        self._groups_widget.refresh()
+        self._update_chip_selection()
+
+    def _update_chip_selection(self):
+        self._groups_widget.set_selection_info(len(self._selected_regions()), None)
 
     # ── Slots ───────────────────────────────────────────────────────────
 
@@ -647,27 +648,27 @@ class RasterTextInspectorWindow(QDialog):
         self._cell.raster_text_regions = [r for r in self._cell.raster_text_regions if r.id not in ids]
         self._changed()
 
-    def _on_assign(self):
-        gid = self._group_combo.currentData()
+    def _on_chip_assign(self, group_id):
         regions = self._selected_regions()
-        if not gid or not regions:
-            return
-        for r in regions:
-            r.group_id = gid
-            r.enabled = True
+        if group_id is None:
+            ungroup_raster(regions)
+        else:
+            assign_raster(regions, group_id)
         self._changed()
 
-    def _on_ungroup(self):
-        for r in self._selected_regions():
-            r.group_id = None
+    def _on_chip_new_group(self):
+        regions = self._selected_regions()
+        gid = new_svg_group(self.project, tr("svgtxt_default_group_name"), 12.0)
+        assign_raster(regions, gid)
         self._changed()
+
+    def _on_chip_members(self, group_id):
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            region = next((r for r in self._cell.raster_text_regions
+                           if r.id == item.data(Qt.ItemDataRole.UserRole)), None)
+            item.setSelected(region is not None and region.group_id == group_id)
 
     def _on_groups_edited(self):
-        self._groups_widget.fill_combo(self._group_combo)
+        self._groups_widget.refresh()
         self._changed()
-
-    def _on_group_added(self, gid):
-        self._groups_widget.fill_combo(self._group_combo)
-        idx = self._group_combo.findData(gid)
-        if idx >= 0:
-            self._group_combo.setCurrentIndex(idx)

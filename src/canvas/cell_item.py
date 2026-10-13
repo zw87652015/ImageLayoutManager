@@ -4,6 +4,8 @@ from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphi
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QFontMetrics, QCursor
 from PyQt6.QtCore import Qt, QRectF, QRect, QPointF, pyqtSignal, QVariantAnimation, QEasingCurve, QTimer
 
+from src.canvas import canvas_accent
+from src.app.theme import LIGHT, get_tokens
 from src.app.motion import start_animation
 from src.model.enums import FitMode
 from src.utils.image_proxy import get_image_proxy
@@ -36,7 +38,6 @@ class ResizeHandleItem(QGraphicsRectItem):
 
         s = self.HANDLE_SIZE
         self.setRect(-s / 2, -s / 2, s, s)
-        self.setBrush(QBrush(QColor("#007ACC")))
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setZValue(1000)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
@@ -44,6 +45,11 @@ class ResizeHandleItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         idx = self.ANCHORS.index((anchor_col, anchor_row))
         self.setCursor(self.CURSORS[idx])
+
+    def paint(self, painter: QPainter, option, widget=None):
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(canvas_accent.accent()))
+        painter.drawRect(self.rect())
 
     def update_position(self):
         r = self.cell_item.rect()
@@ -492,11 +498,14 @@ class CellItem(QGraphicsRectItem):
         self.placeholder_pen.setCosmetic(True)
         self.placeholder_pen.setDashPattern([4.0, 4.0])
 
-        self.selected_pen = QPen(QColor("#0891B2"))
+        _accent = get_tokens(LIGHT)["accent"]
+        self.selected_pen = QPen(QColor(_accent))
         self.selected_pen.setWidth(2)
         self.selected_pen.setCosmetic(True)
 
-        self.hover_brush = QBrush(QColor(8, 145, 178, 25))
+        _hover = QColor(_accent)
+        _hover.setAlpha(25)
+        self.hover_brush = QBrush(_hover)
         self.normal_brush = QBrush(Qt.GlobalColor.white)
         self.placeholder_brush = QBrush(QColor("#F5F5F5"))
         self._placeholder_fg = "#AAAAAA"
@@ -512,7 +521,7 @@ class CellItem(QGraphicsRectItem):
         self._pip_zone_hovered = False
         self._pip_drop_indicator_t = 0.0  # 0.0 = replace border, 1.0 = PiP zone border
         self._pip_anim = None
-        self._accent_color = "#0891B2"
+        self._accent_color = _accent
         self._on_accent_color = "#FFFFFF"
         self._reflow_icon = None
         self._reflow_icon_color = None
@@ -520,7 +529,7 @@ class CellItem(QGraphicsRectItem):
         # PiP inset state
         self._pip_items = []          # list of PiPItem data objects
         self._selected_pip_id = None  # id of the currently selected PiP
-        self._pip_resize_active = False  # True only when user explicitly enters resize mode
+        self._pip_resize_active = False  # True while a PiP is selected: its handles are drawn and hit-tested
         self._pip_drag_mode = None    # "move"|"resize_nw"|…|"origin_move"|"origin_resize_nw"|…
         self._pip_drag_id = None      # id of the pip being dragged (separate from selection)
         self._pip_drag_start_item_pos = None
@@ -814,19 +823,19 @@ class CellItem(QGraphicsRectItem):
             return
 
         # PiP interaction:
-        #   - Click PiP body: select it (highlight) and start a move drag.
-        #   - Resize handles only appear after "Resize" from context menu.
-        #   - While resize mode active, clicking a handle starts a resize drag.
-        #   - Clicking outside any PiP exits resize mode and deselects.
+        #   - Click PiP body: select it (its handles appear) and start a move drag.
+        #   - While a PiP is selected, pressing a handle starts a resize drag.
+        #   - Clicking outside any PiP deselects it and hides its handles.
         if self._pip_items and event.button() == Qt.MouseButton.LeftButton:
             pip_id, mode = self._pip_hit_test(event.pos())
             if pip_id:
                 pip = next((p for p in self._pip_items if p.id == pip_id), None)
                 if pip:
                     if pip_id != self._selected_pip_id:
-                        # Newly clicked PiP: select it, clear resize mode
+                        # Newly clicked PiP: select it and show its handles
+                        self.prepareGeometryChange()
                         self._selected_pip_id = pip_id
-                        self._pip_resize_active = False
+                        self._pip_resize_active = True
                         self.update()
                         scene = self.scene()
                         if scene and hasattr(scene, "selection_changed_custom"):
@@ -850,7 +859,8 @@ class CellItem(QGraphicsRectItem):
                 event.accept()
                 return
             elif self._selected_pip_id:
-                # Clicked outside any PiP — exit resize mode and deselect
+                # Clicked outside any PiP — deselect and hide its handles
+                self.prepareGeometryChange()
                 self._selected_pip_id = None
                 self._pip_resize_active = False
                 self._pip_drag_mode = None
@@ -979,16 +989,7 @@ class CellItem(QGraphicsRectItem):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
-            if self._pip_resize_active:
-                # First Esc: exit resize mode but keep PiP selected
-                self._pip_resize_active = False
-                self._pip_drag_mode = None
-                self._pip_drag_id = None
-                self.update()
-                event.accept()
-                return
             if self._selected_pip_id:
-                # Second Esc (or Esc when not in resize): deselect PiP
                 self.deselect_pip()
                 event.accept()
                 return
@@ -1024,11 +1025,11 @@ class CellItem(QGraphicsRectItem):
         self.placeholder_pen.setColor(QColor(tokens.get("placeholder", "#AEAEB2")))
         # Placeholder background stays light — same paper-backing rationale.
         self._placeholder_fg = tokens.get("text_tert", "#AAAAAA")
-        self.selected_pen.setColor(QColor(tokens.get("accent", "#0891B2")))
+        self.selected_pen.setColor(QColor(tokens["accent"]))
         # Cell backgrounds stay white regardless of theme — transparent images
         # need a white backing and the cell represents paper, not UI chrome.
-        accent = QColor(tokens.get("accent", "#0891B2"))
-        self._accent_color = tokens.get("accent", "#0891B2")
+        accent = QColor(tokens["accent"])
+        self._accent_color = tokens["accent"]
         self._on_accent_color = tokens.get("on_accent", "#FFFFFF")
         self.hover_brush.setColor(QColor(accent.red(), accent.green(), accent.blue(), 25))
         self.update()
@@ -1105,6 +1106,7 @@ class CellItem(QGraphicsRectItem):
     def update_pip_items(self, pip_items):
         self._pip_items = list(pip_items)
         if self._selected_pip_id and not any(p.id == self._selected_pip_id for p in self._pip_items):
+            self.prepareGeometryChange()
             self._selected_pip_id = None
             self._pip_resize_active = False
             self._pip_drag_mode = None
@@ -1143,15 +1145,11 @@ class CellItem(QGraphicsRectItem):
             pip.y = max(0.0, min(pip.y, 1.0 - h))
 
     def select_pip(self, pip_id: str, resize: bool = False):
-        """Select a PiP inset.
-        resize=False (default): highlight + move only, no resize handles.
-        resize=True: also show resize handles (called from context menu)."""
-        changed = pip_id != self._selected_pip_id
+        """Select a PiP inset and show its resize handles.
+        The resize argument is kept for compatibility; handles always show for a selected inset."""
+        self.prepareGeometryChange()
         self._selected_pip_id = pip_id
-        if resize:
-            self._pip_resize_active = True
-        elif changed:
-            self._pip_resize_active = False
+        self._pip_resize_active = True
         self.update()
         scene = self.scene()
         if scene and hasattr(scene, "selection_changed_custom"):
@@ -1160,6 +1158,7 @@ class CellItem(QGraphicsRectItem):
     def deselect_pip(self):
         """Deselect the currently selected PiP inset."""
         if self._selected_pip_id is not None:
+            self.prepareGeometryChange()
             self._selected_pip_id = None
             self._pip_resize_active = False
             self._pip_drag_mode = None
@@ -1747,7 +1746,7 @@ class CellItem(QGraphicsRectItem):
         """Screen-only guides at the segment dividers of a selected split strip."""
         if not self.isSelected() or getattr(self.scene(), 'preview_mode', False):
             return
-        pen = QPen(QColor("#4A90D9"))
+        pen = QPen(canvas_accent.accent())
         pen.setStyle(Qt.PenStyle.DashLine)
         pen.setCosmetic(True)
         painter.save()
@@ -2350,8 +2349,8 @@ class CellItem(QGraphicsRectItem):
             super().hoverMoveEvent(event)
             return
 
-        # 2. PiP handle cursor logic
-        if self._selected_pip_id and self._pip_resize_active:
+        # 2. PiP handle and body cursor logic
+        if self._pip_items:
             _, mode = self._pip_hit_test(event.pos())
             if mode:
                 cursors = {
@@ -2368,6 +2367,7 @@ class CellItem(QGraphicsRectItem):
                     "origin_resize_sw": Qt.CursorShape.SizeBDiagCursor,
                     "origin_resize_se": Qt.CursorShape.SizeFDiagCursor,
                     "origin_move": Qt.CursorShape.SizeAllCursor,
+                    "move": Qt.CursorShape.SizeAllCursor,
                 }
                 if mode in cursors:
                     self.setCursor(cursors[mode])

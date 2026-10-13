@@ -63,11 +63,11 @@ class WelcomeLogo(QWidget):
             round(surface.blue() * 0.88 + accent.blue() * 0.12),
         ).name()
         return (self._svg_text
-                .replace("#1E2433", tokens["text"])
-                .replace("#0891B2", tokens["accent"])
-                .replace("#F5F7FA", tokens["surface"])
-                .replace("#6B7280", tokens["text_sec"])
-                .replace("#E6F4F8", tint))
+                .replace("#1F1E1C", tokens["text"])
+                .replace("#4F5BD5", tokens["accent"])
+                .replace("#FFFFFF", tokens["surface"])
+                .replace("#6B6862", tokens["text_sec"])
+                .replace("#E8EAFA", tint))
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -233,7 +233,9 @@ class WelcomeWindow(QWidget):
                 w.deleteLater()
         recents = self._mw._get_recent_projects()[:_MAX_RECENTS]
         from src.app.theme import get_tokens
-        accent = get_tokens(self._mw._current_theme).get("accent", "#0891B2")
+        tokens = get_tokens(self._mw._current_theme)
+        accent = tokens["accent"]
+        tert = tokens["text_tert"]
         for path in recents:
             name = html.escape(os.path.basename(path))
             folder = os.path.dirname(path)
@@ -244,7 +246,7 @@ class WelcomeWindow(QWidget):
             link = QLabel(
                 f'<a href="{href}" style="color:{accent}; '
                 f'text-decoration: underline;">{name}</a>'
-                f'&nbsp;&nbsp;<span style="color:#8C959F;">{folder}</span>'
+                f'&nbsp;&nbsp;<span style="color:{tert};">{folder}</span>'
             )
             link.setObjectName("welcomeRecent")
             link.setTextFormat(Qt.TextFormat.RichText)

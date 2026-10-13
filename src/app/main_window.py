@@ -13,10 +13,11 @@ from PyQt6.QtWidgets import (
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
     QSizePolicy, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray, QEventLoop
+from PyQt6.QtCore import Qt, QEvent, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray, QEventLoop
 from PyQt6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeySequence, QUndoStack, QPalette
-from src.app.theme import build_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
+from src.app.theme import apply_app_palette, get_stylesheet, get_layers_tree_stylesheet, get_tokens, DARK, LIGHT
 from src.app.icons import make_icon
+from src.app.draw_palette import DrawPalette
 from src.app.i18n import tr, set_language, current_language
 from src.app.history_timeline import HistoryTimeline
 from src.app.welcome_window import WelcomeWindow
@@ -39,6 +40,9 @@ from src.app.inspector import Inspector
 from src.app.layers_panel import LayersPanel
 from src.app.about_dialog import AboutDialog, StartupUpdateChecker
 from src.app.help_dialog import HelpDialog
+from src.app.tour_overlay import TourOverlay
+from src.app.ui_targets import flash_target
+from src.app.help_content import topic_for_context
 from src.model.enums import PageSizePreset
 from src.export.pdf_exporter import PdfExporter
 from src.export.pdf_images import coerce_image_settings, format_issue
@@ -51,7 +55,7 @@ from src.app.commands import (
     PropertyChangeCommand, MultiPropertyChangeCommand, SwapCellsCommand, MultiSwapCellsCommand,
     DropImageCommand, ChangeRowCountCommand, InsertRowCommand, InsertCellCommand,
     DeleteRowCommand, DeleteCellCommand,
-    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, AutoLayoutFreeformCommand, ChangeLabelSchemeCommand,
+    AddTextCommand, DeleteTextCommand, AutoLabelCommand, AutoLabelOutCellCommand, AutoLayoutCommand, AutoLayoutFreeformCommand, ChangeLabelSchemeCommand, ChangeGapCommand,
     SetSubLabelsCommand,
     SplitCellCommand, InsertSubCellCommand, DeleteSubCellCommand, WrapAndInsertCommand,
     ChangeSubCellRatioCommand,
@@ -127,11 +131,6 @@ class _CollapseHandle(QSplitterHandle):
         btn = QToolButton(self)
         btn.setFixedSize(self._BTN_W, self._BTN_H)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        btn.setStyleSheet(
-            "QToolButton { border: 1px solid #AAAAAA; background: #E0E0E0;"
-            " border-radius: 3px; font-size: 9px; color: #333333; }"
-            "QToolButton:hover { background: #C8C8C8; }"
-        )
         btn.clicked.connect(self._toggle)
         self._btn = btn
 
@@ -587,6 +586,22 @@ class MainWindow(QMainWindow):
         # Silent update check
         self._update_checker: StartupUpdateChecker | None = None
         QTimer.singleShot(1500, self._start_update_check)
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.Type.MouseButtonPress and isinstance(obj, QWidget)
+                and QApplication.activePopupWidget() is None
+                and obj.window().windowType() != Qt.WindowType.Popup):
+            item = self._editing_text_item()
+            if item is not None:
+                inside = False
+                view = self.view
+                if view is not None and obj is view.viewport():
+                    scene_pos = view.mapToScene(event.position().toPoint())
+                    inside = item.contains(item.mapFromScene(scene_pos))
+                if not inside:
+                    item.clearFocus()
+        return super().eventFilter(obj, event)
 
     def _start_update_check(self):
         self._update_checker = StartupUpdateChecker(self)
@@ -598,7 +613,7 @@ class MainWindow(QMainWindow):
         msg = tr("status_update_available").format(tag=latest_tag)
         # Wrap in an <a> so QLabel.linkActivated fires; href is a sentinel.
         self.update_available_label.setText(
-            f'<a href="about" style="color:#4A90E2; text-decoration:none;">🔔 {msg}</a>'
+            f'<a href="about" style="color:{get_tokens(self._current_theme)["accent"]}; text-decoration:none;">🔔 {msg}</a>'
         )
         self.update_available_label.setToolTip(tr("status_update_tooltip"))
         self.update_available_label.show()
@@ -618,7 +633,7 @@ class MainWindow(QMainWindow):
         # Toolbar
         self.toolbar = QToolBar()
         self.toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.toolbar.setIconSize(QSize(20, 20))
+        self.toolbar.setIconSize(QSize(18, 18))
         self.toolbar.setMovable(False)
         self.addToolBar(self.toolbar)
         self.toolbar.toggleViewAction().setEnabled(False)
@@ -698,6 +713,9 @@ class MainWindow(QMainWindow):
         self._act_canvas_actual_size = QAction(tr("action_canvas_actual_size"), self)
         self._act_canvas_actual_size.triggered.connect(lambda: self._zoom_current_view(CanvasView.zoom_to_100))
         self._view_menu.addAction(self._act_canvas_actual_size)
+        self._act_calibrate_display = QAction(tr("action_calibrate_display"), self)
+        self._act_calibrate_display.triggered.connect(lambda: self._on_calibrate_display())
+        self._view_menu.addAction(self._act_calibrate_display)
 
         # ── UI font zoom (Ctrl/Cmd + / - / 0) ──
         self._view_menu.addSeparator()
@@ -933,9 +951,10 @@ class MainWindow(QMainWindow):
         self._draw_menu.addSeparator()
 
         keep_active = QAction(tr("keep_tool_active"), self)
+        keep_active.setToolTip(tr("tip_keep_tool_active"))
         keep_active.setCheckable(True)
         keep_active.setChecked(
-            self._settings.value("marks/keep_tool_active", False, type=bool))
+            self._settings.value("marks/keep_tool_active", True, type=bool))
         keep_active.toggled.connect(self._on_keep_tool_active_toggled)
         self._draw_menu.addAction(keep_active)
         self._act_keep_tool_active = keep_active
@@ -1130,27 +1149,20 @@ class MainWindow(QMainWindow):
         self._auto_layout_button.setMenu(self._auto_layout_menu)
         self.toolbar.addWidget(self._auto_layout_button)
 
-        # Draw mode toggle button: main part toggles Draw mode; the menu
-        # mirrors the Draw submenu (mode, Select Shapes, tools, options).
+        # Draw mode toggle button; the shape tools live on the floating
+        # canvas palette (DrawPalette) and in the Edit → Draw submenu.
         self._draw_button = QToolButton(self)
         self._draw_button.setDefaultAction(self._act_draw_mode)
-        self._draw_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         self._draw_button.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._draw_button.setToolTip(tr("tip_draw_button"))
-        draw_btn_menu = QMenu(self._draw_button)
-        draw_btn_menu.addAction(self._act_draw_mode)
-        draw_btn_menu.addSeparator()
-        draw_btn_menu.addAction(self._mark_tool_actions["select"])
-        draw_btn_menu.addSeparator()
-        for tool in self._draw_tools:
-            draw_btn_menu.addAction(self._mark_tool_actions[tool])
-        draw_btn_menu.addSeparator()
-        draw_btn_menu.addAction(keep_active)
-        self._draw_button.setMenu(draw_btn_menu)
         self.toolbar.addWidget(self._draw_button)
         self.toolbar.addSeparator()
+        self._draw_palette = DrawPalette(
+            [self._mark_tool_actions[name] for name in ("select",) + self._draw_tools],
+            self._act_keep_tool_active,
+            lambda: self._set_draw_mode(False),
+            self)
 
         # ── Right-aligned toolbar group ─────────────────────────────────
         # A stretch spacer pushes the following widgets to the right edge,
@@ -1215,11 +1227,14 @@ class MainWindow(QMainWindow):
         splitter = CollapsibleSplitter(Qt.Orientation.Horizontal)
         splitter.setHandleWidth(16)
         self.splitter = splitter
+        splitter.setObjectName("mainSplitter")
         main_layout.addWidget(splitter)
 
         # ── Left Panel: Layers + History tabs ──
         self.left_tabs = QTabWidget()
         self.left_tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self.left_tabs.setObjectName("sideTabs")
+        self.left_tabs.tabBar().setDrawBase(False)
         self.layers_panel = LayersPanel()
         self.history_view = HistoryTimeline()
         self.history_view.setCleanIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton))
@@ -1232,6 +1247,7 @@ class MainWindow(QMainWindow):
         self.tab_widget.setTabsClosable(True)
         self.tab_widget.setMovable(True)
         self.tab_widget.setDocumentMode(True)
+        self.tab_widget.setObjectName("docTabs")
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         self.tab_widget.tabCloseRequested.connect(self._on_close_tab_by_index)
         splitter.addWidget(self.tab_widget)
@@ -1272,19 +1288,12 @@ class MainWindow(QMainWindow):
         self.update_available_label.setTextFormat(Qt.TextFormat.RichText)
         self.update_available_label.setOpenExternalLinks(False)
         self.update_available_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.update_available_label.setStyleSheet(
-            "color: #4A90E2; font-size: 12px; padding: 0 8px;"
-        )
         # Draw-mode pill (left-most permanent widget; only visible while the
         # mode is on). Clicking it leaves Draw mode.
         self.draw_mode_label = QLabel("")
         self.draw_mode_label.setTextFormat(Qt.TextFormat.RichText)
         self.draw_mode_label.setOpenExternalLinks(False)
         self.draw_mode_label.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.draw_mode_label.setStyleSheet(
-            "background-color: #4A90D9; color: #FFFFFF; font-weight: bold;"
-            "border-radius: 7px; padding: 1px 8px; margin: 2px 4px;"
-        )
         self.draw_mode_label.linkActivated.connect(
             lambda _link: self._set_draw_mode(False))
         self.draw_mode_label.hide()
@@ -1329,6 +1338,7 @@ class MainWindow(QMainWindow):
         self._zoom_menu.addSeparator()
         self._zoom_menu.addAction(self._act_canvas_fit_page)
         self._zoom_menu.addAction(self._act_canvas_actual_size)
+        self._zoom_menu.addAction(self._act_calibrate_display)
         self.zoom_label.setMenu(self._zoom_menu)
 
         self._zoom_in_btn = QToolButton()
@@ -1352,6 +1362,7 @@ class MainWindow(QMainWindow):
         self._act_canvas_zoom_out.setText(tr("action_canvas_zoom_out"))
         self._act_canvas_fit_page.setText(tr("action_canvas_fit_page"))
         self._act_canvas_actual_size.setText(tr("action_canvas_actual_size"))
+        self._act_calibrate_display.setText(tr("action_calibrate_display"))
         self._zoom_fit_btn.setText(tr("zoom_fit_btn"))
         for button, key in ((self._zoom_out_btn, "action_canvas_zoom_out"),
                             (self._zoom_in_btn, "action_canvas_zoom_in"),
@@ -1578,7 +1589,7 @@ class MainWindow(QMainWindow):
         self.undo_stack = tab.undo_stack
         self.scene = tab.scene
         self.view = tab.view
-        self._on_zoom_changed(tab.view.transform().m11())
+        self._on_zoom_changed(tab.view.zoom_fraction())
         self._current_project_path = tab.path
 
         # Wire up new tab's project to the scene (first time only)
@@ -1765,10 +1776,11 @@ class MainWindow(QMainWindow):
         self._current_theme = theme
         self._settings.setValue("theme", theme)
         app = QApplication.instance()
-        app.setPalette(build_palette(theme))
+        apply_app_palette(app, theme)
         app.setStyleSheet(get_stylesheet(theme, self._current_font_scale()))
         tokens = get_tokens(theme)
         self.layers_panel.apply_theme(tokens)
+        self._apply_chrome_tokens(tokens)
         if hasattr(self, 'inspector'):
             self.inspector.apply_theme(tokens)
         if hasattr(self, 'history_view'):
@@ -1791,6 +1803,20 @@ class MainWindow(QMainWindow):
 
         if animate and changed:
             self._flash_theme_overlay()
+
+    def _apply_chrome_tokens(self, tokens: dict) -> None:
+        for i in range(1, self.splitter.count()):
+            btn = getattr(self.splitter.handle(i), "_btn", None)
+            if btn is not None:
+                btn.setStyleSheet(
+                    "QToolButton { border: none; background: transparent; "
+                    f"color: {tokens['text_tert']}; border-radius: 5px; font-size: 8px; }} "
+                    f"QToolButton:hover {{ background: {tokens['hover']}; color: {tokens['accent']}; }}")
+        self.draw_mode_label.setStyleSheet(
+            f"background-color: {tokens['accent']}; color: {tokens['on_accent']}; "
+            "font-weight: 600; border-radius: 9px; padding: 1px 10px; margin: 3px 4px;")
+        self.update_available_label.setStyleSheet(
+            f"color: {tokens['accent']}; font-size: 12px; padding: 0 8px;")
 
     def _flash_theme_overlay(self) -> None:
         """Brief fade-out overlay to smooth the instant theme colour swap."""
@@ -1848,6 +1874,8 @@ class MainWindow(QMainWindow):
         # on the filled accent background.
         if hasattr(self, "_export_button"):
             self._export_button.setIcon(make_icon("export", tokens["on_accent"]))
+        if hasattr(self, "_draw_palette"):
+            self._draw_palette.apply_theme(tokens)
 
     def _update_toolbar_button_tooltip(self, button):
         """Append the default action's shortcuts to a toolbar button tooltip.
@@ -2025,7 +2053,10 @@ class MainWindow(QMainWindow):
                 act.setText(tr(f"tool_{name}"))
                 act.setToolTip(tr(f"tip_tool_{name}"))
             self._act_keep_tool_active.setText(tr("keep_tool_active"))
+            self._act_keep_tool_active.setToolTip(tr("tip_keep_tool_active"))
             self._draw_button.setToolTip(tr("tip_draw_button"))
+            if hasattr(self, '_draw_palette'):
+                self._draw_palette.retranslate()
             if self.scene is not None and getattr(self.scene, 'draw_mode', False):
                 tool = self.scene.draw_tool
                 self.statusbar.showMessage(
@@ -2072,6 +2103,16 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, zoom_level):
         self.zoom_label.setText(f"{round(zoom_level * 100)}%")
+
+    def _on_calibrate_display(self):
+        from src.app.display_calibration_dialog import DisplayCalibrationDialog
+        dlg = DisplayCalibrationDialog(self.screen(), parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self.refresh_display_scale()
+
+    def refresh_display_scale(self):
+        for tab in self._tabs:
+            tab.view.refresh_display_scale()
 
     def _on_mouse_pos_changed(self, x_mm, y_mm):
         self.mouse_pos_label.setText(f"  X {x_mm:.1f},  Y {y_mm:.1f} mm")
@@ -3029,9 +3070,18 @@ class MainWindow(QMainWindow):
                 self.inspector.set_selection('draw_empty',
                                              self.project.to_dict())
             else:
-                self.inspector.set_selection(None, self.project.to_dict())
+                self.inspector.set_selection(None, self._project_selection_payload())
             self.layers_panel.select_item(None)
             return
+
+        # Layers mirrors the whole canvas selection (a selected PiP stands in for its cell).
+        layer_ids = []
+        for i in items:
+            target = (getattr(i, '_selected_pip_id', None) or getattr(i, 'cell_id', None)
+                      or getattr(i, 'mark_id', None) or getattr(i, 'text_item_id', None))
+            if target and target not in layer_ids:
+                layer_ids.append(target)
+        self.layers_panel.select_items(layer_ids)
 
         # Status bar: selection info
         cell_items = [i for i in items if hasattr(i, 'cell_id') and not getattr(i, 'is_label_cell', False)]
@@ -3066,7 +3116,6 @@ class MainWindow(QMainWindow):
                     data = first.to_dict()
                     data["_count"] = len(mark_items)
                     self.inspector.set_selection('mark', data)
-                    self.layers_panel.select_item(mark_items[0].mark_id)
                     return
             self.inspector.set_selection('mixed', {"count": len(items)})
             return
@@ -3107,7 +3156,6 @@ class MainWindow(QMainWindow):
             # effective selection target for layers highlight + inspector.
             selected_pip_id = getattr(item, '_selected_pip_id', None)
             if selected_pip_id:
-                self.layers_panel.select_item(selected_pip_id)
                 cell = self.project.find_cell_by_id(item.cell_id)
                 if cell:
                     pip = next((p for p in getattr(cell, 'pip_items', []) if p.id == selected_pip_id), None)
@@ -3115,7 +3163,6 @@ class MainWindow(QMainWindow):
                         self.inspector.set_selection('pip', pip.to_dict())
                         return
 
-            self.layers_panel.select_item(item.cell_id)
             # Check if it's a label cell (id starts with "label_")
             if hasattr(item, 'is_label_cell') and item.is_label_cell:
                 # Find the corresponding text item for this label cell
@@ -3128,6 +3175,7 @@ class MainWindow(QMainWindow):
                 eff_ox, eff_oy = (self.project.effective_label_offsets(text_obj)
                                 if text_obj else
                                 (self.project.label_offset_x, self.project.label_offset_y))
+                from src.model.layout_engine import LayoutEngine
                 label_data = {
                     "text_item_id": text_obj.id if text_obj else None,
                     "label_text": text_obj.text if text_obj else "",
@@ -3147,6 +3195,10 @@ class MainWindow(QMainWindow):
                     "label_offset_y": eff_oy,
                     "label_row_height": getattr(self.project, 'label_row_height', 0.0),
                     "label_col_width": getattr(self.project, 'label_col_width', 0.0),
+                    "_effective_row_height_mm": LayoutEngine._strip_size_mm(
+                        self.project, getattr(text_obj, 'font_size_pt', 0.0) if text_obj else 0.0, True),
+                    "_effective_col_width_mm": LayoutEngine._strip_size_mm(
+                        self.project, getattr(text_obj, 'font_size_pt', 0.0) if text_obj else 0.0, False),
                     "placement": getattr(text_obj, 'placement', None) if text_obj else None,
                     "label_tier": getattr(text_obj, 'label_tier', 'panel') if text_obj else 'panel',
                     "style_locked": getattr(text_obj, 'style_locked', False) if text_obj else False,
@@ -3173,6 +3225,7 @@ class MainWindow(QMainWindow):
                 row_data = row.to_dict() if row else None
 
                 # Populate corner label fields from existing cell-scoped text items
+                from src.utils.auto_value import effective_cell_size, effective_subcell_size
                 cell_dict = cell.to_dict()
                 cell_dict["layout_mode"] = getattr(self.project, 'layout_mode', 'grid')
                 cell_dict["_size_groups"] = self._size_groups_payload()
@@ -3189,6 +3242,12 @@ class MainWindow(QMainWindow):
                         corner_labels[t.anchor] = t.text
                 cell_dict["corner_labels"] = corner_labels
 
+                layout = getattr(self.scene, '_last_layout_result', None)
+                eff_w, eff_h = effective_cell_size(layout, cell.id)
+                if eff_w is not None:
+                    cell_dict["_effective_width_mm"] = eff_w
+                    cell_dict["_effective_height_mm"] = eff_h
+
                 # Sub-cell info: if this cell has a parent split container, provide ratio data
                 cell_parent = self.project.find_parent_of(cell.id)
                 if cell_parent and cell_parent.split_direction != "none":
@@ -3204,6 +3263,8 @@ class MainWindow(QMainWindow):
                         "ratio": ratios[idx] if idx < len(ratios) else 1.0,
                         "override_width_mm": getattr(cell, 'override_width_mm', 0.0),
                         "override_height_mm": getattr(cell, 'override_height_mm', 0.0),
+                        "effective_size_mm": effective_subcell_size(
+                            layout, cell.id, cell_parent.split_direction),
                     }
 
                 self.inspector.set_selection('cell', cell_dict, row_data)
@@ -3220,10 +3281,15 @@ class MainWindow(QMainWindow):
         if hasattr(item, 'group_label_id'):
             group_label = self.project.find_group_label(item.group_label_id)
             if group_label:
-                self.inspector.set_selection('group_label', group_label.to_dict())
+                from src.model.layout_engine import LayoutEngine
+                gl_data = group_label.to_dict()
+                gl_data["_effective_thickness_mm"] = LayoutEngine.group_label_thickness_mm(
+                    group_label, self.project.typography_mode)
+                gl_data["_effective_rotation"] = group_label.auto_rotation()
+                self.inspector.set_selection('group_label', gl_data)
                 return
 
-        self.inspector.set_selection(None, self.project.to_dict())
+        self.inspector.set_selection(None, self._project_selection_payload())
 
     def _on_scene_selection_changed_custom(self, _ids: list):
         """Scene-level custom selection updates (PiP select/deselect)."""
@@ -3338,19 +3404,38 @@ class MainWindow(QMainWindow):
 
         return w / h if h > 0 else None
 
+    def _project_selection_payload(self) -> dict:
+        from src.model.layout_engine import LayoutEngine
+        data = self.project.to_dict()
+        data["_effective_col_width_mm"] = LayoutEngine._label_col_width_mm(self.project)
+        return data
+
     def _size_groups_payload(self) -> list:
         """Build the list-of-dicts passed to the inspector for combo population."""
         from src.app.i18n import tr  # local import to avoid circular
-        return [
-            {
+        from src.model.layout_engine import LayoutEngine
+        from src.utils.auto_value import effective_cell_size
+        layout = getattr(self.scene, '_last_layout_result', None)
+        effective = (LayoutEngine._resolve_group_overrides(self.project, layout.cell_rects)
+                     if layout is not None else {})
+        payload = []
+        for g in getattr(self.project, 'size_groups', []):
+            members = self.project.size_group_members(g.id)
+            eff_w, eff_h = effective.get(members[0].id, (0.0, 0.0)) if members else (0.0, 0.0)
+            if members and (not eff_w or not eff_h):
+                fallback_w, fallback_h = effective_cell_size(layout, members[0].id)
+                eff_w = eff_w or fallback_w
+                eff_h = eff_h or fallback_h
+            payload.append({
                 "id": g.id,
                 "name": g.name,
                 "pinned_width_mm": g.pinned_width_mm,
                 "pinned_height_mm": g.pinned_height_mm,
-                "member_count": len(self.project.size_group_members(g.id)),
-            }
-            for g in getattr(self.project, 'size_groups', [])
-        ]
+                "member_count": len(members),
+                "effective_width_mm": eff_w,
+                "effective_height_mm": eff_h,
+            })
+        return payload
 
     def _selected_leaf_cells(self) -> list:
         """Return currently-selected leaf Cell objects (de-duplicated)."""
@@ -3863,6 +3948,11 @@ class MainWindow(QMainWindow):
         # or do it inside the command. PropertyChangeCommand simply sets attributes.
         # So we should convert values before passing to command if needed.
 
+        if set(changes) == {"gap_mm"}:
+            cmd = ChangeGapCommand(self.project, changes["gap_mm"], update_callback=self._refresh_and_update)
+            self.undo_stack.push(cmd)
+            return
+
         if "label_scheme" in changes:
             cmd = ChangeLabelSchemeCommand(self.project, changes["label_scheme"],
                                            update_callback=self._refresh_and_update)
@@ -4057,6 +4147,8 @@ class MainWindow(QMainWindow):
 
     def _on_delete_text(self):
         """Delete selected text item(s), label cell numbering labels, or cell images."""
+        if self._canvas_text_editing():
+            return
         try:
             items = self.scene.selectedItems()
         except RuntimeError:
@@ -4484,15 +4576,20 @@ class MainWindow(QMainWindow):
                 return self._clamp_to_page(*center)
         return self._clamp_to_page(*self._default_text_position())
 
-    def _canvas_text_editing(self) -> bool:
-        """True while an in-canvas text item is in editor mode."""
+    def _editing_text_item(self):
+        """The in-canvas text item in editor mode, or None."""
         try:
             focus = self.scene.focusItem() if self.scene is not None else None
         except RuntimeError:
-            focus = None
+            return None
         flags = getattr(focus, "textInteractionFlags", None)
-        return bool(flags is not None and (
-            flags() & Qt.TextInteractionFlag.TextEditorInteraction))
+        if flags is not None and flags() & Qt.TextInteractionFlag.TextEditorInteraction:
+            return focus
+        return None
+
+    def _canvas_text_editing(self) -> bool:
+        """True while an in-canvas text item is in editor mode."""
+        return self._editing_text_item() is not None
 
     def _on_paste_clipboard(self):
         """Ctrl+V: shapes in Draw mode; otherwise image into cells or text."""
@@ -4660,7 +4757,7 @@ class MainWindow(QMainWindow):
 
         has_image = cell.image_path and not cell.is_placeholder
 
-        # --- Import / Delete Image ---
+        # --- Content ---
         import_action = menu.addAction(tr("ctx_import_image"))
         import_action.triggered.connect(lambda: self._ctx_import_image(cell_id))
 
@@ -4677,28 +4774,80 @@ class MainWindow(QMainWindow):
         paste_text_action.triggered.connect(
             lambda: self._ctx_paste_text(cell_id, screen_pos))
 
-        if has_image:
-            self._append_reveal_image_source_action(menu, cell.image_path)
-            delete_img_action = menu.addAction(tr("action_delete_img"))
-            delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
-            if cell.is_leaf:
-                selected = [c.id for c in self._selected_leaf_cells() if c.image_path and not c.is_placeholder]
-                scope = tuple(selected if cell_id in selected else [cell_id])
-                align_action = menu.addAction(tr("action_align_plots"))
-                align_action.setToolTip(tr("tooltip_align_plots"))
-                align_action.triggered.connect(lambda checked=False, ids=scope: self._on_align_plot_areas(list(ids)))
+        from src.utils.editable_plot import is_editable_plot
+        if cell.is_leaf and has_image and is_editable_plot(cell.image_path):
+            plot_action = menu.addAction(tr("ctx_edit_plot"))
+            plot_action.triggered.connect(lambda: self._on_edit_plot(cell_id))
+        elif cell.is_leaf and not has_image:
+            plot_action = menu.addAction(tr("ctx_new_plot"))
+            plot_action.triggered.connect(lambda: self._on_new_plot(cell_id))
+        else:
+            plot_action = menu.addAction(tr("ctx_edit_plot"))
+            plot_action.setEnabled(False)
+        menu.addSeparator()
 
-        if cell.is_leaf:
-            from src.utils.editable_plot import is_editable_plot
-            if has_image and is_editable_plot(cell.image_path):
-                edit_plot_action = menu.addAction(tr("ctx_edit_plot"))
-                edit_plot_action.triggered.connect(
-                    lambda: self._on_edit_plot(cell_id))
-            elif not has_image:
-                new_plot_action = menu.addAction(tr("ctx_new_plot"))
-                new_plot_action.triggered.connect(
-                    lambda: self._on_new_plot(cell_id))
+        # --- Image ---
+        crop_action = menu.addAction(tr("ctx_crop_image"))
+        crop_action.setEnabled(bool(has_image))
+        crop_action.triggered.connect(lambda: self._ctx_crop_image(cell_id))
+        trim_action = menu.addAction(tr("ctx_auto_trim"))
+        trim_action.setEnabled(bool(has_image) and os.path.isfile(cell.image_path))
+        trim_action.triggered.connect(lambda: self._ctx_auto_trim(cell_id))
 
+        image_menu = menu.addMenu(tr("ctx_image_menu"))
+        image_menu.setEnabled(bool(has_image))
+        fit_menu = image_menu.addMenu(tr("ctx_fit_mode"))
+        for mode, key in [("contain", "ctx_fit_contain"), ("cover", "ctx_fit_cover")]:
+            action = fit_menu.addAction(tr(key))
+            action.setCheckable(True)
+            action.setChecked(cell.fit_mode == mode)
+            action.triggered.connect(
+                lambda checked=False, m=mode: self._ctx_set_cell_prop(cell_id, {"fit_mode": m})
+            )
+
+        rot_menu = image_menu.addMenu(tr("ctx_rotation"))
+        for deg in [0, 90, 180, 270]:
+            action = rot_menu.addAction(f"{deg}°")
+            action.setCheckable(True)
+            action.setChecked(cell.rotation == deg)
+            action.triggered.connect(
+                lambda checked=False, d=deg: self._ctx_set_cell_prop(cell_id, {"rotation": d})
+            )
+
+        crop_ratio_menu = image_menu.addMenu(tr("ctx_crop_aspect_menu"))
+        _PRESETS = [
+            (tr("ctx_crop_preset_free"),          0, 0),
+            (tr("ctx_crop_preset_square"),         1, 1),
+            ("4:3",                                4, 3),
+            ("3:2",                                3, 2),
+            ("16:9",                              16, 9),
+            ("2:1",                                2, 1),
+            (tr("ctx_crop_preset_portrait_3_4"),   3, 4),
+            (tr("ctx_crop_preset_portrait_2_3"),   2, 3),
+            (tr("ctx_crop_preset_portrait_9_16"),  9, 16),
+        ]
+        for label, aw, ah in _PRESETS:
+            act = crop_ratio_menu.addAction(label)
+            act.triggered.connect(
+                lambda checked=False, _aw=aw, _ah=ah: self._ctx_crop_to_aspect(cell_id, _aw, _ah)
+            )
+
+        is_cropped = (cell.crop_left != 0.0 or cell.crop_top != 0.0
+                      or cell.crop_right != 1.0 or cell.crop_bottom != 1.0)
+        reset_crop_act = image_menu.addAction(tr("ctx_crop_reset"))
+        reset_crop_act.setEnabled(bool(has_image) and is_cropped)
+        reset_crop_act.triggered.connect(
+            lambda: self._ctx_set_cell_prop(
+                cell_id, {"crop_left": 0.0, "crop_top": 0.0, "crop_right": 1.0, "crop_bottom": 1.0}
+            )
+        )
+
+        image_menu.addSeparator()
+        self._append_reveal_image_source_action(image_menu, cell.image_path if has_image else None)
+        image_menu.addSeparator()
+        delete_img_action = image_menu.addAction(tr("action_delete_img"))
+        delete_img_action.setEnabled(bool(has_image))
+        delete_img_action.triggered.connect(lambda: self._ctx_delete_image(cell_id))
         menu.addSeparator()
 
         # --- Label submenu ---
@@ -4765,6 +4914,7 @@ class MainWindow(QMainWindow):
         label_menu.addSeparator()
 
         # Corner labels
+        corner_menu = label_menu.addMenu(tr("ctx_corner_labels_menu"))
         corner_anchors = [
             ("top_left_inside",     "ctx_corner_top_left"),
             ("top_right_inside",    "ctx_corner_top_right"),
@@ -4779,119 +4929,68 @@ class MainWindow(QMainWindow):
                 None
             )
             if existing:
-                action = label_menu.addAction(
+                action = corner_menu.addAction(
                     tr("ctx_delete_corner_label").format(name=tr(name_key)))
                 action.triggered.connect(
                     lambda checked=False, a=anchor: self._ctx_delete_corner_label(cell_id, a)
                 )
             else:
-                action = label_menu.addAction(
+                action = corner_menu.addAction(
                     tr("ctx_add_corner_label").format(name=tr(name_key)))
                 action.triggered.connect(
                     lambda checked=False, a=anchor: self._ctx_add_corner_label(cell_id, a)
                 )
 
-        # --- Image operations (only if has image) ---
-        if has_image:
-            menu.addSeparator()
-
-            # Fit Mode submenu
-            fit_menu = menu.addMenu(tr("ctx_fit_mode"))
-            for mode, key in [("contain", "ctx_fit_contain"), ("cover", "ctx_fit_cover")]:
-                action = fit_menu.addAction(tr(key))
-                action.setCheckable(True)
-                action.setChecked(cell.fit_mode == mode)
-                action.triggered.connect(
-                    lambda checked=False, m=mode: self._ctx_set_cell_prop(cell_id, {"fit_mode": m})
-                )
-
-            # Rotation submenu
-            rot_menu = menu.addMenu(tr("ctx_rotation"))
-            for deg in [0, 90, 180, 270]:
-                action = rot_menu.addAction(f"{deg}°")
-                action.setCheckable(True)
-                action.setChecked(cell.rotation == deg)
-                action.triggered.connect(
-                    lambda checked=False, d=deg: self._ctx_set_cell_prop(cell_id, {"rotation": d})
-                )
-
-            # Scale Bar toggle
-            menu.addSeparator()
-            sb_action = menu.addAction(tr("ctx_enable_scale_bar") if not cell.scale_bar_enabled else tr("ctx_disable_scale_bar"))
-            sb_action.triggered.connect(
-                lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
-            )
-
-            # Reflow ON — native editable plots that actually load.
-            # Checkable so the menu mirrors the Inspector ReflowCard.
-            from src.utils.editable_plot import plot_is_loadable
-            if plot_is_loadable(cell.image_path):
-                menu.addSeparator()
-                reflow_action = menu.addAction(tr("ctx_reflow_on"))
-                reflow_action.setCheckable(True)
-                reflow_action.setChecked(bool(getattr(cell, 'plot_reflow', False)))
-                reflow_action.triggered.connect(
-                    lambda: self._ctx_set_cell_prop(
-                        cell_id, {"plot_reflow": not cell.plot_reflow})
-                )
-
-            # SVG Text Groups (only for SVG images)
-            if cell.image_path and cell.image_path.lower().endswith('.svg'):
-                menu.addSeparator()
-                svg_txt_action = menu.addAction(tr("ctx_svg_text_inspector"))
-                _svg_path = cell.image_path
-                _svg_cell = cell
-                svg_txt_action.triggered.connect(
-                    lambda checked=False, p=_svg_path, c=_svg_cell: self._on_open_svg_text_inspector(p, c)
-                )
-
-            # Raster text size matching (pixel images; needs a configured OCR backend)
-            from src.utils.raster_text_utils import is_raster_path
-            if is_raster_path(cell.image_path):
-                from src.utils.raster_text_ocr import configured_backend
-                menu.addSeparator()
-                ocr_ready = configured_backend() is not None or bool(cell.raster_text_regions)
-                raster_action = menu.addAction(
-                    tr("ctx_raster_text_inspector") if ocr_ready else tr("ctx_raster_text_disabled"))
-                raster_action.setEnabled(ocr_ready)
-                raster_action.triggered.connect(
-                    lambda checked=False, p=cell.image_path, c=cell: self._on_open_raster_text_inspector(p, c)
-                )
-
-            # --- Crop ---
-            menu.addSeparator()
-            crop_action = menu.addAction(tr("ctx_crop_image"))
-            crop_action.triggered.connect(lambda: self._ctx_crop_image(cell_id))
-
-            crop_ratio_menu = menu.addMenu(tr("ctx_crop_aspect_menu"))
-            _PRESETS = [
-                (tr("ctx_crop_preset_free"),          0, 0),
-                (tr("ctx_crop_preset_square"),         1, 1),
-                ("4:3",                                4, 3),
-                ("3:2",                                3, 2),
-                ("16:9",                              16, 9),
-                ("2:1",                                2, 1),
-                (tr("ctx_crop_preset_portrait_3_4"),   3, 4),
-                (tr("ctx_crop_preset_portrait_2_3"),   2, 3),
-                (tr("ctx_crop_preset_portrait_9_16"),  9, 16),
-            ]
-            for label, aw, ah in _PRESETS:
-                act = crop_ratio_menu.addAction(label)
-                act.triggered.connect(
-                    lambda checked=False, _aw=aw, _ah=ah: self._ctx_crop_to_aspect(cell_id, _aw, _ah)
-                )
-
-            if cell.crop_left != 0.0 or cell.crop_top != 0.0 or cell.crop_right != 1.0 or cell.crop_bottom != 1.0:
-                reset_crop_act = menu.addAction(tr("ctx_crop_reset"))
-                reset_crop_act.triggered.connect(
-                    lambda: self._ctx_set_cell_prop(
-                        cell_id, {"crop_left": 0.0, "crop_top": 0.0, "crop_right": 1.0, "crop_bottom": 1.0}
-                    )
-                )
-
-        # --- Size Group ---
         menu.addSeparator()
-        self._append_size_group_menu(menu, cell)
+
+        sb_action = menu.addAction(tr("ctx_scale_bar"))
+        sb_action.setCheckable(True)
+        sb_action.setChecked(bool(cell.scale_bar_enabled))
+        sb_action.setEnabled(bool(has_image))
+        sb_action.triggered.connect(
+            lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
+        )
+
+        text_menu = menu.addMenu(tr("ctx_text_plot_menu"))
+        text_menu.setEnabled(bool(has_image))
+        from src.utils.raster_text_utils import is_raster_path
+        if bool(has_image) and cell.image_path.lower().endswith('.svg'):
+            text_action = text_menu.addAction(tr("ctx_svg_text_inspector"))
+            text_action.triggered.connect(
+                lambda checked=False, p=cell.image_path, c=cell: self._on_open_svg_text_inspector(p, c)
+            )
+        elif bool(has_image) and is_raster_path(cell.image_path):
+            from src.utils.raster_text_ocr import configured_backend
+            ocr_ready = configured_backend() is not None or bool(cell.raster_text_regions)
+            text_action = text_menu.addAction(
+                tr("ctx_raster_text_inspector") if ocr_ready else tr("ctx_raster_text_disabled"))
+            text_action.setEnabled(ocr_ready)
+            text_action.triggered.connect(
+                lambda checked=False, p=cell.image_path, c=cell: self._on_open_raster_text_inspector(p, c)
+            )
+        else:
+            text_menu.addAction(tr("ctx_svg_text_inspector")).setEnabled(False)
+
+        text_menu.addSeparator()
+        from src.utils.editable_plot import plot_is_loadable
+        reflow_action = text_menu.addAction(tr("ctx_reflow_on"))
+        reflow_action.setCheckable(True)
+        reflow_action.setChecked(bool(getattr(cell, 'plot_reflow', False)))
+        reflow_action.setEnabled(bool(has_image) and plot_is_loadable(cell.image_path))
+        reflow_action.triggered.connect(
+            lambda: self._ctx_set_cell_prop(cell_id, {"plot_reflow": not cell.plot_reflow})
+        )
+
+        menu.addSeparator()
+        selection_menu = menu.addMenu(tr("ctx_selection_menu"))
+        selected = [c.id for c in self._selected_leaf_cells() if c.image_path and not c.is_placeholder]
+        scope = tuple(selected if cell_id in selected else [cell_id])
+        align_action = selection_menu.addAction(tr("action_align_plots"))
+        align_action.setToolTip(tr("tooltip_align_plots"))
+        align_action.setEnabled(bool(has_image) and cell.is_leaf)
+        align_action.triggered.connect(lambda checked=False, ids=scope: self._on_align_plot_areas(list(ids)))
+        selection_menu.addSeparator()
+        self._append_size_group_menu(selection_menu, cell)
 
         # --- Insert Row / Cell ---
         menu.addSeparator()
@@ -5179,6 +5278,27 @@ class MainWindow(QMainWindow):
         cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update,
                                     f"Crop {aspect_w}:{aspect_h}")
         self.undo_stack.push(cmd)
+
+    def _ctx_auto_trim(self, cell_id: str):
+        """Crop the cell to its content box (inside the current crop), undoably."""
+        cell = self.project.find_cell_by_id(cell_id)
+        if not cell:
+            return
+        from src.utils.auto_trim import content_box, load_trim_image
+        crop = (cell.crop_left, cell.crop_top, cell.crop_right, cell.crop_bottom)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            img = load_trim_image(cell.image_path)
+            box = content_box(img, crop) if img is not None else None
+        finally:
+            QApplication.restoreOverrideCursor()
+        if box is None:
+            self.statusbar.showMessage(tr("status_auto_trim_none"), 4000)
+            return
+        changes = dict(zip(("crop_left", "crop_top", "crop_right", "crop_bottom"), box))
+        cmd = PropertyChangeCommand(cell, changes, self._refresh_and_update, "Auto-Trim Margins")
+        self.undo_stack.push(cmd)
+        self.statusbar.showMessage(tr("status_auto_trim_done"), 4000)
 
     def _on_cell_crop_committed(self, cell_id: str, cl: float, ct: float, cr: float, cb: float):
         """Handle crop committed from interactive crop mode — push undo command."""
@@ -5674,6 +5794,12 @@ class MainWindow(QMainWindow):
         self._act_draw_mode.setChecked(on)
         self._act_draw_mode.blockSignals(False)
         self._apply_draw_mode_action_state(on)
+        palette = getattr(self, '_draw_palette', None)
+        if palette is not None:
+            if on and getattr(self, 'view', None) is not None:
+                palette.place(self.view)
+            else:
+                palette.hide()
         if hasattr(self, 'layers_panel'):
             self.layers_panel.set_draw_mode(on)
         if not on:
@@ -6309,15 +6435,38 @@ class MainWindow(QMainWindow):
         dlg = AboutDialog(self)
         dlg.exec()
 
+    def _help_context(self):
+        """Context tag for F1: what the Inspector is currently showing."""
+        kind = getattr(self.inspector, "_current_item_type", None)
+        mapping = {
+            None: "none", "draw_empty": "mark", "mark": "mark", "cell": "cell",
+            "multi_cell": "multi_cell", "mixed": "multi_cell", "label_cell": "label",
+            "text": "label", "group_label": "group_label", "pip": "pip",
+        }
+        return mapping.get(kind, "none")
+
     def _on_show_help(self):
-        dlg = HelpDialog(self)
+        dlg = HelpDialog(self, topic=topic_for_context(self._help_context()))
 
         def launch_tutorial(lesson):
             dlg.accept()
             QTimer.singleShot(0, lambda: self._on_show_tutorials(lesson))
 
+        def show_me(spec):
+            dlg.accept()
+            QTimer.singleShot(0, lambda: flash_target(self, spec, tr("help_show_me_hint")))
+
+        def start_tour():
+            dlg.accept()
+            QTimer.singleShot(0, self._start_tour)
+
         dlg.tutorial_requested.connect(launch_tutorial)
+        dlg.show_me_requested.connect(show_me)
+        dlg.tour_requested.connect(start_tour)
         dlg.exec()
+
+    def _start_tour(self):
+        self._tour_overlay = TourOverlay(self)
 
     def _on_show_tutorials(self, lesson=''):
         if self._tutorial_controller is None:
@@ -6400,11 +6549,12 @@ class MainWindow(QMainWindow):
         running = (self._agent_server_controller is not None
                    and self._agent_server_controller.is_running())
         text_col = self.palette().color(QPalette.ColorRole.WindowText).name()
+        tokens = get_tokens(self._current_theme)
         if running:
-            dot, text = "#3FB950", tr("mcp_status_on")
+            dot, text = tokens["success"], tr("mcp_status_on")
             tip = tr("mcp_status_tip_on").format(url=self._mcp_last_info or "")
         else:
-            dot, text = "#8C959F", tr("mcp_status_off")
+            dot, text = tokens["text_tert"], tr("mcp_status_off")
             tip = tr("mcp_status_tip_off")
         self.mcp_status_label.setText(
             f'<a href="toggle" style="color:{text_col}; text-decoration:none;">'

@@ -3,12 +3,20 @@ import os
 import sys
 from pathlib import Path
 
+from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer
+from PyQt6.QtGui import QFontDatabase, QFontMetrics, QGuiApplication, QPainter, QPalette
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
-    QPushButton, QApplication, QMessageBox, QMenu,
+    QApplication, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QMessageBox,
+    QPlainTextEdit, QPushButton, QScrollArea, QToolButton, QVBoxLayout, QWidget,
 )
-from PyQt6.QtCore import Qt
 from src.app.i18n import tr, current_language
+from src.app.mcp_guide_content import (
+    TITLE, SUBTITLE, FLOW, STEPS, STATUS_ON, STATUS_OFF, HOST_MISSING, COPY_CONFIG,
+    COPY_CLAUDE_CODE, COPIED, REGISTERED, PROMPTS, PROMPT_TIP, SAFETY, DETAILS,
+    MANUAL_HINT, CONFIG_LOCATIONS, ABILITIES, TROUBLE, CLOSE, text,
+)
+from src.app.mcp_guide_paint import paint_flow
+from src.app.theme import DARK, LIGHT, get_tokens
 
 
 _CLAUDE_DESKTOP_CONFIG = "claude_desktop_config.json"
@@ -68,285 +76,332 @@ def _host_configs() -> list[tuple[str, Path]]:
     return hosts
 
 
-# ── guide HTML ────────────────────────────────────────────────────────
-
-_HTML_EN = """\
-<h2 style="margin-top:0">MCP Setup Guide</h2>
-
-<p>Connect any MCP-compatible AI host
-(<b>Claude Desktop</b>, <b>Claude Code</b>, <b>Cursor</b>,
-<b>Windsurf</b>, <b>Cline</b>, etc.)
-to ImageLayoutManager so the AI can build and edit
-multi-panel figures for you.</p>
-
-<p>MCP is the connection protocol between an AI assistant and ILM. This setup is optional; you do not need it to build figures manually. Save a project copy before letting an assistant edit it.</p>
-
-<hr>
-
-<h3>How it works</h3>
-<pre style="background:#f4f4f4; padding:10px; border-radius:4px; font-size:12px;">\
-AI host  ── stdio (MCP) ──►  ImageLayoutManager --mcp  ── WebSocket ──►  ILM (this app)</pre>
-
-<p>Your AI host launches this app with <code>--mcp</code> as a subprocess.
-In that mode the app acts as a lightweight MCP adapter — no extra
-Python install or packages needed.</p>
-
-<hr>
-
-<h3>Step 1 — Enable MCP Server in this app</h3>
-<p><b>Tools → Enable MCP Server</b> (in this menu).</p>
-
-<hr>
-
-<h3>Step 2 — Register in your AI host</h3>
-
-<p><b>Easiest:</b> click <b>"Auto Register…"</b> below — it detects
-installed hosts and writes the config for you.</p>
-
-<p><b>Manual:</b> click <b>"Copy MCP Config JSON"</b> and paste the
-snippet into your host's MCP server configuration. Most hosts store
-this in a JSON file with the same format:</p>
-<pre style="background:#f4f4f4; padding:10px; border-radius:4px; font-size:12px;">\
-{{
-  "mcpServers": {{
-    "imagelayout": {entry_json}
-  }}
-}}</pre>
-
-<p><b>Common config file locations:</b></p>
-<table cellpadding="4" cellspacing="0" style="border-collapse:collapse; font-size:12px;">
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>Claude Desktop</b></td>
-  <td style="border:1px solid #ddd;"><code>Settings → Developer → Edit Config</code></td></tr>
-<tr>
-  <td style="border:1px solid #ddd;"><b>Claude Code</b></td>
-  <td style="border:1px solid #ddd;"><code>claude mcp add imagelayout -- …</code> (use "Copy mcp add" button)</td></tr>
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>Cursor</b></td>
-  <td style="border:1px solid #ddd;"><code>~/.cursor/mcp.json</code></td></tr>
-<tr>
-  <td style="border:1px solid #ddd;"><b>Windsurf</b></td>
-  <td style="border:1px solid #ddd;"><code>~/.codeium/windsurf/mcp_config.json</code></td></tr>
-</table>
-
-<hr>
-
-<h3>Step 3 — Use it</h3>
-<ol>
-  <li>Make sure this app is running with MCP Server enabled.</li>
-  <li>Start your AI host and ask the AI to work with your figure:
-    <ul>
-      <li><i>"Create a 2×3 figure from the images in D:\\data\\panels"</i></li>
-      <li><i>"Make the top row taller"</i></li>
-      <li><i>"Make the panel letters bold, keeping their current size"</i></li>
-      <li><i>"Help me add scale bars; ask me for each image's pixel calibration before setting them"</i></li>
-      <li><i>"Add a zoom inset to panel b and give it a white border"</i></li>
-      <li><i>"Save the project as figure.figlayout"</i></li>
-    </ul>
-  </li>
-</ol>
-<p>Review changes in this window before saving or exporting. <b>Ctrl+Z</b> can reverse undoable layout edits, but do not assume every automated action can be undone.</p>
-
-<p><b>Current MCP capabilities:</b> AI can create/open/save/export projects,
-reshape rows and cells, import images, split panels, switch to freeform
-layout, crop/rotate/pad/align images, style labels and text, add scale bars,
-add PiP insets, manage size groups, set export regions, auto-layout, and
-request canvas screenshots.</p>
-
-<hr>
-
-<h3>Troubleshooting</h3>
-<table cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>Connection refused</b></td>
-  <td style="border:1px solid #ddd;">MCP Server is not running. Enable it in Tools menu.</td>
-</tr>
-<tr>
-  <td style="border:1px solid #ddd;"><b>Authentication failed</b></td>
-  <td style="border:1px solid #ddd;">Token regenerates on each restart. Start a new AI session.</td>
-</tr>
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>"no tool named …"</b></td>
-  <td style="border:1px solid #ddd;">After updating, restart both this app and your AI host so the GUI server and MCP subprocess load the same tool list.</td>
-</tr>
-</table>
-"""
-
-_HTML_ZH = """\
-<h2 style="margin-top:0">MCP 配置指南</h2>
-
-<p>通过本指南，你可以将兼容 MCP 的 AI 助手
-（<b>Claude Desktop</b>、<b>Claude Code</b>、<b>Cursor</b>、
-<b>Windsurf</b>、<b>Cline</b> 等）
-接入 ImageLayoutManager，让 AI 帮你自动排版和编辑多图版组图。</p>
-
-<p>MCP 是 AI 助手与 ILM 之间的连接协议。此配置为可选功能，手动制作组合图不需要它。让助手编辑前，请先另存工程副本。</p>
-
-<hr>
-
-<h3>工作原理</h3>
-<pre style="background:#f4f4f4; padding:10px; border-radius:4px; font-size:12px;">\
-AI 助手  ── stdio (MCP) ──►  ImageLayoutManager --mcp  ── WebSocket ──►  ILM（本应用）</pre>
-
-<p>AI 助手会以 <code>--mcp</code> 参数启动本应用的一个轻量副本，
-作为 MCP 适配器运行——无需额外安装 Python 或任何依赖。</p>
-
-<hr>
-
-<h3>第一步：在软件内启用 MCP 服务</h3>
-<p>点击菜单栏中的 <b>工具 → 启用 MCP 服务</b>（就在当前菜单下）。</p>
-
-<hr>
-
-<h3>第二步：在 AI 助手中注册</h3>
-
-<p><b>最简方式：</b>点击下方 <b>"一键注册…"</b> 按钮，
-软件会自动检测已安装的 AI 工具并写入配置。</p>
-
-<p><b>手动方式：</b>点击 <b>"复制 MCP 配置"</b>，将以下 JSON 片段粘贴到
-你的 AI 工具的 MCP 服务配置中。大多数工具使用相同的格式：</p>
-<pre style="background:#f4f4f4; padding:10px; border-radius:4px; font-size:12px;">\
-{{
-  "mcpServers": {{
-    "imagelayout": {entry_json}
-  }}
-}}</pre>
-
-<p><b>常见配置文件位置：</b></p>
-<table cellpadding="4" cellspacing="0" style="border-collapse:collapse; font-size:12px;">
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>Claude Desktop</b></td>
-  <td style="border:1px solid #ddd;"><code>Settings → Developer → Edit Config</code></td></tr>
-<tr>
-  <td style="border:1px solid #ddd;"><b>Claude Code</b></td>
-  <td style="border:1px solid #ddd;"><code>claude mcp add imagelayout -- …</code>（使用"复制 mcp add 命令"按钮）</td></tr>
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>Cursor</b></td>
-  <td style="border:1px solid #ddd;"><code>~/.cursor/mcp.json</code></td></tr>
-<tr>
-  <td style="border:1px solid #ddd;"><b>Windsurf</b></td>
-  <td style="border:1px solid #ddd;"><code>~/.codeium/windsurf/mcp_config.json</code></td></tr>
-</table>
-
-<hr>
-
-<h3>第三步：开始使用</h3>
-<ol>
-  <li>确保本应用正在运行且 MCP 服务已启用。</li>
-  <li>启动 AI 助手，直接向 AI 下达排版指令，例如：
-    <ul>
-      <li><i>"用 D:\\data\\panels 里的图片拼一个 2×3 的图版"</i></li>
-      <li><i>"把第一行调高一些"</i></li>
-      <li><i>"把面板编号改成粗体，保留当前大小"</i></li>
-      <li><i>"帮我添加比例尺，设置前先向我确认每张图片的像素校准值"</i></li>
-      <li><i>"给 b 面板加一个放大插图，并设置白色边框"</i></li>
-      <li><i>"保存为 figure.figlayout"</i></li>
-    </ul>
-  </li>
-</ol>
-<p>保存或导出前，请在本窗口检查更改。<b>Ctrl+Z</b> 可恢复支持撤销的布局编辑，但不要假设每项自动化操作都能撤销。</p>
-
-<p><b>当前 MCP 能力：</b>AI 可以新建/打开/保存/导出项目，调整行列与单元格，
-导入图片，分割面板，切换自由布局，裁剪/旋转/加边距/对齐图片，调整标签和文本样式，
-添加比例尺，添加 PiP 放大插图，管理尺寸组，设置导出区域，自动排版，并请求画布截图。</p>
-
-<hr>
-
-<h3>常见问题</h3>
-<table cellpadding="6" cellspacing="0" style="border-collapse:collapse; width:100%;">
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>连接被拒绝</b></td>
-  <td style="border:1px solid #ddd;">MCP 服务未启动，请在"工具"菜单中启用。</td>
-</tr>
-<tr>
-  <td style="border:1px solid #ddd;"><b>认证失败</b></td>
-  <td style="border:1px solid #ddd;">令牌在每次重启时刷新，请重新开启 AI 会话。</td>
-</tr>
-<tr style="background:#f4f4f4;">
-  <td style="border:1px solid #ddd;"><b>"no tool named …"</b></td>
-  <td style="border:1px solid #ddd;">更新后请同时重启本应用和 AI 工具，确保 GUI 服务与 MCP 子进程加载同一套工具列表。</td>
-</tr>
-</table>
-"""
+def _flow_colors() -> dict:
+    window = QGuiApplication.palette().color(QPalette.ColorRole.Window)
+    tokens = get_tokens(DARK if window.lightness() < 128 else LIGHT)
+    return {"surface": tokens["surface"], "border": tokens["border_strong"],
+            "accent": tokens["accent"], "text": tokens["text"], "muted": tokens["text_tert"]}
 
 
-def _format_html(html: str) -> str:
-    if getattr(sys, "frozen", False):
-        cli = str(Path(sys.executable).parent / _CLI_NAME)
-        cli = cli.replace("\\", "/")
-    else:
-        cli = f"&lt;install-path&gt;/{_CLI_NAME}"
-    example = {"command": cli, "args": ["mcp"]}
-    entry_json = json.dumps(example, indent=6, ensure_ascii=False)
-    return html.format(entry_json=entry_json)
+class _FlowWidget(QWidget):
+    def __init__(self, labels, parent=None):
+        super().__init__(parent)
+        self._labels = labels
+        self.setFixedHeight(64)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        paint_flow(painter, QRectF(self.rect()), self._labels, _flow_colors())
+        painter.end()
 
 
 class MCPGuideDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(
-            "MCP 配置指南" if current_language() == "zh" else "MCP Setup Guide"
-        )
-        self.resize(640, 580)
+        self._lang = current_language()
+        self.setObjectName("mcpGuide")
+        self.setWindowTitle(text(TITLE, self._lang))
+        self.resize(560, 600)
         self.setModal(False)
 
+        self._feedbacks = []
+        self._feedback_timer = QTimer(self)
+        self._feedback_timer.setSingleShot(True)
+        self._feedback_timer.timeout.connect(self._hide_feedback)
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 12)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        body = QWidget()
+        col = QVBoxLayout(body)
+        col.setContentsMargins(18, 18, 18, 18)
+        col.setSpacing(12)
 
-        raw = _HTML_ZH if current_language() == "zh" else _HTML_EN
-        html = _format_html(raw)
+        title = QLabel(text(TITLE, self._lang))
+        title.setObjectName("mcpTitle")
+        title.setWordWrap(True)
+        subtitle = QLabel(text(SUBTITLE, self._lang))
+        subtitle.setObjectName("mcpSubtitle")
+        subtitle.setWordWrap(True)
+        col.addWidget(title)
+        col.addWidget(subtitle)
+        col.addWidget(_FlowWidget([text(item, self._lang) for item in FLOW]))
+        col.addWidget(self._step_one())
+        col.addWidget(self._step_two())
+        col.addWidget(self._step_three())
 
-        lbl = QLabel(html)
-        lbl.setWordWrap(True)
-        lbl.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        lbl.setOpenExternalLinks(True)
-        lbl.setContentsMargins(16, 16, 16, 16)
-        lbl.setTextFormat(Qt.TextFormat.RichText)
-        lbl.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-            | Qt.TextInteractionFlag.LinksAccessibleByMouse
-        )
-        # Qt builds QLabel's right-click "Copy / Select All" menu through
-        # a private platform-style path that ignores our QSS-styled QMenu,
-        # producing a dark-on-dark popup in light mode.  Suppress it; the
-        # bottom-row buttons cover the useful copy actions and Ctrl+C
-        # still works on any selected text.
-        lbl.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        scroll.setWidget(lbl)
-        root.addWidget(scroll)
+        safety = QLabel("ⓘ " + text(SAFETY, self._lang))
+        safety.setObjectName("mcpSafety")
+        safety.setWordWrap(True)
+        col.addWidget(safety)
 
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(12, 0, 12, 0)
+        col.addWidget(self._details_section("manual", self._manual_body()))
+        col.addWidget(self._details_section("abilities", self._abilities_body()))
+        col.addWidget(self._details_section("trouble", self._trouble_body()))
+        col.addStretch()
 
-        auto_btn = QPushButton(tr("btn_auto_register"))
-        auto_btn.clicked.connect(self._on_auto_register)
-        btn_row.addWidget(auto_btn)
+        scroll.setWidget(body)
+        root.addWidget(scroll, 1)
 
-        copy_config_btn = QPushButton(tr("btn_copy_mcp_config"))
-        copy_config_btn.clicked.connect(self._copy_config_json)
-        btn_row.addWidget(copy_config_btn)
-
-        copy_cmd_btn = QPushButton(
-            "复制 mcp add 命令" if current_language() == "zh"
-            else "Copy mcp add command"
-        )
-        copy_cmd_btn.clicked.connect(self._copy_claude_code_command)
-        btn_row.addWidget(copy_cmd_btn)
-
-        btn_row.addStretch()
-
-        close_btn = QPushButton(
-            "关闭" if current_language() == "zh" else "Close"
-        )
+        footer = QHBoxLayout()
+        footer.setContentsMargins(12, 0, 12, 12)
+        footer.addStretch()
+        close_btn = QPushButton(text(CLOSE, self._lang))
         close_btn.setDefault(True)
         close_btn.clicked.connect(self.accept)
-        btn_row.addWidget(close_btn)
-        root.addLayout(btn_row)
+        footer.addWidget(close_btn)
+        root.addLayout(footer)
+
+        self._refresh_server()
+
+    # ── building blocks ───────────────────────────────────────────────
+
+    def _body_label(self, pair):
+        label = QLabel(text(pair, self._lang))
+        label.setObjectName("mcpStepBody")
+        label.setWordWrap(True)
+        return label
+
+    def _feedback_label(self):
+        label = QLabel()
+        label.setObjectName("mcpFeedback")
+        label.setWordWrap(True)
+        label.hide()
+        self._feedbacks.append(label)
+        return label
+
+    def _card(self, number, title_pair):
+        card = QFrame()
+        card.setObjectName("mcpStepCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        badge = QLabel(str(number))
+        badge.setObjectName("mcpStepBadge")
+        badge.setFixedSize(22, 22)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        heading = QLabel(text(title_pair, self._lang))
+        heading.setObjectName("mcpStepTitle")
+        heading.setWordWrap(True)
+        header.addWidget(badge)
+        header.addWidget(heading, 1)
+        layout.addLayout(header)
+        return card, layout
+
+    def _details_section(self, key, body):
+        toggle = QToolButton()
+        toggle.setObjectName("mcpDetailsToggle")
+        toggle.setCheckable(True)
+        toggle.setText(text(DETAILS[key], self._lang))
+        toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.ArrowType.RightArrow)
+        body.setVisible(False)
+
+        def _toggled(checked, button=toggle, panel=body):
+            button.setArrowType(Qt.ArrowType.DownArrow if checked else Qt.ArrowType.RightArrow)
+            panel.setVisible(checked)
+
+        toggle.toggled.connect(_toggled)
+        wrapper = QWidget()
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(toggle)
+        layout.addWidget(body)
+        return wrapper
+
+    # ── step 1: server ────────────────────────────────────────────────
+
+    def _step_one(self):
+        card, layout = self._card(1, STEPS[0][0])
+        layout.addWidget(self._body_label(STEPS[0][1]))
+        row = QHBoxLayout()
+        self._pill = QLabel()
+        self._pill.setObjectName("mcpStatusPill")
+        row.addWidget(self._pill)
+        row.addStretch()
+        self._server_button = QPushButton()
+        self._server_button.clicked.connect(self._on_server_button)
+        row.addWidget(self._server_button)
+        layout.addLayout(row)
+        action = self._server_action()
+        if action is not None:
+            action.toggled.connect(self._on_server_toggled)
+        return card
+
+    def _server_action(self):
+        return getattr(self.parent(), "_act_enable_agent_server", None)
+
+    def _server_running(self):
+        controller = getattr(self.parent(), "_agent_server_controller", None)
+        return bool(controller is not None and controller.is_running())
+
+    def _refresh_server(self):
+        running = self._server_running()
+        self._pill.setText(text(STATUS_ON if running else STATUS_OFF, self._lang))
+        self._pill.setProperty("on", "true" if running else "false")
+        self._repolish(self._pill)
+        self._server_button.setText(
+            tr("action_disable_agent_server") if running else tr("action_enable_agent_server"))
+        self._server_button.setProperty("accent", not running)
+        self._repolish(self._server_button)
+        self._server_button.setEnabled(self._server_action() is not None)
+
+    def _repolish(self, widget):
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
+    def _on_server_button(self):
+        action = self._server_action()
+        if action is not None:
+            action.trigger()
+
+    def _on_server_toggled(self, _checked):
+        QTimer.singleShot(0, self._refresh_server)
+
+    # ── step 2: register ──────────────────────────────────────────────
+
+    def _step_two(self):
+        card, layout = self._card(2, STEPS[1][0])
+        layout.addWidget(self._body_label(STEPS[1][1]))
+        hosts_row = QHBoxLayout()
+        found = {name for name, _path in _host_configs()}
+        for name, _path_fn in _KNOWN_HOSTS:
+            is_found = name in found
+            label = QLabel(f"✓ {name}" if is_found
+                           else f"{name} · {text(HOST_MISSING, self._lang)}")
+            label.setObjectName("mcpHost")
+            label.setProperty("found", "true" if is_found else "false")
+            hosts_row.addWidget(label)
+        hosts_row.addStretch()
+        layout.addLayout(hosts_row)
+
+        buttons = QHBoxLayout()
+        auto_btn = QPushButton(tr("btn_auto_register"))
+        auto_btn.setProperty("accent", True)
+        auto_btn.clicked.connect(self._on_auto_register)
+        copy_config_btn = QPushButton(text(COPY_CONFIG, self._lang))
+        copy_config_btn.clicked.connect(self._copy_config_json)
+        copy_cmd_btn = QPushButton(text(COPY_CLAUDE_CODE, self._lang))
+        copy_cmd_btn.clicked.connect(self._copy_claude_code_command)
+        buttons.addWidget(auto_btn)
+        buttons.addWidget(copy_config_btn)
+        buttons.addWidget(copy_cmd_btn)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+
+        self._step_two_feedback = self._feedback_label()
+        layout.addWidget(self._step_two_feedback)
+        return card
+
+    # ── step 3: ask ───────────────────────────────────────────────────
+
+    def _step_three(self):
+        card, layout = self._card(3, STEPS[2][0])
+        layout.addWidget(self._body_label(STEPS[2][1]))
+        for prompt in PROMPTS:
+            prompt_text = text(prompt, self._lang)
+            chip = QPushButton(prompt_text)
+            chip.setObjectName("mcpPrompt")
+            chip.setToolTip(text(PROMPT_TIP, self._lang))
+            chip.clicked.connect(lambda checked=False, t=prompt_text: self._copy_prompt(t))
+            layout.addWidget(chip)
+        self._prompt_feedback = self._feedback_label()
+        layout.addWidget(self._prompt_feedback)
+        return card
+
+    # ── details ───────────────────────────────────────────────────────
+
+    def _manual_body(self):
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        layout.addWidget(self._body_label(MANUAL_HINT))
+        snippet = json.dumps({"mcpServers": {"imagelayout": _mcp_entry()}},
+                             indent=2, ensure_ascii=False)
+        code = QPlainTextEdit(snippet)
+        code.setObjectName("mcpCode")
+        code.setReadOnly(True)
+        code.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        code.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        lines = snippet.count("\n") + 1
+        code.setFixedHeight(min(lines, 12) * QFontMetrics(code.font()).lineSpacing() + 16)
+        layout.addWidget(code)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        for row, (host, where) in enumerate(CONFIG_LOCATIONS):
+            host_label = QLabel(host)
+            host_label.setObjectName("mcpLocHost")
+            where_label = QLabel(text(where, self._lang))
+            where_label.setObjectName("mcpLocPath")
+            where_label.setWordWrap(True)
+            where_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            grid.addWidget(host_label, row, 0)
+            grid.addWidget(where_label, row, 1)
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
+        return body
+
+    def _abilities_body(self):
+        body = QWidget()
+        grid = QGridLayout(body)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+        for index, item in enumerate(ABILITIES):
+            chip = QLabel(text(item, self._lang))
+            chip.setObjectName("mcpChip")
+            grid.addWidget(chip, index // 3, index % 3)
+        return body
+
+    def _trouble_body(self):
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        for problem, fix in TROUBLE:
+            heading = QLabel(text(problem, self._lang))
+            heading.setObjectName("mcpStepTitle")
+            heading.setWordWrap(True)
+            layout.addWidget(heading)
+            layout.addWidget(self._body_label(fix))
+        return body
+
+    # ── feedback ──────────────────────────────────────────────────────
+
+    def _show_feedback(self, label, message):
+        for other in self._feedbacks:
+            other.hide()
+        label.setText(message)
+        label.show()
+        self._feedback_timer.start(3000)
+
+    def _hide_feedback(self):
+        for label in self._feedbacks:
+            label.hide()
+
+    def _copy_prompt(self, prompt_text):
+        cb = QApplication.clipboard()
+        if cb is not None:
+            cb.setText(prompt_text)
+        self._show_feedback(self._prompt_feedback, text(COPIED, self._lang))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh_server()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange:
+            self._refresh_server()
 
     # ── button handlers ───────────────────────────────────────────────
 
@@ -359,6 +414,7 @@ class MCPGuideDialog(QDialog):
         cb = QApplication.clipboard()
         if cb is not None:
             cb.setText(snippet)
+        self._show_feedback(self._step_two_feedback, text(COPIED, self._lang))
 
     def _copy_claude_code_command(self):
         """Copy the `claude mcp add` CLI command."""
@@ -368,6 +424,7 @@ class MCPGuideDialog(QDialog):
         cb = QApplication.clipboard()
         if cb is not None:
             cb.setText(cmd)
+        self._show_feedback(self._step_two_feedback, text(COPIED, self._lang))
 
     def _on_auto_register(self):
         """Show a dropdown of detected hosts, then write to the chosen one."""
@@ -415,7 +472,5 @@ class MCPGuideDialog(QDialog):
             )
             return
 
-        QMessageBox.information(
-            self, "OK",
-            tr("msg_registered").format(path=config_path, host=host_name),
-        )
+        self._show_feedback(self._step_two_feedback,
+                            text(REGISTERED, self._lang).format(host=host_name))
