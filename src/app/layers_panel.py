@@ -269,14 +269,12 @@ class LayersDelegate(QStyledItemDelegate):
         ty = r.top() + (r.height() - self.THUMB) // 2
         thumb_r = QRect(tx, ty, self.THUMB, self.THUMB)
 
+        has_thumb = itype != "mark_leaf"
         image_path = index.data(_ROLE_IMG) if itype in ("cell_filled", "pip_item") else None
-        if image_path:
-            pm = self._thumbnail(image_path)
-            if pm and not pm.isNull():
-                painter.drawPixmap(thumb_r, pm)
-            else:
-                self._draw_empty_thumb(painter, thumb_r, ph_c)
-        else:
+        pm = self._thumbnail(image_path) if image_path else None
+        if pm and not pm.isNull():
+            painter.drawPixmap(thumb_r, pm)
+        elif has_thumb:
             self._draw_empty_thumb(painter, thumb_r, ph_c)
 
         # format badge — right-aligned chip naming the source file type, so a
@@ -359,7 +357,7 @@ class LayersDelegate(QStyledItemDelegate):
             reflow_reserved = f_w + 10
 
         # text
-        text_x  = tx + self.THUMB + self.PAD
+        text_x  = tx + (self.THUMB + self.PAD if has_thumb else 0)
         text_rect = QRect(text_x, r.top(), r.right() - text_x - 4 - badge_reserved - z_reserved - reflow_reserved, r.height())
         # In Draw mode only mark rows stay active; everything else is dimmed.
         dimmed = (getattr(self._tree, "draw_mode_locked", False)

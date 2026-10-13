@@ -2066,6 +2066,9 @@ class MainWindow(QMainWindow):
         self._update_theme_labels()
         self.inspector.retranslate_ui()
         self.layers_panel.retranslate_ui()
+        for tab in getattr(self, '_tabs', []):
+            tab.scene.update()
+            tab.view.viewport().update()
 
     def _on_zoom_changed(self, zoom_level):
         self.zoom_label.setText(f"{round(zoom_level * 100)}%")
@@ -2168,7 +2171,7 @@ class MainWindow(QMainWindow):
                             cell_item.setSelected(True)
                             cell_item.select_pip(pip_id)
                         self._on_selection_changed()
-                        self.view.centerOn(cell_item)
+                        self.view.reveal_selection()
                     return
 
         mark_ids = {m.id for m in getattr(self.project, 'marks', [])}
@@ -2191,7 +2194,7 @@ class MainWindow(QMainWindow):
                             first_mark_item = m_item
             self._on_selection_changed()
             if first_mark_item is not None:
-                self.view.centerOn(first_mark_item)
+                self.view.reveal_selection()
             return
 
         first_item = None
@@ -2207,7 +2210,7 @@ class MainWindow(QMainWindow):
                         first_item = item
         self._on_selection_changed()  # sync inspector once
         if first_item:
-            self.view.centerOn(first_item)
+            self.view.reveal_selection()
 
     def _on_navigate_cell(self, direction):
         cell, _ = self._get_selected_cell()

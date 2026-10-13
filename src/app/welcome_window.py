@@ -111,9 +111,16 @@ class WelcomeWindow(QWidget):
         root.setContentsMargins(24, 14, 24, 18)
         root.setSpacing(0)
 
-        # Corner: About button, top-right
+        # Corner: language switch + About button, top-right
         corner = QHBoxLayout()
         corner.addStretch(1)
+        self._btn_lang = QPushButton(tr("welcome_language"))
+        self._btn_lang.setObjectName("welcomeCorner")
+        self._btn_lang.setFlat(True)
+        self._btn_lang.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_lang.setToolTip(tr("action_switch_zh"))
+        self._btn_lang.clicked.connect(self._mw._on_toggle_language)
+        corner.addWidget(self._btn_lang)
         self._btn_about = QPushButton(tr("welcome_about"))
         self._btn_about.setObjectName("welcomeCorner")
         self._btn_about.setFlat(True)
@@ -255,6 +262,8 @@ class WelcomeWindow(QWidget):
         self._refresh_recent()
 
     def retranslate(self):
+        self._btn_lang.setText(tr("welcome_language"))
+        self._btn_lang.setToolTip(tr("action_switch_zh"))
         self._btn_about.setText(tr("welcome_about"))
         self._title.setText(tr("about_app_name"))
         self.setWindowTitle(tr("about_app_name"))

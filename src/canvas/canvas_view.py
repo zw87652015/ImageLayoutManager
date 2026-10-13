@@ -8,6 +8,7 @@ from PyQt6.QtGui import QPainter, QWheelEvent, QMouseEvent, QKeyEvent, QPainterP
 
 from src.app.motion import start_animation
 from src.canvas.canvas_ruler import CanvasRuler, RulerCorner
+from src.canvas.reveal_math import axis_reveal_delta, reveal_margin
 
 
 class CanvasView(QGraphicsView):
@@ -173,6 +174,28 @@ class CanvasView(QGraphicsView):
                     r = item.sceneBoundingRect()
             rect = r if rect is None else rect.united(r)
         return rect
+
+    def reveal_scene_rect(self, rect, margin_px=24.0, animated=True) -> bool:
+        """Pan only as far as needed to show *rect*; no pan when it is already visible."""
+        if rect is None or not rect.isValid():
+            return False
+        viewport = QRectF(self.viewport().rect())
+        target = self.viewportTransform().mapRect(QRectF(rect))
+        mx = reveal_margin(viewport.width(), margin_px)
+        my = reveal_margin(viewport.height(), margin_px)
+        dx = axis_reveal_delta(target.left(), target.right(),
+                               viewport.left() + mx, viewport.right() - mx)
+        dy = axis_reveal_delta(target.top(), target.bottom(),
+                               viewport.top() + my, viewport.bottom() - my)
+        if abs(dx) < 0.5 and abs(dy) < 0.5:
+            return False
+        anchor = QPointF(viewport.center())
+        scene_target = self._scene_at(anchor) + QPointF(dx, dy) / self.transform().m11()
+        self._start_zoom(self._zoom_target, anchor, scene_target, animated=animated)
+        return True
+
+    def reveal_selection(self, animated=True) -> bool:
+        return self.reveal_scene_rect(self.selection_scene_rect(), animated=animated)
 
     def changeEvent(self, event):
         super().changeEvent(event)

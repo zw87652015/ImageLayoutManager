@@ -734,6 +734,7 @@ _T: dict[str, dict[str, str]] = {
                              "zh": "(拖拽工程或图表文件到此处以打开\n.figpack / .figlayout / .json  ·  .ilmplot.svg 在图表编辑器中打开)"},
     "welcome_close":        {"en": "Close",               "zh": "关闭"},
     "welcome_about":        {"en": "About",               "zh": "关于"},
+    "welcome_language":     {"en": "中文",                "zh": "English"},
     "welcome_recent":       {"en": "Recent",              "zh": "最近打开"},
 
     # ── MCP status indicator (status bar) ──────────────────────────
