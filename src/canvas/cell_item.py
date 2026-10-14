@@ -1,7 +1,7 @@
 import os
 
 from PyQt6.QtWidgets import QGraphicsRectItem, QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsTextItem
-from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QFontMetrics, QCursor
+from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPixmap, QFont, QFontMetrics, QCursor, QPainterPath
 from PyQt6.QtCore import Qt, QRectF, QRect, QPointF, pyqtSignal, QVariantAnimation, QEasingCurve, QTimer
 
 from src.canvas import canvas_accent
@@ -1187,6 +1187,10 @@ class CellItem(QGraphicsRectItem):
     def _get_pip_intrinsic_aspect_ratio(self, pip) -> float:
         """Return the physical aspect ratio (W/H) of the PiP image content."""
         if pip.pip_type == "external":
+            from src.utils.pip_aspect import pip_source_aspect
+            ratio = pip_source_aspect(pip)
+            if ratio:
+                return ratio
             if pip.image_path and os.path.exists(pip.image_path):
                 # Try cache
                 pix = self.proxy.get_pixmap(pip.image_path)
@@ -1272,27 +1276,36 @@ class CellItem(QGraphicsRectItem):
                 return views[0].transform().m11()
         return 1.0
 
+    def _selected_pip_handle_hit_rects(self) -> list[tuple[str, QRectF]]:
+        """Hit rects of the selected PiP's resize (and zoom origin) handles, in priority order."""
+        if not (self._selected_pip_id and self._pip_resize_active):
+            return []
+        pip = next((p for p in self._pip_items if p.id == self._selected_pip_id), None)
+        if pip is None:
+            return []
+        cr = self._pip_content_rect()
+        scale = self._pip_scene_scale()
+        rects = list(self._pip_handle_rects(self._pip_inset_rect(pip, cr), scale, hit=True).items())
+        if pip.pip_type == "zoom" and pip.show_origin_box:
+            origin_rect = self._pip_origin_rect(pip, cr)
+            rects += list(self._pip_origin_handle_rects(origin_rect, scale, hit=True).items())
+        return rects
+
     def _pip_hit_test(self, item_pos: QPointF):
         """Returns (pip_id, drag_mode) or (None, None).
         Handles are prioritized over PiP bodies to ensure reliable resizing."""
         cr = self._pip_content_rect()
-        scale = self._pip_scene_scale()
-        
+
         # Pass 1: Check handles of the SELECTED PiP (highest priority)
         if self._selected_pip_id and self._pip_resize_active:
             pip = next((p for p in self._pip_items if p.id == self._selected_pip_id), None)
             if pip:
-                inset_rect = self._pip_inset_rect(pip, cr)
-                # Resize handles
-                for mode, hrect in self._pip_handle_rects(inset_rect, scale, hit=True).items():
+                for mode, hrect in self._selected_pip_handle_hit_rects():
                     if hrect.contains(item_pos):
                         return pip.id, mode
-                # Origin box handles (zoom type only)
+                # Origin box body (zoom type only) still drags as a whole
                 if pip.pip_type == "zoom" and pip.show_origin_box:
                     origin_rect = self._pip_origin_rect(pip, cr)
-                    for mode, hrect in self._pip_origin_handle_rects(origin_rect, scale, hit=True).items():
-                        if hrect.contains(item_pos):
-                            return pip.id, mode
                     if origin_rect.contains(item_pos):
                         return pip.id, "origin_move"
 
@@ -2321,6 +2334,17 @@ class CellItem(QGraphicsRectItem):
             s = 20.0 / max(scale, 0.01)
             return r.adjusted(-s, -s, s, s)
         return r
+
+    def shape(self) -> QPainterPath:
+        path = super().shape()
+        rects = self._selected_pip_handle_hit_rects()
+        if rects:
+            extra = QPainterPath()
+            extra.setFillRule(Qt.FillRule.WindingFill)
+            for _mode, r in rects:
+                extra.addRect(r)
+            path = path.united(extra)
+        return path
 
     def hoverEnterEvent(self, event):
         self.is_hovered = True

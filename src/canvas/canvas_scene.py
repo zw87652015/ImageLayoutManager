@@ -2108,12 +2108,16 @@ class CanvasScene(QGraphicsScene):
                 event.accept()
                 return
 
-        # Dismiss PiP selection handles when clicking anywhere (the cell's own
-        # mousePressEvent deselects when clicking outside a PiP within the cell,
-        # but clicks on other cells or empty space also need to dismiss).
+        # Dismiss PiP selection handles when clicking anywhere except the cell
+        # under the press, whose mousePressEvent handles its own PiPs (clicks
+        # on other cells or empty space also need to dismiss).
         if event.button() == Qt.MouseButton.LeftButton:
+            views = self.views()
+            owner = self.itemAt(event.scenePos(), views[0].transform()) if views else None
+            while owner is not None and not isinstance(owner, CellItem):
+                owner = owner.parentItem()
             for item in self.cell_items.values():
-                if item._selected_pip_id is not None:
+                if item is not owner and item._selected_pip_id is not None:
                     item.deselect_pip()
 
         super().mousePressEvent(event)

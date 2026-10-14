@@ -339,6 +339,16 @@ _QSS_TEMPLATE = """
     QLineEdit:disabled, QPlainTextEdit#inspectorTextContent:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {
         color: %(text_tert)s; background: %(surface_subtle)s;
     }
+    QLineEdit#chipInlineEditor {
+        background: %(surface)s;
+        border: none;
+        border-bottom: 1px solid %(accent)s;
+        border-radius: 0;
+        padding: 0 2px;
+        margin: 0;
+        min-height: 0;
+        font-size: %(font_base)s;
+    }
 
     /* Spin buttons: side by side on the right, with hover/pressed feedback. */
     QSpinBox, QDoubleSpinBox {

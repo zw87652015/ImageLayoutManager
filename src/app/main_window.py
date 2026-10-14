@@ -2912,34 +2912,17 @@ class MainWindow(QMainWindow):
 
     def _get_pip_intrinsic_aspect_ratio(self, pip) -> float:
         """Helper to get physical aspect ratio (W/H) of a PiP inset."""
-        import os
-        from PIL import Image
-        if pip.pip_type == "external":
-            if pip.image_path and os.path.exists(pip.image_path):
-                try:
-                    with Image.open(pip.image_path) as img:
-                        return img.width / img.height
-                except:
-                    pass
-        elif pip.pip_type == "zoom":
-            # For zoom PiPs, the intrinsic ratio is the cropped parent image's ratio
-            parent_cell = None
-            # Find which cell owns this PiP
+        from src.utils.pip_aspect import pip_source_aspect
+        parent_path = None
+        if pip.pip_type == "zoom":
+            # For zoom PiPs, the intrinsic ratio is the cropped parent image's
+            # ratio; find which cell owns this PiP
             for c in self.project.get_all_leaf_cells():
                 if any(p.id == pip.id for p in getattr(c, 'pip_items', [])):
-                    parent_cell = c
+                    parent_path = c.image_path
                     break
-            
-            if parent_cell and parent_cell.image_path and os.path.exists(parent_cell.image_path):
-                try:
-                    with Image.open(parent_cell.image_path) as img:
-                        img_w, img_h = img.width, img.height
-                        crop_w = max(0.001, pip.crop_right - pip.crop_left)
-                        crop_h = max(0.001, pip.crop_bottom - pip.crop_top)
-                        return (crop_w * img_w) / (crop_h * img_h)
-                except:
-                    pass
-        return 1.0
+        ratio = pip_source_aspect(pip, parent_path)
+        return ratio or 1.0
 
     def _on_pip_removed(self, cell_id: str, pip_id: str):
         """Handle Delete key press or Inspector delete button for selected PiP."""
@@ -4955,7 +4938,7 @@ class MainWindow(QMainWindow):
             lambda: self._ctx_set_cell_prop(cell_id, {"scale_bar_enabled": not cell.scale_bar_enabled})
         )
 
-        text_menu = menu.addMenu(tr("ctx_text_plot_menu"))
+        text_menu = menu.addMenu(tr("ctx_text_plot_menu").replace("&", "&&"))
         text_menu.setEnabled(bool(has_image))
         from src.utils.raster_text_utils import is_raster_path
         if bool(has_image) and cell.image_path.lower().endswith('.svg'):
@@ -7326,7 +7309,7 @@ class MainWindow(QMainWindow):
                     n=len(paths), preview=preview, tail=tail
                 )
             )
-            hydrate = box.addButton(tr("btn_hydrate_include"), QMessageBox.ButtonRole.AcceptRole)
+            hydrate = box.addButton(tr("btn_hydrate_include").replace("&", "&&"), QMessageBox.ButtonRole.AcceptRole)
             skip = box.addButton(tr("btn_skip_missing"), QMessageBox.ButtonRole.DestructiveRole)
             cancelb = box.addButton(QMessageBox.StandardButton.Cancel)
             box.exec()

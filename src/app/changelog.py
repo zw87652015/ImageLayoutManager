@@ -9,6 +9,30 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.6.1", "2026-10-14", [
+        {"en": "The first save of a new project asks which format to use: a small .figlayout that links to your images, or a portable .figpack with every image inside.",
+         "zh": "新工程首次保存时会询问格式：链接图片的小文件 .figlayout，或包含全部图片的便携包 .figpack。"},
+        {"en": "Auto Layout no longer leaves empty space around images when panel labels sit outside the cells.",
+         "zh": "面板标注位于单元格外时，自动布局不再在图片周围留下空白。"},
+        {"en": "Cell Gap is now the first Grid Settings field, and the cell Inspector has a Cell Gap (all cells) field above Padding.",
+         "zh": "“单元格间距”移到网格设置的第一项，单元格检查器的内边距上方也新增“单元格间距（全部）”。"},
+        {"en": "Match Text Size explains what to do next under Text groups, and the text list has a right-click menu to add, create or remove groups.",
+         "zh": "“匹配文字大小”会在“文字组”下提示下一步操作；文字列表新增右键菜单，可加入、新建或移出文字组。"},
+        {"en": "Double-clicking a text group's size or name now edits it right in place.",
+         "zh": "双击文字组的字号或名称，现在可直接在原处编辑。"},
+        {"en": "Fixed: the resize handles of a selected inset can be dragged again.",
+         "zh": "修复：选中插图后，可再次拖动其缩放手柄。"},
+        {"en": "Fixed: a newly added SVG, PDF or EPS inset no longer shows a gap between its border and the picture.",
+         "zh": "修复：新添加的 SVG、PDF 或 EPS 插图，边框与图片之间不再出现空隙。"},
+        {"en": "Fixed: in a narrow Inspector, the last row of label scheme buttons is no longer cut off.",
+         "zh": "修复：检查器较窄时，标注方案按钮的最后一行不再被截断。"},
+        {"en": "Fixed: names with “&”, such as the Text & Plot menu, no longer show a stray underline.",
+         "zh": "修复：含“&”的名称（如“文字与图表”菜单）不再显示多余的下划线。"},
+        {"en": "Fixed: renaming a size group updates its badge on the canvas right away.",
+         "zh": "修复：重命名尺寸组后，画布上的标记会立即更新。"},
+        {"en": "No change to project files: projects saved by 3.6.0 and this version are interchangeable.",
+         "zh": "工程文件无变化：3.6.0 与本版本保存的工程可互相打开。"},
+    ]),
     ("3.6.0", "2026-10-13", [
         {"en": "A refreshed light and dark look. Inspector choices such as Fit Mode, Rotation and label placement are now picture tiles, and Auto fields show the value in use.",
          "zh": "全新的浅色与深色外观。检查器中的缩放模式、旋转、标注位置等选项改为图示按钮，“自动”字段会显示实际使用的数值。"},

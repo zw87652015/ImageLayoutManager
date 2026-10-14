@@ -97,7 +97,7 @@ class PreferencesDialog(QDialog):
 
         self._tabs = QTabWidget()
         self._tabs.addTab(self._build_general(), tr("prefs_tab_general"))
-        self._tabs.addTab(self._build_files(), tr("prefs_tab_files"))
+        self._tabs.addTab(self._build_files(), tr("prefs_tab_files").replace("&", "&&"))
         self._tabs.addTab(self._build_bundles(), tr("prefs_tab_bundles"))
         self._tabs.addTab(self._build_ocr(), tr("prefs_tab_ocr"))
         root.addWidget(self._tabs)

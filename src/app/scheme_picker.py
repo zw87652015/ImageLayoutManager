@@ -10,7 +10,7 @@ import math
 
 from PyQt6.QtCore import QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPalette, QPen
-from PyQt6.QtWidgets import QComboBox
+from PyQt6.QtWidgets import QComboBox, QSizePolicy
 
 from src.utils.label_numbering import format_index
 
@@ -29,6 +29,9 @@ class SchemePicker(QComboBox):
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumWidth(_CHIP_W * 2)
+        policy = QSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
         self._hover = None
 
     # ── sizing ───────────────────────────────────────────────────────────

@@ -7,9 +7,12 @@ group (or shows its members when nothing is selected); "+" makes a group; "∅" 
 selection from its groups. The windows own the membership changes (text_group_assign).
 """
 
+import math
+import re
+
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap
-from PyQt6.QtWidgets import QApplication, QDoubleSpinBox, QLineEdit, QMenu, QWidget, QAbstractSpinBox
+from PyQt6.QtWidgets import QApplication, QLineEdit, QMenu, QWidget
 
 from src.app.i18n import tr
 from src.app.plot_alignment_logic import group_color
@@ -50,6 +53,18 @@ def chip_hint(selection_count: int, group_count: int) -> str:
     return tr("text_chip_hint_empty")
 
 
+def parse_chip_size(text: str) -> float | None:
+    """Parse typed chip size text ('12', '12.5 pt', '9,5') into a clamped pt value."""
+    cleaned = re.sub(r"\s*pt$", "", text.strip(), flags=re.IGNORECASE).replace(",", ".")
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    if not math.isfinite(value):
+        return None
+    return round(min(_SIZE_MAX, max(_SIZE_MIN, value)), 2)
+
+
 def chip_tooltip(group, selection_count: int) -> str:
     size = f"{group.font_size_pt:g}"
     if selection_count > 0:
@@ -82,6 +97,8 @@ class _Editor(QLineEdit):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("chipInlineEditor")
+        self.setFrame(False)
         self._done = False
 
     def begin(self, text, rect):
@@ -130,15 +147,12 @@ class TextGroupChips(QWidget):
         self._name_editor.hide()
         self._name_editor.committed.connect(self._commit_name)
         self._name_editor.cancelled.connect(self._name_editor.hide)
-        self._size_spin = QDoubleSpinBox(self)
-        self._size_spin.setRange(_SIZE_MIN, _SIZE_MAX)
-        self._size_spin.setDecimals(2)
-        self._size_spin.setSuffix(" pt")
-        self._size_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self._size_spin.hide()
-        self._size_spin.installEventFilter(self)
-        self._size_spin.editingFinished.connect(self._commit_size)
-        self._size_cancel = False
+        self._name_editor.cancelled.connect(self.setFocus)
+        self._size_editor = _Editor(self)
+        self._size_editor.hide()
+        self._size_editor.committed.connect(self._commit_size)
+        self._size_editor.cancelled.connect(self._size_editor.hide)
+        self._size_editor.cancelled.connect(self.setFocus)
         self._edit_gid = None
         self._click_timer = QTimer(self)
         self._click_timer.setSingleShot(True)
@@ -371,7 +385,7 @@ class TextGroupChips(QWidget):
         self._pending_click = None
         self._scrub = None
         if kind == "size":
-            self._open_size_spin(gid)
+            self._open_size_editor(gid)
         else:
             self._open_name_editor(gid)
         event.accept()
@@ -392,7 +406,9 @@ class TextGroupChips(QWidget):
         group = self._group(gid)
         rect = next(r for k, g, r in self._layout_cache if k == "chip" and g == gid)
         region = self._chip_regions(rect, gid)["name"]
+        region = QRectF(region.left(), rect.top() + 4, region.width(), _CHIP_H - 8)
         self._edit_gid = gid
+        self._name_editor.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self._name_editor.begin(group.name, region.toRect())
 
     def _commit_name(self, text):
@@ -405,42 +421,32 @@ class TextGroupChips(QWidget):
             self.refresh()
             self.groups_changed.emit()
 
-    def _open_size_spin(self, gid):
+    def _open_size_editor(self, gid):
         group = self._group(gid)
         rect = next(r for k, g, r in self._layout_cache if k == "chip" and g == gid)
-        region = self._chip_regions(rect, gid)["size"]
+        regions = self._chip_regions(rect, gid)
+        size_rect = regions["size"]
+        min_w = QFontMetrics(self.font()).horizontalAdvance("200.00") + 8
+        left = size_rect.left()
+        if size_rect.width() < min_w:
+            left = max(regions["name"].left(), size_rect.right() - min_w)
+        editor_rect = QRectF(left, size_rect.top(), size_rect.right() - left, size_rect.height())
         self._edit_gid = gid
-        self._size_cancel = False
-        self._size_spin.setValue(group.font_size_pt)
-        self._size_spin.setGeometry(int(region.left() - 6), int(region.top() - 2),
-                                    int(region.width() + 26), int(region.height() + 4))
-        self._size_spin.show()
-        self._size_spin.setFocus()
-        self._size_spin.selectAll()
+        self._size_editor.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._size_editor.begin(f"{group.font_size_pt:g}", editor_rect.toRect())
 
-    def _commit_size(self):
-        if not self._size_spin.isVisible():
-            return
+    def _commit_size(self, text):
+        self._size_editor.hide()
         gid = self._edit_gid
-        value = min(_SIZE_MAX, max(_SIZE_MIN, self._size_spin.value()))
-        self._size_spin.hide()
-        if self._size_cancel or gid is None:
-            self._size_cancel = False
+        self._edit_gid = None
+        value = parse_chip_size(text)
+        if value is None:
             return
-        group = self._group(gid)
+        group = self._group(gid) if gid else None
         if group is not None and abs(value - group.font_size_pt) > 1e-9:
             group.font_size_pt = value
             self.refresh()
             self.groups_changed.emit()
-
-    def eventFilter(self, obj, event):
-        from PyQt6.QtCore import QEvent
-        if obj is self._size_spin and event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
-            self._size_cancel = True
-            self._size_spin.hide()
-            self.setFocus()
-            return True
-        return super().eventFilter(obj, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
