@@ -486,6 +486,13 @@ _QSS_TEMPLATE = """
     QLabel#mcpLocHost { font-weight: 600; color: %(text)s; }
     QLabel#mcpLocPath { color: %(text_sec)s; }
     QDialog#mcpGuide QLabel#mcpChip { background: %(surface_subtle)s; border: 1px solid %(border)s; border-radius: 10px; padding: 2px 8px; font-size: %(font_sm)s; color: %(text)s; }
+    QDialog#saveFormatDialog { background: %(panel)s; }
+    QDialog#saveFormatDialog QLabel { background: transparent; }
+    QLabel#saveFmtIntro { font-size: %(font_md)s; color: %(text_sec)s; }
+    QFrame#saveFmtCard { background: %(surface)s; border: 1px solid %(border)s; border-radius: %(radius_panel)s; }
+    QFrame#saveFmtCard[selected="true"] { border-color: %(accent)s; }
+    QRadioButton#saveFmtCardTitle { font-weight: 600; color: %(text)s; }
+    QLabel#saveFmtPoint { font-size: %(font_sm)s; color: %(text_sec)s; }
     QWidget#welcomePage { background: %(panel)s; }
     QLabel#welcomeTitle { font-size: 13pt; font-weight: 500; color: %(text)s; }
     QLabel#welcomeDropHint { font-size: 10px; color: %(text_tert)s; }

@@ -375,6 +375,40 @@ class LayoutEngine:
         return rects
 
     @staticmethod
+    def _row_label_strips(
+        project: Project,
+        placements: Dict[str, str],
+        strip_sizes: Dict[str, float],
+    ) -> Tuple[Dict[int, float], Dict[int, float]]:
+        """Thickness of the above/below label strip each row reserves.
+
+        A row reserves the largest label that lands in it, including a nested
+        label on the row's outer edge that joins the same band.
+        """
+        strips_above: Dict[int, float] = {}
+        strips_below: Dict[int, float] = {}
+        for cell in project.cells:
+            placement = placements.get(cell.id)
+            if placement == "label_row_above":
+                size = strip_sizes.get(cell.id, 0.0)
+                strips_above[cell.row_index] = max(
+                    strips_above.get(cell.row_index, 0.0), size)
+            elif placement == "label_row_below":
+                size = strip_sizes.get(cell.id, 0.0)
+                strips_below[cell.row_index] = max(
+                    strips_below.get(cell.row_index, 0.0), size)
+            for placement_key, bucket in (
+                ("label_row_above", strips_above),
+                ("label_row_below", strips_below),
+            ):
+                extra = LayoutEngine._nested_edge_strip(
+                    cell, placement_key, placements, strip_sizes)
+                if extra > 0:
+                    bucket[cell.row_index] = max(
+                        bucket.get(cell.row_index, 0.0), extra)
+        return strips_above, strips_below
+
+    @staticmethod
     def calculate_layout(project: Project) -> LayoutResult:
         """
         Calculates the geometry for all cells in the project.
@@ -420,27 +454,8 @@ class LayoutEngine:
         # on a nested panel that sits on the outer edge of its column joins
         # the same band, so it stays off the image and lines up with the
         # other panels in the row.
-        strips_above: Dict[int, float] = {}
-        strips_below: Dict[int, float] = {}
-        for cell in project.cells:
-            placement = placements.get(cell.id)
-            if placement == "label_row_above":
-                size = strip_sizes.get(cell.id, 0.0)
-                strips_above[cell.row_index] = max(
-                    strips_above.get(cell.row_index, 0.0), size)
-            elif placement == "label_row_below":
-                size = strip_sizes.get(cell.id, 0.0)
-                strips_below[cell.row_index] = max(
-                    strips_below.get(cell.row_index, 0.0), size)
-            for placement_key, bucket in (
-                ("label_row_above", strips_above),
-                ("label_row_below", strips_below),
-            ):
-                extra = LayoutEngine._nested_edge_strip(
-                    cell, placement_key, placements, strip_sizes)
-                if extra > 0:
-                    bucket[cell.row_index] = max(
-                        bucket.get(cell.row_index, 0.0), extra)
+        strips_above, strips_below = LayoutEngine._row_label_strips(
+            project, placements, strip_sizes)
 
         # 3. Calculate row heights. Every reserved band costs its thickness
         # plus one gap, so the walk below and this budget stay in step.

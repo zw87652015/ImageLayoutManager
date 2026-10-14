@@ -14,7 +14,7 @@ from threading import Event, Lock
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QPushButton,
     QLabel, QComboBox, QDoubleSpinBox, QCheckBox, QSplitter, QWidget, QScrollArea,
-    QFrame, QSizePolicy, QMessageBox,
+    QFrame, QSizePolicy, QMessageBox, QMenu,
 )
 from PyQt6.QtCore import (
     Qt, pyqtSignal, pyqtSlot, QRectF, QItemSelectionModel, QObject, QRunnable, QThreadPool,
@@ -26,7 +26,7 @@ from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
 from src.app.motion import MotionTween, install_button_feedback
 from src.app.text_groups_widget import section_label
-from src.app.text_group_chips import TextGroupChips, group_colour
+from src.app.text_group_chips import TextGroupChips, chip_hint, group_colour, populate_group_menu
 from src.utils.text_group_assign import assign_raster, new_svg_group, ungroup_raster
 from src.utils.raster_text_ocr import configured_backend, detect_text, OcrUnavailable, backend_status
 from src.utils.raster_text_utils import (
@@ -302,6 +302,8 @@ class RasterTextInspectorWindow(QDialog):
         self._list.setMouseTracking(True)
         self._list.setAccessibleName(tr('rastertxt_regions_label'))
         self._list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._on_list_context_menu)
         self._list.itemChanged.connect(self._on_item_toggled)
         self._list.itemSelectionChanged.connect(self._sync_region_controls)
         rv.addWidget(self._list, 2)
@@ -334,6 +336,9 @@ class RasterTextInspectorWindow(QDialog):
         rv.addWidget(div)
 
         rv.addWidget(section_label(tr("text_chips_label")))
+        self._chip_hint = QLabel()
+        self._chip_hint.setWordWrap(True)
+        rv.addWidget(self._chip_hint)
         self._groups_widget = TextGroupChips(self.project)
         self._groups_widget.assign_requested.connect(self._on_chip_assign)
         self._groups_widget.new_group_requested.connect(self._on_chip_new_group)
@@ -496,6 +501,7 @@ class RasterTextInspectorWindow(QDialog):
     def _sync_region_controls(self):
         if self._updating:
             return
+        self._update_chip_selection()
         regions = self._selected_regions()
         self._preview_label.set_selected(r.id for r in regions)
         enabled = bool(regions)
@@ -519,7 +525,9 @@ class RasterTextInspectorWindow(QDialog):
         self._update_chip_selection()
 
     def _update_chip_selection(self):
-        self._groups_widget.set_selection_info(len(self._selected_regions()), None)
+        count = len(self._selected_regions())
+        self._groups_widget.set_selection_info(count, None)
+        self._chip_hint.setText(chip_hint(count, len(self.project.svg_text_groups)))
 
     # ── Slots ───────────────────────────────────────────────────────────
 
@@ -661,6 +669,22 @@ class RasterTextInspectorWindow(QDialog):
         gid = new_svg_group(self.project, tr("svgtxt_default_group_name"), 12.0)
         assign_raster(regions, gid)
         self._changed()
+
+    def _on_list_context_menu(self, pos):
+        item = self._list.itemAt(pos)
+        if item is not None and not item.isSelected():
+            self._list.clearSelection()
+            item.setSelected(True)
+        regions = self._selected_regions()
+        if not regions:
+            return
+        menu = QMenu(self)
+        populate_group_menu(
+            menu, self.project, self._on_chip_assign, self._on_chip_new_group,
+            lambda: self._on_chip_assign(None),
+            can_remove=any(r.group_id for r in regions),
+        )
+        menu.exec(self._list.viewport().mapToGlobal(pos))
 
     def _on_chip_members(self, group_id):
         for index in range(self._list.count()):

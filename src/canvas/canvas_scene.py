@@ -332,6 +332,8 @@ class CanvasScene(QGraphicsScene):
                          if cell.id in getattr(g, 'cell_ids', [])}
             issues = tuple(i for i in self._image_placements.issues
                            if i.cell_id == cell.id or i.group_id in group_ids)
+            size_group_id = getattr(cell, 'size_group_id', None)
+            size_group = self.project.find_size_group(size_group_id) if size_group_id else None
             fingerprint = (
                 placement,
                 frame_key,
@@ -373,6 +375,9 @@ class CanvasScene(QGraphicsScene):
                 getattr(cell, 'plot_reflow', False),
                 getattr(cell, 'aspect_ratio_locked', False),
                 group_ids,
+                # The size-group badge is painted from these.
+                size_group_id,
+                size_group.name if size_group else None,
                 is_freeform,
                 len(pip_items),
             )

@@ -49,6 +49,8 @@ from src.export.pdf_images import coerce_image_settings, format_issue
 from src.export.image_exporter import ImageExporter
 from src.export.clipboard_export import copy_project_png
 from src.app.pdf_export_dialog import PdfExportOptionsDialog
+from src.app.save_format import ensure_extension, project_filters
+from src.app.save_format_dialog import SaveFormatDialog
 from src.utils.auto_label import AutoLabel
 from src.utils.sub_labels import even_splits, is_active
 from src.app.commands import (
@@ -3133,6 +3135,7 @@ class MainWindow(QMainWindow):
             multi_data = {
                 "count": len(cell_items),
                 "layout_mode": getattr(self.project, 'layout_mode', 'grid'),
+                "_project_gap_mm": self.project.gap_mm,
                 "fit_mode": common('fit_mode', 'contain'),
                 "rotation": common('rotation', 0),
                 "align_h": common('align_h', 'center'),
@@ -3228,6 +3231,7 @@ class MainWindow(QMainWindow):
                 from src.utils.auto_value import effective_cell_size, effective_subcell_size
                 cell_dict = cell.to_dict()
                 cell_dict["layout_mode"] = getattr(self.project, 'layout_mode', 'grid')
+                cell_dict["_project_gap_mm"] = self.project.gap_mm
                 cell_dict["_size_groups"] = self._size_groups_payload()
                 alignment = next((g for g in self.project.plot_alignment_groups if cell.id in g.cell_ids), None)
                 cell_dict["_plot_alignment"] = None if alignment is None else {
@@ -7029,15 +7033,27 @@ class MainWindow(QMainWindow):
             self.undo_stack.clear()
         return ok
 
+    def _choose_first_save_format(self) -> Optional[str]:
+        """Ask how a never-saved project should be stored; None when cancelled."""
+        dialog = SaveFormatDialog(self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.selected_extension()
+
     def _on_save_project_as(self) -> bool:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Project As", "",
-            "Figure Layout (*.figlayout);;"
-            "JSON (*.json);;"
-            "Figure Bundle (*.figpack)",
+        first_ext = ".figlayout"
+        if not self._current_project_path:
+            chosen = self._choose_first_save_format()
+            if chosen is None:
+                return False
+            first_ext = chosen
+        filters, initial = project_filters(first_ext)
+        path, selected = QFileDialog.getSaveFileName(
+            self, "Save Project As", "", filters, initial,
         )
         if not path:
             return False
+        path = ensure_extension(path, selected)
 
         # Plan §3.5 — switching format invalidates undo entries that
         # reference the old image paths (cache vs. sidecar vs. absolute).

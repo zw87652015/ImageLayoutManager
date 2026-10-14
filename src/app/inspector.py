@@ -978,6 +978,14 @@ class Inspector(QWidget):
         # Grid Settings
         self._sec_grid = QLabel("<b>Grid Settings</b>")
         self.project_layout.addRow(self._sec_grid)
+        self.gap_spin = QDoubleSpinBox()
+        self.gap_spin.setRange(0, 20)
+        self.gap_spin.setSingleStep(0.5)
+        self.gap_spin.setSuffix(" mm")
+        self.gap_spin.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"gap_mm": v})
+        )
+        self.project_layout.addRow(self._fl("lbl_cell_gap"), self.gap_spin)
         
         self.grid_mode = PictogramCombo(_PG["grid_mode"])
         self.grid_mode.addItems([tr("opt_grid_stretch"), tr("opt_grid_fixed")])
@@ -1098,18 +1106,6 @@ class Inspector(QWidget):
         )
         self.project_layout.addRow(self._fl("lbl_color"), self.title_label_color)
 
-        # Gap between cells
-        self._sec_layout = QLabel("<b>Layout</b>")
-        self.project_layout.addRow(self._sec_layout)
-        self.gap_spin = QDoubleSpinBox()
-        self.gap_spin.setRange(0, 20)
-        self.gap_spin.setSingleStep(0.5)
-        self.gap_spin.setSuffix(" mm")
-        self.gap_spin.valueChanged.connect(
-            lambda v: self.project_property_changed.emit({"gap_mm": v})
-        )
-        self.project_layout.addRow(self._fl("lbl_cell_gap"), self.gap_spin)
-        
         self.layout.addWidget(self.project_group)
         
         # --- Cell Properties Group ---
@@ -1265,6 +1261,18 @@ class Inspector(QWidget):
         # Internal state
         self._current_size_group_id: Optional[str] = None
         self._size_groups_cache: list = []  # list of group dicts
+
+        self.cell_gap_spin = QDoubleSpinBox()
+        self.cell_gap_spin.setRange(0, 20)
+        self.cell_gap_spin.setSingleStep(0.5)
+        self.cell_gap_spin.setSuffix(" mm")
+        self.cell_gap_spin.valueChanged.connect(
+            lambda v: self.project_property_changed.emit({"gap_mm": v})
+        )
+        self.cell_gap_spin.setToolTip(tr("tip_cell_gap_all"))
+        self._cell_gap_label = self._fl("lbl_cell_gap_all")
+        self._cell_gap_label.setToolTip(tr("tip_cell_gap_all"))
+        self.cell_layout.addRow(self._cell_gap_label, self.cell_gap_spin)
 
         self._sec_padding = QLabel("— Padding —")
         self.cell_layout.addRow(self._sec_padding)
@@ -2366,7 +2374,8 @@ class Inspector(QWidget):
         self._sec_label_hierarchy.setText(tr("sec_label_hierarchy"))
         self._sec_title_tier.setText(tr("sec_title_tier"))
         self._sec_gl_bracket.setText(tr("sec_bracket"))
-        self._sec_layout.setText(tr("sec_layout"))
+        self._cell_gap_label.setToolTip(tr("tip_cell_gap_all"))
+        self.cell_gap_spin.setToolTip(tr("tip_cell_gap_all"))
         self.freeform_section_label.setText(tr("sec_freeform"))
         self._sec_grid_override.setText(tr("sec_grid_override"))
         self._sec_padding.setText(tr("sec_padding"))
@@ -3386,6 +3395,8 @@ class Inspector(QWidget):
             # Single-cell-only rows are hidden: per-cell values differ and a
             # shared edit here would stamp one value over all of them.
             self._set_freeform_visible(False)
+            self.cell_layout.setRowVisible(
+                self.cell_gap_spin, (data or {}).get("layout_mode") != "freeform")
             for w in (self.format_value,
                       self.corner_label_tl, self.corner_label_tr,
                       self.corner_label_bl, self.corner_label_br,
@@ -3411,6 +3422,8 @@ class Inspector(QWidget):
                     self._set_alignment_buttons(None, None)
                 else:
                     self._set_alignment_buttons(ah, av)
+                with QSignalBlocker(self.cell_gap_spin):
+                    self.cell_gap_spin.setValue(data.get("_project_gap_mm", 2.0))
                 self._set_spin(self.pad_top,    data.get("padding_top", 0))
                 self._set_spin(self.pad_bottom, data.get("padding_bottom", 0))
                 self._set_spin(self.pad_left,   data.get("padding_left", 0))
@@ -3555,6 +3568,8 @@ class Inspector(QWidget):
                       self._plot_alignment_row, self.aspect_lock_btn):
                 self.cell_layout.setRowVisible(w, True)
             self._set_freeform_visible(data.get("layout_mode") == "freeform" if data else False)
+            self.cell_layout.setRowVisible(
+                self.cell_gap_spin, (data or {}).get("layout_mode") != "freeform")
 
             # Show row group
             if row_data:
@@ -3607,6 +3622,8 @@ class Inspector(QWidget):
                 data.get("align_h", "center"),
                 data.get("align_v", "center"),
             )
+            with QSignalBlocker(self.cell_gap_spin):
+                self.cell_gap_spin.setValue(data.get("_project_gap_mm", 2.0))
             self._set_spin(self.pad_top,    data.get("padding_top", 0))
             self._set_spin(self.pad_bottom, data.get("padding_bottom", 0))
             self._set_spin(self.pad_left,   data.get("padding_left", 0))

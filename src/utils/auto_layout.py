@@ -77,44 +77,20 @@ class AutoLayout:
         return aspect_ratios
 
     @staticmethod
-    def _fixed_grid_row_heights(sorted_rows, row_final_ratios,
-                                content_width: float, gap_mm: float) -> Dict[int, float]:
-        """Natural height (mm) of each row in Match Cell Size mode.
-
-        Mirrors LayoutEngine: every cell is one shared unit wide, so a row with
-        k columns is k * unit wide and its height is k * unit / Sum(aspects).
-        A row whose aspects sum to zero falls back to a square cell (unit).
-        """
-        counted = [r for r in sorted_rows if r.column_count > 0]
-        if not counted:
-            return {}
-        max_count = max(r.column_count for r in counted)
-        unit = (content_width - (max_count - 1) * gap_mm) / max_count
-        heights: Dict[int, float] = {}
-        for row in counted:
-            total = sum(row_final_ratios[row.index])
-            heights[row.index] = row.column_count * unit / total if total > 0 else unit
-        return heights
-
-    @staticmethod
     def optimize_layout(project: Project) -> Dict[str, any]:
         """
-        Calculates optimized row heights and column ratios.
-        
-        Strategy:
-        1. Within a row, we want all images to have the SAME physical height to look neat.
-           - To achieve this, column width W_i must be proportional to image aspect ratio a_i (W_i = H * a_i).
-           - So, column_ratios = [a_1, a_2, ... a_n]. Fixed artwork uses its
-             source aspect; active Reflow plots share a neutral preference.
-           
-        2. Across rows, we want to respect the natural height of each row.
-           - A row's natural height H_row is determined by the page width W_page.
-           - W_page = Sum(W_i) = Sum(H_row * a_i) = H_row * Sum(a_i).
-           - Therefore, H_row = W_page / Sum(a_i).
-           - The layout engine distributes vertical space based on height_ratio.
-           - So, row.height_ratio should be proportional to 1 / Sum(a_i).
+        Calculates optimized row heights, column ratios and page height.
+
+        Every cell is modelled as slot_width = a * slot_height + s, where s
+        carries the cell's side label strip (and any width that does not
+        scale with height). Models follow LayoutEngine's geometry: outer-edge
+        label bands are hoisted into the row band, and fixed-size children
+        contribute their fixed extent. A row solves its height from the sum of
+        its column models; split_ratios are then assigned top-down from the
+        sizes the engine will produce.
         """
-        
+        from src.model.layout_engine import LayoutEngine
+
         # Resolve fixed source shapes and flexible Reflow preferences once.
         aspect_ratios = AutoLayout._get_image_aspect_ratios(project)
 
@@ -131,303 +107,240 @@ class AutoLayout:
                     for mid in member_ids:
                         aspect_ratios[mid] = shared_aspect
 
-        # 1b. Recursively optimise split_ratios for every container cell and
-        #     compute the cell's natural (width, height) bottom-up, accounting
-        #     for gaps at each split level so the composite aspect fed upward is
-        #     accurate and leaf images fill their cells without letterbox space.
-        #
-        # We propagate (w, h) natural sizes using the content width as a reference.
-        # This matters because gaps are absolute (mm), so their fractional effect
-        # differs at each nesting level and cannot be captured by a pure ratio.
-        ref_w = (project.page_width_mm
-                 - project.margin_left_mm
-                 - project.margin_right_mm)
         gap = project.gap_mm
+        placements, strip_sizes = LayoutEngine.resolve_label_placements(project)
+        strips_above, strips_below = LayoutEngine._row_label_strips(
+            project, placements, strip_sizes)
+        bands_top, bands_bottom, bands_left, bands_right = \
+            LayoutEngine._collect_group_bands(project)
+        typography = getattr(project, 'typography_mode', 'points')
+        content_width = max(0.0, project.page_width_mm
+                            - project.margin_left_mm - project.margin_right_mm
+                            - LayoutEngine._gutter_mm(bands_left, typography)
+                            - LayoutEngine._gutter_mm(bands_right, typography))
 
-        # Per-cell label strips, resolved the same way the layout engine does
-        # so the height estimate matches the real geometry.
-        from src.model.layout_engine import LayoutEngine
-        _placements, _strip_sizes = LayoutEngine.resolve_label_placements(project)
+        def strip_of(cell: Cell, placement: str) -> float:
+            return strip_sizes.get(cell.id, 0.0) if placements.get(cell.id) == placement else 0.0
 
-        def _strip_overhead(cell_id: str) -> float:
-            """Vertical space a cell's own label strip costs, gap included."""
-            if _placements.get(cell_id) not in ("label_row_above", "label_row_below"):
-                return 0.0
-            return _strip_sizes.get(cell_id, 0.0) + gap
+        def side_of(cell: Cell) -> float:
+            if placements.get(cell.id) in ("label_col_left", "label_col_right"):
+                return strip_sizes.get(cell.id, 0.0) + gap
+            return 0.0
 
-        def _optimise_and_composite(cell, parent_w: float):
-            """Return (w, total_h, img_h) for *cell* at width *parent_w*.
+        info: Dict[str, dict] = {}
 
-            total_h includes any label-strip overhead reserved above this cell
-            (so the parent can allocate enough space).  img_h is the pure image
-            content height, used for split_ratios — the layout engine handles the
-            label strips separately and must not double-count them.
+        def build(cell: Cell, hoist_above: bool, hoist_below: bool):
+            """Return the (a, s) model of *cell*, or None when it has no image.
 
-            Horizontal split: children share height H, placed side by side.
-                split_ratio_i = img_aspect_i  (= img_w_i / img_h)
-                H = available_w / sum(img_aspects)
-                img_h = H   (label strip is uniform across all siblings, handled by engine)
-
-            Vertical split: children stacked, sharing width parent_w.
-                split_ratio_i = img_h_i  (proportional to image-only height)
-                total_natural_h = sum(total_h_i) + (n-1)*gap + fixed_heights
-                img_h = total_natural_h - own_label_overhead
+            hoist_above / hoist_below say a label band is passed in from the
+            parent, mirroring LayoutEngine's hoist_above / hoist_below.
             """
+            entry = {"side": side_of(cell), "model": None,
+                     "hoist_above": hoist_above, "hoist_below": hoist_below}
+            info[cell.id] = entry
             if cell.is_leaf:
                 a = aspect_ratios.get(cell.id)
                 if a and a > 0:
-                    img_h = parent_w / a
-                    return (parent_w, img_h + _strip_overhead(cell.id), img_h)
-                return None
+                    entry["model"] = (a, entry["side"])
+                return entry["model"]
 
             children = cell.children
             n = len(children)
-            if n == 0:
+            if n == 0 or cell.split_direction not in ("horizontal", "vertical"):
                 return None
-
-            # Recurse first (bottom-up), passing estimated child widths
-            if cell.split_direction == "horizontal":
-                child_w_est = max(1.0, (parent_w - (n - 1) * gap) / n)
-                child_sizes = [_optimise_and_composite(c, child_w_est) for c in children]
+            horizontal = cell.split_direction == "horizontal"
+            fixed = [getattr(c, 'override_width_mm' if horizontal else 'override_height_mm', 0.0)
+                     for c in children]
+            overhead = 0.0
+            label_space = 0.0
+            flags = []
+            if horizontal:
+                above_h = max((strip_of(c, "label_row_above") for c in children), default=0.0)
+                below_h = max((strip_of(c, "label_row_below") for c in children), default=0.0)
+                if not hoist_above and above_h > 0:
+                    overhead += above_h + gap
+                if not hoist_below and below_h > 0:
+                    overhead += below_h + gap
+                for c in children:
+                    flags.append((hoist_above and placements.get(c.id) != "label_row_above",
+                                  hoist_below and placements.get(c.id) != "label_row_below"))
             else:
-                child_sizes = [_optimise_and_composite(c, parent_w) for c in children]
+                for i, c in enumerate(children):
+                    on_top = bool(i == 0 and hoist_above and LayoutEngine._wants_outer_edge(
+                        c, "label_row_above", "above", placements))
+                    on_bottom = bool(i == n - 1 and hoist_below and LayoutEngine._wants_outer_edge(
+                        c, "label_row_below", "below", placements))
+                    if not on_top and strip_of(c, "label_row_above") > 0:
+                        label_space += strip_of(c, "label_row_above") + gap
+                    if not on_bottom and strip_of(c, "label_row_below") > 0:
+                        label_space += strip_of(c, "label_row_below") + gap
+                    flags.append((on_top and placements.get(c.id) != "label_row_above",
+                                  on_bottom and placements.get(c.id) != "label_row_below"))
 
-            if cell.split_direction == "horizontal":
-                new_ratios = list(cell.split_ratios) if cell.split_ratios else [1.0] * n
-                fixed_w_total = 0.0
-                valid_img_aspects = []
-                for i, (child, sz) in enumerate(zip(children, child_sizes)):
-                    ow = getattr(child, 'override_width_mm', 0.0)
-                    if ow > 0:
-                        fixed_w_total += ow
-                        continue
-                    # Use img_h (sz[2]) for aspect ratio so label overhead doesn't distort ratios
-                    if sz is not None and len(sz) > 2 and sz[2] > 0:
-                        img_h = sz[2]
-                    elif sz is not None and sz[1] > 0:
-                        img_h = sz[1]
-                    else:
-                        img_h = None
-                    a = (sz[0] / img_h) if (img_h and img_h > 0) else None
-                    new_ratios[i] = a if (a is not None and a > 0) else 1.0
-                    if a is not None and a > 0:
-                        valid_img_aspects.append(a)
-                cell.split_ratios = new_ratios
+            child_models = [build(c, fa, fb) for c, (fa, fb) in zip(children, flags)]
+            ratio_children = [i for i in range(n) if fixed[i] <= 0]
+            valid = [child_models[i] for i in ratio_children if child_models[i] is not None]
+            if not valid:
+                return None
+            mean_a = sum(m[0] for m in valid) / len(valid)
+            models: List = [None] * n
+            for i in ratio_children:
+                models[i] = child_models[i] if child_models[i] is not None else (
+                    mean_a, side_of(children[i]))
 
-                if valid_img_aspects:
-                    available = max(1.0, parent_w - (n - 1) * gap - fixed_w_total)
-                    H = available / sum(valid_img_aspects)
-                    # Label overhead for a horizontal split is uniform across all siblings
-                    # and is handled by the engine; img_h = H for this container
-                    composite_size = (parent_w, H + _strip_overhead(cell.id), H)
-                else:
-                    composite_size = None
-
-            elif cell.split_direction == "vertical":
-                new_ratios = list(cell.split_ratios) if cell.split_ratios else [1.0] * n
-                fixed_h_total = 0.0
-                total_h_sum = 0.0  # sum of each child's total_h (includes their label overheads)
-                has_valid = False
-                for i, (child, sz) in enumerate(zip(children, child_sizes)):
-                    oh = getattr(child, 'override_height_mm', 0.0)
-                    if oh > 0:
-                        fixed_h_total += oh
-                        continue
-                    # sz[1] = total_h (with label overhead), sz[2] = img_h (without)
-                    if sz is not None and len(sz) > 2 and sz[2] > 0:
-                        child_img_h = sz[2]
-                    elif sz is not None and sz[1] > 0:
-                        child_img_h = sz[1]
-                    else:
-                        child_img_h = None
-                    child_total_h = sz[1] if (sz is not None and sz[1] > 0) else None
-                    if child_img_h and child_img_h > 0:
-                        # split_ratios reflect image-only height so engine doesn't double-count labels
-                        new_ratios[i] = child_img_h
-                        total_h_sum += child_total_h
-
-                        has_valid = True
-                    else:
-                        new_ratios[i] = 1.0
-                cell.split_ratios = new_ratios
-
-                if has_valid:
-                    natural_h = total_h_sum + (n - 1) * gap + fixed_h_total
-                    composite_size = (parent_w, natural_h + _strip_overhead(cell.id), natural_h)
-                else:
-                    composite_size = None
+            if horizontal:
+                a = sum(models[i][0] for i in ratio_children)
+                s = (sum(models[i][1] for i in ratio_children) - a * overhead
+                     + sum(fixed) + (n - 1) * gap + entry["side"])
             else:
-                composite_size = None
+                k_sum = sum(1.0 / models[i][0] for i in ratio_children)
+                a = 1.0 / k_sum
+                s = a * (sum(models[i][1] / models[i][0] for i in ratio_children)
+                         - sum(fixed) - (n - 1) * gap - label_space) + entry["side"]
 
-            if composite_size is not None:
-                # Store aspect based on img_h so composite fed to parent is correct
-                img_h_for_aspect = composite_size[2] if composite_size[2] > 0 else composite_size[1]
-                aspect_ratios[cell.id] = composite_size[0] / img_h_for_aspect
-            return composite_size
+            entry.update(horizontal=horizontal, models=models, fixed=fixed,
+                         ratio_children=ratio_children,
+                         overhead=overhead, label_space=label_space)
+            entry["model"] = (a, s)
+            return entry["model"]
 
-        # Walk all cells (at every depth) to optimise ratios and build composites
-        for cell in project.cells:
-            if not cell.is_leaf:
-                _optimise_and_composite(cell, ref_w)
+        def assign(cell: Cell, slot_w: float, slot_h: float):
+            """Set split_ratios of *cell* (and descendants) for a slot of this size."""
+            entry = info.get(cell.id)
+            if cell.is_leaf or entry is None or entry["model"] is None:
+                return
+            children = cell.children
+            n = len(children)
+            pic_w = max(0.0, slot_w - entry["side"])
+            ratios = list(cell.split_ratios) if cell.split_ratios else [1.0] * n
+            while len(ratios) < n:
+                ratios.append(1.0)
+            ratios = ratios[:n]
+            fixed = entry["fixed"]
+            models = entry["models"]
+            ratio_children = entry["ratio_children"]
+
+            if entry["horizontal"]:
+                child_h = max(0.0, slot_h - entry["overhead"])
+                for i in ratio_children:
+                    ratios[i] = max(1e-3, round(models[i][0] * child_h + models[i][1], 4))
+                cell.split_ratios = ratios
+                avail = max(0.0, pic_w - (n - 1) * gap - sum(fixed))
+                ratio_sum = sum(ratios[i] for i in ratio_children) or 1.0
+                for i, child in enumerate(children):
+                    child_w = fixed[i] if fixed[i] > 0 else ratios[i] / ratio_sum * avail
+                    assign(child, child_w, child_h)
+            else:
+                for i in ratio_children:
+                    ratios[i] = max(1e-3, round((pic_w - models[i][1]) / models[i][0], 4))
+                cell.split_ratios = ratios
+                avail = max(0.0, slot_h - (n - 1) * gap - entry["label_space"] - sum(fixed))
+                ratio_sum = sum(ratios[i] for i in ratio_children) or 1.0
+                for i, child in enumerate(children):
+                    child_h = fixed[i] if fixed[i] > 0 else ratios[i] / ratio_sum * avail
+                    assign(child, pic_w, child_h)
+
+        # Row solve: each column slot is a_j * H + s_j, so the row height H
+        # follows from the content width minus gaps and side strips.
+        sorted_rows = sorted(project.rows, key=lambda r: r.index)
+        fixed_grid = getattr(project, "grid_mode", "stretch") == "fixed"
+        max_col_count = max((r.column_count for r in sorted_rows if r.column_count > 0), default=0)
+        unit = ((content_width - (max_col_count - 1) * gap) / max_col_count
+                if fixed_grid and max_col_count > 0 else 0.0)
 
         new_row_settings = []
-        sorted_rows = sorted(project.rows, key=lambda r: r.index)
-        
-        # We need to collect all row "height demands" first to normalize them later
-        row_height_demands = {} # row_index -> float
-        
-        content_width = project.page_width_mm - project.margin_left_mm - project.margin_right_mm
-        gap_mm = project.gap_mm
-
-        row_final_ratios = {}  # row_index -> aspect per column slot, placeholders filled
-
+        by_index: Dict[int, dict] = {}
+        row_heights: Dict[int, float] = {}
+        row_cols: Dict[int, list] = {}
         for row in sorted_rows:
-            # Find top-level cells in this row
-            row_cells = sorted(
-                [c for c in project.cells if c.row_index == row.index],
-                key=lambda c: c.col_index
-            )
-            
-            col_count = row.column_count
-            if col_count <= 0:
-                new_row_settings.append(row.to_dict())
-                continue
-                
-            # Get aspect ratios for each column slot (uses composite for containers)
-            row_aspects = []
-            valid_aspects = []
-            
-            col_map = {c.col_index: c for c in row_cells}
-            
-            for i in range(col_count):
-                cell = col_map.get(i)
-                ratio = 1.0
-                if cell and cell.id in aspect_ratios:
-                    ratio = aspect_ratios[cell.id]
-                    valid_aspects.append(ratio)
-                row_aspects.append(ratio)
-            
-            # If no images in row (or all placeholders), assume equal distribution
-            # But if there are *some* images, we should use their ratios, and average for placeholders
-            if valid_aspects:
-                avg_aspect = sum(valid_aspects) / len(valid_aspects)
-                # Fill in placeholders with average aspect
-                final_ratios = []
-                for r in row_aspects:
-                    if r == 1.0 and 1.0 not in valid_aspects: # If it was a default placeholder
-                        final_ratios.append(avg_aspect)
-                    else:
-                        final_ratios.append(r)
-            else:
-                final_ratios = [1.0] * col_count
-                
-            # 1. Set Column Ratios
-            # Normalize so smallest is 1.0 for readability (optional, but cleaner)
-            min_r = min(final_ratios)
-            norm_col_ratios = [round(r / min_r, 2) for r in final_ratios]
-            
-            # 2. Calculate Natural Row Height (mm)
-            # The row's cells fill the content width minus its horizontal gaps:
-            # H_row = (W_content - (n - 1) * gap) / Sum(aspects)
-            total_row_aspect = sum(final_ratios)
-            if total_row_aspect <= 0: total_row_aspect = 1.0
-            
-            row_gap_total = (col_count - 1) * gap_mm if col_count > 1 else 0.0
-            row_height_demands[row.index] = (content_width - row_gap_total) / total_row_aspect
-            
-            # Store partial result
             r_dict = row.to_dict()
-            r_dict['column_ratios'] = norm_col_ratios
             new_row_settings.append(r_dict)
-            row_final_ratios[row.index] = final_ratios
+            by_index[row.index] = r_dict
+            k = row.column_count
+            if k <= 0:
+                continue
 
-        # Match Cell Size mode gives every row one shared cell unit (LayoutEngine), so a
-        # row's natural height comes from that unit, not from the stretch-to-page demand.
-        fixed_heights = {}
-        if getattr(project, "grid_mode", "stretch") == "fixed":
-            fixed_heights = AutoLayout._fixed_grid_row_heights(
-                sorted_rows, row_final_ratios, content_width, gap_mm)
+            col_map = {c.col_index: c for c in project.cells if c.row_index == row.index}
+            cols = [col_map.get(i) for i in range(k)]
+            has_above = strips_above.get(row.index, 0.0) > 0
+            has_below = strips_below.get(row.index, 0.0) > 0
+            models = []
+            for cell in cols:
+                if cell is None:
+                    models.append(None)
+                    continue
+                models.append(build(
+                    cell,
+                    has_above and placements.get(cell.id) != "label_row_above",
+                    has_below and placements.get(cell.id) != "label_row_below"))
 
-        # 3. Normalize Height Ratios across all rows
-        # We want the values to be nice numbers like 1.0, 1.5, etc.
-        # Let's scale them so the *tallest* row (max demand) is roughly 1.0? 
-        # Or just normalize so min is 1.0.
-        
-        if fixed_heights:
-            min_h = min(fixed_heights.values())
-            if min_h < 0.0001: min_h = 1.0
+            valid = [m for m in models if m is not None]
+            if valid:
+                mean_a = sum(m[0] for m in valid) / len(valid)
+                slot_models = []
+                for cell, m in zip(cols, models):
+                    if m is not None:
+                        slot_models.append(m)
+                    else:
+                        slot_models.append((mean_a, side_of(cell) if cell is not None else 0.0))
+            else:
+                slot_models = [(1.0, 0.0)] * k
 
-            for r_dict in new_row_settings:
-                idx = r_dict['index']
-                if idx in fixed_heights:
-                    r_dict['height_ratio'] = round(fixed_heights[idx] / min_h, 2)
-        elif row_height_demands:
-            min_h = min(row_height_demands.values())
-            if min_h < 0.0001: min_h = 1.0
-            
-            for r_dict in new_row_settings:
-                idx = r_dict['index']
-                if idx in row_height_demands:
-                    raw_h = row_height_demands[idx]
-                    # Scale: if raw_h is 2x min_h, ratio should be 2.0
-                    final_h = round(raw_h / min_h, 2)
-                    r_dict['height_ratio'] = final_h
+            sum_a = sum(a for a, _ in slot_models)
+            sum_s = sum(s for _, s in slot_models)
+            avail = unit * k if fixed_grid else content_width - (k - 1) * gap
+            height = max(1.0, (avail - sum_s) / sum_a)
+            row_heights[row.index] = height
+            row_cols[row.index] = cols
 
-        # 4. Calculate optimal page height to fit content perfectly
-        # For each row, the natural height is: H_row = W_content / sum(aspects_in_row)
-        # Total natural height = sum(H_row) + gaps + margins
-        
-        total_natural_height = 0
-        for r_dict in new_row_settings:
-            col_ratios = r_dict.get('column_ratios', [1.0])
-            # The sum of column ratios represents the "row aspect ratio"
-            # But we normalized them, so we need to use the original sum
-            row_idx = r_dict['index']
-            if row_idx in row_height_demands:
-                # Stretch rows already carry their natural height (gaps included).
-                if row_idx in fixed_heights:
-                    total_natural_height += fixed_heights[row_idx]
-                else:
-                    total_natural_height += row_height_demands[row_idx]
-        
-        # Add gaps between rows
+            ratios = [max(1e-3, a * height + s) for a, s in slot_models]
+            min_r = min(ratios)
+            r_dict['column_ratios'] = [round(r / min_r, 2) for r in ratios]
+
+        if row_heights:
+            min_h = min(row_heights.values())
+            for idx, height in row_heights.items():
+                by_index[idx]['height_ratio'] = round(height / min_h, 2)
+
+        # Page height: rows, gaps and every reserved band. Rows take the
+        # height ratios just written, so use those to split the row total.
+        total_row_h = sum(row_heights.values())
+        total_ratio = sum(by_index[idx]['height_ratio'] for idx in row_heights)
+        actual_heights = {
+            idx: by_index[idx]['height_ratio'] / total_ratio * total_row_h
+            for idx in row_heights
+        } if total_ratio > 0 else {}
+
+        # Top-down split ratios from the sizes each column will actually get.
+        for row in sorted_rows:
+            if row.index not in actual_heights:
+                continue
+            k = row.column_count
+            norm = by_index[row.index]['column_ratios']
+            avail = unit * k if fixed_grid else content_width - (k - 1) * gap
+            total = sum(norm)
+            for i, cell in enumerate(row_cols[row.index]):
+                if cell is not None:
+                    assign(cell, norm[i] / total * avail, actual_heights[row.index])
+
+        total_natural_height = total_row_h
         num_rows = len(new_row_settings)
         if num_rows > 1:
-            total_natural_height += (num_rows - 1) * gap_mm
+            total_natural_height += (num_rows - 1) * gap
 
-        # Account for reserved bands: per-row cell-label strips plus any
-        # top/bottom group-label bands, mirroring LayoutEngine's budget.
-        from src.model.layout_engine import LayoutEngine
-        placements, strip_sizes = LayoutEngine.resolve_label_placements(project)
-        strips_above: dict = {}
-        strips_below: dict = {}
-        for c in project.cells:
-            placement = placements.get(c.id)
-            if placement == "label_row_above":
-                bucket = strips_above
-            elif placement == "label_row_below":
-                bucket = strips_below
-            else:
-                continue
-            size = strip_sizes.get(c.id, 0.0)
-            bucket[c.row_index] = max(bucket.get(c.row_index, 0.0), size)
         for bucket in (strips_above, strips_below):
             for size in bucket.values():
-                total_natural_height += size + gap_mm
+                total_natural_height += size + gap
 
-        bands_top, bands_bottom, _left, _right = LayoutEngine._collect_group_bands(project)
         for bucket in (bands_top, bands_bottom):
             for labels in bucket.values():
-                for group_label in labels:
-                    total_natural_height += (
-                        LayoutEngine.group_label_thickness_mm(
-                            group_label, getattr(project, 'typography_mode', 'points'))
-                        + group_label.gap_mm
-                    )
+                _slot_of, slot_geoms = LayoutEngine._band_slot_assignment(project, labels)
+                for thickness, slot_gap in slot_geoms:
+                    total_natural_height += thickness + slot_gap
 
         # Add margins
         optimal_page_height = total_natural_height + project.margin_top_mm + project.margin_bottom_mm
-        
+
         return {
             "rows": new_row_settings,
             "optimal_page_height_mm": round(optimal_page_height, 1)

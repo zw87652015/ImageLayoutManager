@@ -13,10 +13,10 @@ Right: the element list (a colour dot shows each text's group) above the group c
 import os
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QLabel, QSplitter, QWidget, QFrame, QSizePolicy,
+    QLabel, QSplitter, QWidget, QFrame, QSizePolicy, QMenu,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QByteArray, QRectF, QPointF
-from PyQt6.QtGui import QKeySequence, QPalette, QPixmap, QPainter, QImage, QColor, QPen, QBrush, QIcon, QShortcut
+from PyQt6.QtGui import QKeySequence, QPalette, QPainter, QImage, QColor, QPen, QBrush, QShortcut
 from PyQt6.QtSvg import QSvgRenderer
 
 from src.utils.svg_text_utils import (format_text_size, get_svg_text_elements,
@@ -27,7 +27,7 @@ from ilmplot.document import has_plot_metadata
 from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
 from src.app.text_groups_widget import section_label
-from src.app.text_group_chips import TextGroupChips, group_colour
+from src.app.text_group_chips import TextGroupChips, chip_hint, dot_icon, group_colour, populate_group_menu
 from src.utils.text_group_assign import assign_svg, new_svg_group, ungroup_svg
 
 _RENDER_MAX = 480
@@ -256,6 +256,8 @@ class SvgTextInspectorWindow(QDialog):
         self._elem_list = QListWidget()
         self._elem_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self._elem_list.setMinimumHeight(120)
+        self._elem_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._elem_list.customContextMenuRequested.connect(self._on_elem_context_menu)
         self._elem_list.itemSelectionChanged.connect(self._on_list_selection)
         rv.addWidget(self._elem_list, 2)
 
@@ -264,6 +266,9 @@ class SvgTextInspectorWindow(QDialog):
         rv.addWidget(div)
 
         rv.addWidget(self._section_label(tr("text_chips_label")))
+        self._chip_hint = QLabel()
+        self._chip_hint.setWordWrap(True)
+        rv.addWidget(self._chip_hint)
         self._groups_widget = TextGroupChips(self.project)
         self._groups_widget.assign_requested.connect(self._on_assign)
         self._groups_widget.new_group_requested.connect(self._on_new_group)
@@ -385,28 +390,34 @@ class SvgTextInspectorWindow(QDialog):
             item.setData(Qt.ItemDataRole.UserRole, el['key'])
             colour = group_colour(self.project, group[0]) if group else None
             if colour:
-                item.setIcon(self._dot_icon(colour))
+                item.setIcon(dot_icon(colour))
             self._elem_list.addItem(item)
             if el['key'] in sel_keys:
                 item.setSelected(True)
         self._elem_list.blockSignals(False)
 
-    @staticmethod
-    def _dot_icon(colour):
-        pixmap = QPixmap(12, 12)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(colour))
-        painter.drawEllipse(QRectF(1, 1, 10, 10))
-        painter.end()
-        return QIcon(pixmap)
-
     def _update_selection_info(self):
         keys = self._selected_keys()
         size = self._sizes.get(keys[0]) if keys else None
         self._groups_widget.set_selection_info(len(keys), size)
+        self._chip_hint.setText(chip_hint(len(keys), len(self.project.svg_text_groups)))
+
+    def _on_elem_context_menu(self, pos):
+        item = self._elem_list.itemAt(pos)
+        if item is not None and not item.isSelected():
+            self._elem_list.clearSelection()
+            item.setSelected(True)
+        keys = self._selected_keys()
+        if not keys:
+            return
+        menu = QMenu(self)
+        group_of_key = self._group_of_key()
+        populate_group_menu(
+            menu, self.project, self._on_assign, self._on_new_group,
+            lambda: self._on_assign(None),
+            can_remove=any(key in group_of_key for key in keys),
+        )
+        menu.exec(self._elem_list.viewport().mapToGlobal(pos))
 
     def _on_groups_edited(self):
         self._groups_widget.refresh()

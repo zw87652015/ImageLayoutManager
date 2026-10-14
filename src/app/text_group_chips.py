@@ -8,8 +8,8 @@ selection from its groups. The windows own the membership changes (text_group_as
 """
 
 from PyQt6.QtCore import QRectF, Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QPainter, QPalette, QPen
-from PyQt6.QtWidgets import QApplication, QDoubleSpinBox, QLineEdit, QWidget, QAbstractSpinBox
+from PyQt6.QtGui import QBrush, QColor, QFont, QFontMetrics, QIcon, QPainter, QPalette, QPen, QPixmap
+from PyQt6.QtWidgets import QApplication, QDoubleSpinBox, QLineEdit, QMenu, QWidget, QAbstractSpinBox
 
 from src.app.i18n import tr
 from src.app.plot_alignment_logic import group_color
@@ -27,6 +27,53 @@ def group_colour(project, group_id):
     """Hex colour of the group *group_id* (by its position in the project), or None."""
     index = next((i for i, g in enumerate(project.svg_text_groups) if g.id == group_id), None)
     return None if index is None else group_color(index)
+
+
+def dot_icon(colour):
+    """12 px filled colour dot, used for list rows and menu entries."""
+    pixmap = QPixmap(12, 12)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(colour))
+    painter.drawEllipse(QRectF(1, 1, 10, 10))
+    painter.end()
+    return QIcon(pixmap)
+
+
+def chip_hint(selection_count: int, group_count: int) -> str:
+    if selection_count > 0:
+        return tr("text_chip_hint_ready").format(n=selection_count)
+    if group_count > 0:
+        return tr("text_chip_hint_idle")
+    return tr("text_chip_hint_empty")
+
+
+def chip_tooltip(group, selection_count: int) -> str:
+    size = f"{group.font_size_pt:g}"
+    if selection_count > 0:
+        return tr("text_chip_add_tip").format(n=selection_count, name=group.name, size=size)
+    return tr("text_chip_show_tip").format(name=group.name, size=size, count=len(group.members))
+
+
+def populate_group_menu(menu, project, on_assign, on_new, on_remove, can_remove: bool):
+    """Group actions for a text list's context menu."""
+    add_menu = menu.addMenu(tr("text_menu_add_to_group"))
+    groups = project.svg_text_groups
+    if not groups:
+        add_menu.addAction(tr("text_menu_no_groups")).setEnabled(False)
+    for group in groups:
+        action = add_menu.addAction(f"{group.name} · {group.font_size_pt:g} pt")
+        colour = group_colour(project, group.id)
+        if colour:
+            action.setIcon(dot_icon(colour))
+        action.triggered.connect(lambda _checked=False, gid=group.id: on_assign(gid))
+    menu.addAction(tr("text_menu_new_group")).triggered.connect(lambda _checked=False: on_new())
+    menu.addSeparator()
+    remove = menu.addAction(tr("text_menu_remove_group"))
+    remove.setEnabled(can_remove)
+    remove.triggered.connect(lambda _checked=False: on_remove())
 
 
 class _Editor(QLineEdit):
@@ -206,7 +253,9 @@ class TextGroupChips(QWidget):
         painter.save()
         tint = QColor(colour)
         tint.setAlpha(40 if selected_target else 22)
-        painter.setPen(QPen(colour if selected_target else mid, 1))
+        hovered = self._hover is not None and self._hover[0] == gid
+        border_w = 2 if selected_target and hovered else 1
+        painter.setPen(QPen(colour if selected_target else mid, border_w))
         painter.setBrush(QBrush(tint))
         painter.drawRoundedRect(rect, _CHIP_H / 2, _CHIP_H / 2)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -244,6 +293,10 @@ class TextGroupChips(QWidget):
             self._hover = hover
             self.update()
         self.setToolTip(self._tip_for(kind, gid))
+        if kind is None:
+            self.unsetCursor()
+        else:
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
         super().mouseMoveEvent(event)
 
     def _tip_for(self, kind, gid):
@@ -256,8 +309,7 @@ class TextGroupChips(QWidget):
         if kind == "size":
             return tr("text_chip_size_tip")
         if kind in ("chip", "name") and gid is not None:
-            group = self._group(gid)
-            return f"{group.name} · {group.font_size_pt:g} pt · {len(group.members)}"
+            return chip_tooltip(self._group(gid), self._selection_count)
         return ""
 
     def leaveEvent(self, event):
