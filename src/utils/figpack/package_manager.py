@@ -36,6 +36,7 @@ import ntpath
 import os
 import platform
 import posixpath
+import re
 import shutil
 import sys
 import time
@@ -392,13 +393,20 @@ def _transform_project_dict(
     Cells whose image is unknown to the manifest (shouldn't happen but
     we cope) keep their original path.
     """
+    seen: Dict[str, str] = {}
+
     def rewrite_cells(cells):
         for c in cells:
             ip = c.get("image_path")
             osp = c.get("original_source_path")
             if ip:
-                # Same sticky-key logic as _iter_cell_image_paths.
-                key = to_nfc(os.path.abspath(osp or ip))
+                # Same sticky-key logic as _iter_cell_image_paths:
+                # path_to_id is keyed by the canonical (realpath)
+                # form, which diverges from abspath under MSIX AppData
+                # redirection, symlinks, junctions and subst drives.
+                key = _resolve_canonical(osp or ip, seen=seen)
+                if key not in path_to_id:
+                    key = to_nfc(os.path.abspath(osp or ip))
                 if key in path_to_id:
                     c["image_path"] = f"{RESOURCE_PREFIX}{path_to_id[key]}"
             children = c.get("children")
@@ -1155,6 +1163,30 @@ def _paths_alias(a: Optional[str], b: Optional[str]) -> bool:
             and ta[0] != tb[0] and ta[1] == tb[1])
 
 
+_MSIX_PACKAGES_RE = re.compile(
+    r"^(?P<head>.*\\appdata\\)(?P<scope>local|roaming)"
+    r"\\packages\\[^\\]+\\localcache\\(?:local|roaming)\\(?P<rest>.+)$",
+    re.IGNORECASE,
+)
+
+
+def _msix_key(p: str) -> str:
+    """Fold an MSIX-virtualized AppData path back to its real alias.
+
+    MSIX/MS Store builds redirect ``%APPDATA%`` writes to
+    ``…\\AppData\\<Local|Roaming>\\Packages\\<pkg>\\LocalCache\\
+    <Local|Roaming>\\…``, so a manifest written by a packaged build
+    stores the virtualized form while a cell may hold the plain one.
+    The rewrite is applied to the :func:`_resolve_path_key` normalized
+    form; non-MSIX keys are returned unchanged.
+    """
+    key = _resolve_path_key(p)
+    m = _MSIX_PACKAGES_RE.match(key)
+    if not m:
+        return key
+    return m.group("head") + m.group("scope") + "\\" + m.group("rest")
+
+
 def _resolve_resource_paths(
     project_data: Dict[str, Any],
     manifest: Dict[str, Any],
@@ -1168,7 +1200,8 @@ def _resolve_resource_paths(
     Cells whose ``image_path`` is a plain (non-marker) path are matched
     purely lexically against the manifest's ``original_source_path``
     values — exact normalized key first, then ``original_source_path``
-    on the cell, then a unique mapped-drive↔UNC alias — so legacy
+    on the cell, then a unique mapped-drive↔UNC alias, then the same
+    two under the MSIX ``Packages\\<pkg>\\LocalCache`` alias — so legacy
     bundles whose stored absolute sources no longer exist still resolve
     to their embedded bytes. No filesystem access is made on the
     original paths. Unmatched non-marker paths are left untouched.
@@ -1191,6 +1224,14 @@ def _resolve_resource_paths(
         return [rid for rid, rec in manifest.items()
                 if _paths_alias(key, rec.get("original_source_path"))]
 
+    def msix_matches(key: Optional[str]):
+        if not isinstance(key, str) or not key:
+            return []
+        k = _msix_key(key)
+        return [rid for rid, rec in manifest.items()
+                if isinstance(rec.get("original_source_path"), str)
+                and _msix_key(rec["original_source_path"]) == k]
+
     def pick(cell) -> Optional[str]:
         ip = cell.get("image_path")
         if not isinstance(ip, str) or not ip:
@@ -1199,7 +1240,9 @@ def _resolve_resource_paths(
         for cands in (exact_matches(ip),
                       exact_matches(osp),
                       alias_matches(ip),
-                      alias_matches(osp)):
+                      alias_matches(osp),
+                      msix_matches(ip),
+                      msix_matches(osp)):
             if len(cands) > 1:
                 raise BundleError(
                     f"ambiguous resource: {ip!r} matches manifest "
