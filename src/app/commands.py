@@ -2,6 +2,7 @@ from PyQt6.QtGui import QUndoCommand
 import copy
 import uuid
 import time
+from src.app.i18n import tr
 from src.model.data_model import RowTemplate, Cell, PiPItem, PlotArea, PlotAlignmentGroup, SvgTextMember
 
 # Commands that occur within this window (seconds) on the same property are merged.
@@ -2338,3 +2339,37 @@ class ReorderMarksCommand(QUndoCommand):
 
     def undo(self):
         self._apply(self.old_order_ids)
+
+
+class TextMatchSessionCommand(QUndoCommand):
+    """One undo step for a whole Match Text Size window session.
+
+    Edits apply live while the window is open, so the first ``redo()``
+    (fired by ``QUndoStack.push``) is a no-op; later undo/redo restore the
+    recorded snapshots.  ``SessionRecorder`` may grow ``after`` while this
+    command stays on top of the stack.
+    """
+
+    def __init__(self, project, cell_id, before, after, on_change):
+        super().__init__(tr("textmatch_undo"))
+        self.project = project
+        self.cell_id = cell_id
+        self.before = before
+        self.after = after
+        self.on_change = on_change
+        self._first_redo = True
+
+    def redo(self):
+        if self._first_redo:
+            self._first_redo = False
+            return
+        from src.app.text_match_session import restore
+        restore(self.project, self.cell_id, self.after)
+        if self.on_change:
+            self.on_change(self.project)
+
+    def undo(self):
+        from src.app.text_match_session import restore
+        restore(self.project, self.cell_id, self.before)
+        if self.on_change:
+            self.on_change(self.project)

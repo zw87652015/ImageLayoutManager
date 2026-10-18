@@ -31,6 +31,8 @@ from typing import List, Optional
 
 from PIL import Image
 
+from src.utils.raster_text_frame import quad_angle, quad_box, snap_angle
+
 BACKEND_NONE = "none"
 BACKEND_RAPIDOCR = "rapidocr"
 BACKEND_TESSERACT = "tesseract"
@@ -47,11 +49,17 @@ class DetectedText:
     h: int
     text: str = ""
     confidence: float = 1.0
-    # Per-character boxes ``[char, x, y, w, h]`` (image pixels) when the
+    # Per-character boxes ``[char, x, y, w, h]`` (image pixels when
+    # ``angle == 0``, else text-frame coordinates like x/y/w/h) when the
     # backend can provide them. Used as a "judge" when deciding which ink
     # inside a box belongs to the text (a hyphen, an i-dot) and which does
     # not (a diagram pointer). Empty when unavailable.
     chars: list = field(default_factory=list)
+    # Baseline direction in degrees in image coords (x right, y down),
+    # (-90, 90]. When non-zero, x/y/w/h and chars are in the text frame
+    # (the image rotated by -angle about the image origin; see
+    # src/utils/raster_text_frame.py) and may be negative.
+    angle: float = 0.0
 
 
 class OcrUnavailable(RuntimeError):
@@ -112,17 +120,25 @@ class RapidOcrBackend:
             scores = list(result.scores) if result.scores is not None else [1.0] * len(boxes)
         out = []
         for i, (quad, txt, score) in enumerate(zip(boxes, txts, scores)):
-            x, y, w, h = _quad_to_box(quad)
+            a = snap_angle(quad_angle(quad))
+            if a == 0:
+                x, y, w, h = _quad_to_box(quad)
+            else:
+                # Rotated label: box and chars live in the text frame.
+                x, y, w, h = quad_box(quad, a)
             chars = []
             if word_results is not None and i < len(word_results):
                 for item in word_results[i] or ():
                     try:
                         ch, _conf, cquad = item[0], item[1], item[2]
-                        cx, cy, cw, chh = _quad_to_box(cquad)
+                        if a == 0:
+                            cx, cy, cw, chh = _quad_to_box(cquad)
+                        else:
+                            cx, cy, cw, chh = quad_box(cquad, a)
                         chars.append([str(ch), cx, cy, cw, chh])
                     except Exception:
                         continue
-            out.append(DetectedText(x, y, w, h, str(txt or ""), float(score or 0.0), chars))
+            out.append(DetectedText(x, y, w, h, str(txt or ""), float(score or 0.0), chars, a))
         return out
 
 
@@ -205,22 +221,30 @@ class CommandBackend:
         out = []
         for item in payload:
             if isinstance(item, dict):
+                a = 0.0
                 if "points" in item:
-                    x, y, w, h = _quad_to_box(item["points"])
+                    a = snap_angle(quad_angle(item["points"]))
+                    if a == 0:
+                        x, y, w, h = _quad_to_box(item["points"])
+                    else:
+                        x, y, w, h = quad_box(item["points"], a)
                 else:
                     x, y, w, h = (int(round(float(item[k]))) for k in ("x", "y", "w", "h"))
                 chars = []
-                for c in item.get("chars", []) or []:
-                    try:
-                        if isinstance(c, dict):
-                            chars.append([str(c.get("c", c.get("char", "")))]
-                                         + [int(round(float(c[k]))) for k in ("x", "y", "w", "h")])
-                        else:
-                            chars.append([str(c[0])] + [int(round(float(v))) for v in c[1:5]])
-                    except Exception:
-                        continue
+                if a == 0:
+                    # Rotated char quads would need points too; image-px
+                    # char AABBs are useless in the text frame, so drop them.
+                    for c in item.get("chars", []) or []:
+                        try:
+                            if isinstance(c, dict):
+                                chars.append([str(c.get("c", c.get("char", "")))]
+                                             + [int(round(float(c[k]))) for k in ("x", "y", "w", "h")])
+                            else:
+                                chars.append([str(c[0])] + [int(round(float(v))) for v in c[1:5]])
+                        except Exception:
+                            continue
                 out.append(DetectedText(x, y, w, h, str(item.get("text", "")),
-                                        float(item.get("confidence", 1.0)), chars))
+                                        float(item.get("confidence", 1.0)), chars, a))
             else:
                 x, y, w, h = (int(round(float(v))) for v in item[:4])
                 out.append(DetectedText(x, y, w, h))

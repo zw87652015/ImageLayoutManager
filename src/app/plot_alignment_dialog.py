@@ -1016,9 +1016,10 @@ class _MarkerFrame(QWidget):
         self.clear_button = self._round(28, "\u2715", tr("plot_clear"))
         self.accept_button.hide()
 
-    @staticmethod
-    def _round(size, text, tip):
-        button = QToolButton()
+    def _round(self, size, text, tip):
+        # Parented to the frame so the buttons overlay the view; a parentless
+        # button would become its own tiny top-level window when shown.
+        button = QToolButton(self)
         button.setText(text)
         button.setToolTip(tip)
         button.setAccessibleName(tip)

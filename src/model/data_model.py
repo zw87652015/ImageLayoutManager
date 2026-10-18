@@ -258,6 +258,12 @@ class RasterTextRegion:
     enabled: bool = True
     anchor: str = "center"      # center | left | right | top | bottom
     vertical: bool = False       # rotated label: glyph height runs along x
+    # Baseline direction in degrees in image coords (x right, y down),
+    # (-90, 90]. When non-zero, x/y/w/h and chars live in the text frame —
+    # the image rotated by -angle about the image origin (see
+    # src/utils/raster_text_frame.py) — and may be negative. When zero,
+    # everything is plain image pixels.
+    angle: float = 0.0
     background: Optional[str] = None  # "#rrggbb"; None = sample around the box
     # Advisory safety hint from analysis (None = looks clean). Never blocks
     # the user: a flagged region is just unticked by default.
@@ -1147,9 +1153,15 @@ class Project:
 
         return p
 
-    def save_to_file(self, filepath: str):
+    def save_to_file(self, filepath: str, transform=None):
+        """Write the project JSON; optional *transform(dict) -> dict* is
+        applied to the serialized dict right before writing (used by
+        Save Copy for Older ILM to store a downgraded schema)."""
         from src.utils.figpack.atomic_write import atomic_write_bytes
-        payload = json.dumps(self.to_dict(), indent=4).encode('utf-8')
+        data = self.to_dict()
+        if transform is not None:
+            data = transform(data)
+        payload = json.dumps(data, indent=4).encode('utf-8')
         atomic_write_bytes(filepath, payload)
 
     @classmethod

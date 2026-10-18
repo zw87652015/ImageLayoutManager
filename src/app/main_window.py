@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QToolBar, QPushButton, QToolButton, QSplitter, QSplitterHandle, QFileDialog,
     QMessageBox, QSpinBox, QLabel, QComboBox, QFrame, QGraphicsOpacityEffect,
     QLabel, QStyle, QMenu, QTabWidget, QDialog, QFormLayout, QDialogButtonBox,
-    QSizePolicy, QProgressDialog
+    QSizePolicy, QProgressDialog, QCheckBox
 )
 from PyQt6.QtCore import Qt, QEvent, QTimer, QSize, QSettings, QPropertyAnimation, QEasingCurve, QFileSystemWatcher, QThread, pyqtSignal, QVariantAnimation, QMimeData, QByteArray, QEventLoop
 from PyQt6.QtGui import QAction, QActionGroup, QCursor, QIcon, QKeySequence, QUndoStack, QPalette
@@ -293,6 +293,13 @@ class ProjectTabState:
         # .figlayout/.json; None for figpack tabs (those use bundle_workdir).
         # Released in _remove_tab and when the path changes via Save As.
         self.file_lock: Optional[PresenceLock] = None
+        # schema_version / file_version the file at `path` had on disk
+        # when it was opened (None for never-saved or recovered tabs).
+        # Used to warn before a save upgrades an older-schema file.
+        self.source_schema: Optional[int] = None
+        self.source_writer: Optional[str] = None
+        # True once the user confirmed "Save in New Format" for this tab.
+        self.upgrade_confirmed: bool = False
         # Tracks whether _connect_tab_signals has installed handlers on
         # this tab's scene/view/undo_stack. Guards against the
         # double-connect bug where a redundant _activate_tab call would
@@ -385,6 +392,7 @@ class _BundlePackWorker(QThread):
                  app_version: str,
                  update_json_only: bool,
                  preview_bytes: Optional[bytes],
+                 project_transform=None,
                  parent=None):
         super().__init__(parent)
         self._project = project
@@ -392,6 +400,7 @@ class _BundlePackWorker(QThread):
         self._app_version = app_version
         self._update_json_only = update_json_only
         self._preview_bytes = preview_bytes
+        self._project_transform = project_transform
         self._cancel_flag = False
         self._dirty_assets_seen = False
         from PyQt6.QtCore import QSemaphore
@@ -433,6 +442,7 @@ class _BundlePackWorker(QThread):
                     preview_renderer=renderer,
                     cloud_resolver=self._resolve_cloud,
                     cancel=lambda: self._cancel_flag,
+                    project_transform=self._project_transform,
                 )
             except BundleError as e:
                 if (
@@ -446,6 +456,7 @@ class _BundlePackWorker(QThread):
                         preview_renderer=renderer,
                         cloud_resolver=self._resolve_cloud,
                         cancel=lambda: self._cancel_flag,
+                        project_transform=self._project_transform,
                     )
                 else:
                     raise
@@ -474,6 +485,10 @@ class MainWindow(QMainWindow):
         self.project = None
         self.undo_stack = None
         self.scene = None
+
+        # Per-image Match Text Size "first open" baselines for Revert —
+        # (id(project), ("raster", cell_id)|("svg", svg_path)) -> capture dict.
+        self._text_match_baselines = {}
 
         # Agent integration: lazily created on first Tools → Enable MCP Server
         # toggle. ``None`` means the server has never been started in this
@@ -587,6 +602,8 @@ class MainWindow(QMainWindow):
 
         # Silent update check
         self._update_checker: StartupUpdateChecker | None = None
+        self._latest_release = None
+        self._update_quit = False
         QTimer.singleShot(1500, self._start_update_check)
         QApplication.instance().installEventFilter(self)
 
@@ -606,13 +623,24 @@ class MainWindow(QMainWindow):
         return super().eventFilter(obj, event)
 
     def _start_update_check(self):
+        from src.utils.distribution import install_channel
+        if install_channel() == "store":
+            # Store policy 10.2.5: Store installs update only via the Store —
+            # no update check, no notice.
+            return
         self._update_checker = StartupUpdateChecker(self)
         self._update_checker.update_available.connect(self._on_update_available)
         self._update_checker.start()
 
-    def _on_update_available(self, latest_tag: str, _url: str):
-        """Show a clickable hint in the status bar; clicking opens About."""
-        msg = tr("status_update_available").format(tag=latest_tag)
+    def _on_update_available(self, release):
+        """Show a clickable hint in the status bar when a newer release exists."""
+        from src.utils.update_release import should_notify
+        from src.version import APP_VERSION
+        skipped = self._settings.value("updates/skipped_version", "", type=str)
+        if not should_notify(release.version, APP_VERSION, skipped):
+            return
+        self._latest_release = release
+        msg = tr("status_update_available").format(tag=release.version)
         # Wrap in an <a> so QLabel.linkActivated fires; href is a sentinel.
         self.update_available_label.setText(
             f'<a href="about" style="color:{get_tokens(self._current_theme)["accent"]}; text-decoration:none;">🔔 {msg}</a>'
@@ -621,8 +649,58 @@ class MainWindow(QMainWindow):
         self.update_available_label.show()
 
     def _on_update_banner_clicked(self, _href: str):
-        """Open the About dialog when the user clicks the update banner."""
+        """Installer channel with a downloadable build → UpdateDialog; else About."""
+        from src.utils.distribution import install_channel
+        release = getattr(self, "_latest_release", None)
+        if (install_channel() == "installer" and release is not None
+                and release.installer is not None):
+            self._open_update_dialog(release)
+            return
         self._on_show_about()
+
+    def _open_update_dialog(self, release):
+        from PyQt6.QtCore import QStandardPaths
+        from src.app.update_dialog import UpdateDialog
+        cache_dir = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.CacheLocation)
+        dlg = UpdateDialog(release, cache_dir, self)
+        dlg.install_requested.connect(self._install_update)
+        dlg.show()
+
+    def _install_update(self, path, release=None):
+        """Verify, prompt to save, launch the installer (UAC via ShellExecute), quit."""
+        from src.utils.update_release import verify_file
+        # The dialog's own release: About's manual check may have found it
+        # while the startup notice never fired (skipped version, offline).
+        release = release or getattr(self, "_latest_release", None)
+        installer = release.installer if release is not None else None
+        if installer is None or not verify_file(path, installer.sha256, installer.size):
+            QMessageBox.warning(self, tr("update_title"), tr("update_err_hash"))
+            return
+        # Same unsaved-changes sweep as closeEvent, without closing.
+        for i, tab in enumerate(self._tabs):
+            if not tab.undo_stack.isClean():
+                self._activate_tab(i)
+                ret = self._ask_unsaved(self._tab_title(tab))
+                if ret == "cancel":
+                    return
+                if ret == "save" and not self._on_save_project():
+                    return
+        try:
+            try:
+                os.startfile(path, "open", "/SP-")
+            except TypeError:
+                import ctypes
+                rc = ctypes.windll.shell32.ShellExecuteW(
+                    None, "open", path, "/SP-", None, 1)
+                if rc <= 32:
+                    raise OSError(f"ShellExecuteW failed ({rc})")
+        except Exception as exc:
+            QMessageBox.warning(self, tr("update_title"),
+                                tr("update_install_failed").format(error=exc))
+            return
+        self._update_quit = True
+        self.close()
 
     def _setup_ui(self):
         # Central Widget
@@ -814,6 +892,10 @@ class MainWindow(QMainWindow):
         save_as_action.triggered.connect(self._on_save_project_as)
         self._act_save_as = save_as_action
 
+        save_copy_older_action = QAction(tr("menu_save_copy_older"), self)
+        save_copy_older_action.triggered.connect(self._on_save_copy_older)
+        self._act_save_copy_older = save_copy_older_action
+
         # Phase 4 migration: Convert a plain .figlayout into a self-
         # contained .figpack in one click (plan §4.2).
         convert_to_bundle_action = QAction(tr("action_convert_to_bundle"), self)
@@ -832,6 +914,7 @@ class MainWindow(QMainWindow):
 
         file_menu.addAction(save_action)
         file_menu.addAction(save_as_action)
+        file_menu.addAction(save_copy_older_action)
         file_menu.addAction(convert_to_bundle_action)
         file_menu.addSeparator()
 
@@ -6372,7 +6455,14 @@ class MainWindow(QMainWindow):
     def _on_open_svg_text_inspector(self, svg_path: str, cell=None):
         """Open a stand-alone SVG text inspector for the given SVG file."""
         from src.app.svg_text_inspector import SvgTextInspectorWindow
-        win = SvgTextInspectorWindow(svg_path, self.project, cell=cell, parent=self)
+        from src.app.text_match_session import capture
+        key = (id(self.project), ("svg", svg_path))
+        baseline = self._text_match_baselines.setdefault(
+            key, capture(self.project, None))
+        win = SvgTextInspectorWindow(svg_path, self.project, cell=cell, parent=self,
+                                     undo_stack=self.undo_stack,
+                                     on_change=self._on_text_match_restored,
+                                     baseline=baseline)
         win.groups_changed.connect(self._on_svg_text_groups_changed)
         win.show()
         win.raise_()
@@ -6381,7 +6471,14 @@ class MainWindow(QMainWindow):
     def _on_open_raster_text_inspector(self, image_path: str, cell):
         """Open the raster text size-matching dialog for a pixel-image cell."""
         from src.app.raster_text_inspector import RasterTextInspectorWindow
-        win = RasterTextInspectorWindow(image_path, self.project, cell, parent=self)
+        from src.app.text_match_session import capture
+        key = (id(self.project), ("raster", cell.id))
+        baseline = self._text_match_baselines.setdefault(
+            key, capture(self.project, cell))
+        win = RasterTextInspectorWindow(image_path, self.project, cell, parent=self,
+                                        undo_stack=self.undo_stack,
+                                        on_change=self._on_text_match_restored,
+                                        baseline=baseline)
         win.groups_changed.connect(self._on_svg_text_groups_changed)
         win.show()
         win.raise_()
@@ -6397,10 +6494,20 @@ class MainWindow(QMainWindow):
             if win.project is project:
                 win.blockSignals(True)
                 win.close()
+        for key in [k for k in self._text_match_baselines if k[0] == id(project)]:
+            del self._text_match_baselines[key]
 
     def _sync_svg_overrides(self):
         """Recompute and push SVG overrides (normalization + group overrides) to the proxy."""
         self.scene.refresh_layout()
+
+    def _on_text_match_restored(self, project):
+        """Undo/redo of a Match Text Size session re-applied a snapshot."""
+        for win in self._text_inspector_windows():
+            if win.project is project and win.isVisible():
+                win.refresh()
+        if project is self.project:
+            self._sync_svg_overrides()
 
     def _on_svg_text_groups_changed(self):
         """Called when the user edits SVG text groups — syncs overrides then refreshes."""
@@ -6569,8 +6676,9 @@ class MainWindow(QMainWindow):
                     )
 
     def closeEvent(self, event):
-        # Check every tab for unsaved changes
-        for i, tab in enumerate(self._tabs):
+        # Check every tab for unsaved changes (skipped when quitting for a
+        # self-update — _install_update already ran this prompt).
+        for i, tab in enumerate(self._tabs if not self._update_quit else ()):
             if not tab.undo_stack.isClean():
                 # Activate the tab so the user sees it
                 self._activate_tab(i)
@@ -6765,6 +6873,9 @@ class MainWindow(QMainWindow):
             target_tab = self._create_tab(project, path, bundle_workdir=wd)
             self._check_image_resolution()
         target_tab.bundle_stat = self._stat_bundle(path)
+        target_tab.source_schema = ur.project_schema_version
+        target_tab.source_writer = ur.project_file_version
+        target_tab.upgrade_confirmed = False
         self._remember_recent(path)
 
     @staticmethod
@@ -6953,6 +7064,10 @@ class MainWindow(QMainWindow):
         if path.lower().endswith(".figpack"):
             self._open_figpack(path)
             return
+        # Capture the on-disk schema/writer before migration so a later
+        # save can warn that older ILM versions won't reopen the file.
+        from src.model.migrations import read_project_meta
+        src_schema, src_writer = read_project_meta(path)
         try:
             project = Project.load_from_file(path)
         except Exception as e:
@@ -6963,17 +7078,23 @@ class MainWindow(QMainWindow):
             if not self._acquire_file_lock(active, path):
                 return
             self._set_project(project, path)
+            target_tab = self._tabs[self._active_tab_idx]
         else:
             self._create_tab(project, path)
-            new_tab = self._tabs[self._active_tab_idx]
-            if not self._acquire_file_lock(new_tab, path):
+            target_tab = self._tabs[self._active_tab_idx]
+            if not self._acquire_file_lock(target_tab, path):
                 self._remove_tab(self._active_tab_idx)
                 return
             self._check_image_resolution()
+        target_tab.source_schema = src_schema
+        target_tab.source_writer = src_writer
+        target_tab.upgrade_confirmed = False
         self._remember_recent(path)
 
     def _on_save_project(self):
         if self._current_project_path:
+            if not self._confirm_format_upgrade(self._current_project_path):
+                return False
             return self._save_project_to_path(
                 self._current_project_path, notify_pasted=True)
         return self._on_save_project_as()
@@ -6998,6 +7119,8 @@ class MainWindow(QMainWindow):
             return False
         if not path.lower().endswith(".figpack"):
             path += ".figpack"
+        if not self._confirm_format_upgrade(path):
+            return False
 
         # Reuse the same format-change confirmation as Save As.
         cur_ext = os.path.splitext(self._current_project_path or "")[1].lower()
@@ -7037,6 +7160,8 @@ class MainWindow(QMainWindow):
         if not path:
             return False
         path = ensure_extension(path, selected)
+        if not self._confirm_format_upgrade(path):
+            return False
 
         # Plan §3.5 — switching format invalidates undo entries that
         # reference the old image paths (cache vs. sidecar vs. absolute).
@@ -7062,6 +7187,158 @@ class MainWindow(QMainWindow):
         if ok and format_change:
             self.undo_stack.clear()
         return ok
+
+    def _confirm_format_upgrade(self, path: str) -> bool:
+        """Warn before overwriting a file written by an older schema.
+
+        Returns True when the save may proceed. Only applies when
+        *path* is the file this tab was loaded from and its on-disk
+        schema is older than PROJECT_SCHEMA_VERSION.
+        """
+        from src.model.migrations import (
+            PROJECT_SCHEMA_VERSION, SCHEMA_FIRST_RELEASE,
+        )
+        tab = self._tabs[self._active_tab_idx] if self._tabs else None
+        if tab is None or tab.source_schema is None or tab.upgrade_confirmed:
+            return True
+        if tab.source_schema >= PROJECT_SCHEMA_VERSION:
+            return True
+        if not tab.path or (
+            os.path.normcase(os.path.abspath(path))
+            != os.path.normcase(os.path.abspath(tab.path))
+        ):
+            return True
+        if self._settings.value(
+            "save/skip_upgrade_warning", False, type=bool
+        ):
+            return True
+
+        writer = tab.source_writer or tr("save_upgrade_unknown_writer")
+        first = SCHEMA_FIRST_RELEASE.get(PROJECT_SCHEMA_VERSION, "")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("save_upgrade_title"))
+        box.setText(
+            tr("save_upgrade_body").format(writer=writer, first=first)
+        )
+        save_btn = box.addButton(
+            tr("save_upgrade_save"), QMessageBox.ButtonRole.AcceptRole
+        )
+        copy_btn = box.addButton(
+            tr("menu_save_copy_older"), QMessageBox.ButtonRole.ActionRole
+        )
+        box.addButton(tr("btn_cancel"), QMessageBox.ButtonRole.RejectRole)
+        dont_ask = QCheckBox(tr("save_upgrade_dont_ask"), box)
+        box.setCheckBox(dont_ask)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is copy_btn:
+            self._on_save_copy_older()
+            return False
+        if clicked is not save_btn:
+            return False
+        if dont_ask.isChecked():
+            self._settings.setValue("save/skip_upgrade_warning", True)
+        tab.upgrade_confirmed = True
+        tab.source_schema = PROJECT_SCHEMA_VERSION
+        return True
+
+    def _on_save_copy_older(self) -> None:
+        """File → Save Copy for Older ILM…
+
+        Writes a downgraded copy of the project without touching the
+        open project's state (path, name, dirty flag, undo stack, file
+        lock, recent list).
+        """
+        from src.app.save_older_dialog import SaveOlderDialog, issue_lines
+        from src.model.downgrade import downgrade_project_data
+        from src.model.migrations import SCHEMA_FIRST_RELEASE
+
+        dialog = SaveOlderDialog(self.project, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        target = dialog.selected_schema()
+        label = dialog.selected_label()
+        first = SCHEMA_FIRST_RELEASE.get(target, "")
+
+        cur = self._current_project_path or ""
+        cur_ext = os.path.splitext(cur)[1].lower()
+        ext = cur_ext if cur_ext in (
+            ".figlayout", ".json", ".figpack",
+        ) else ".figlayout"
+        filters, initial = project_filters(ext)
+        base_name = self.project.name or "project"
+        suggested = os.path.join(
+            os.path.dirname(cur) if cur else "",
+            f"{base_name} (ILM {first}){ext}",
+        )
+        cur_norm = (
+            os.path.normcase(os.path.abspath(cur)) if cur else ""
+        )
+        while True:
+            path, selected = QFileDialog.getSaveFileName(
+                self, tr("menu_save_copy_older"), suggested, filters,
+                initial,
+            )
+            if not path:
+                return
+            path = ensure_extension(path, selected)
+            if (
+                cur_norm
+                and os.path.normcase(os.path.abspath(path)) == cur_norm
+            ):
+                QMessageBox.warning(
+                    self, tr("menu_save_copy_older"),
+                    tr("save_older_same_path"),
+                )
+                continue
+            tab = self._tabs[self._active_tab_idx] if self._tabs else None
+            if (tab is not None and tab.bundle_workdir is not None
+                    and not path.lower().endswith(".figpack")):
+                # Bundle images live in the purgeable extraction cache, so a
+                # .figlayout copy would point at files that later vanish.
+                QMessageBox.warning(
+                    self, tr("menu_save_copy_older"),
+                    tr("save_older_bundle_needs_figpack"),
+                )
+                continue
+            break
+
+        new_name = os.path.splitext(os.path.basename(path))[0]
+
+        def transform(data):
+            out, _ = downgrade_project_data(data, target)
+            out["name"] = new_name
+            return out
+
+        if path.lower().endswith(".figpack"):
+            ok = self._run_pack_worker(
+                output_path=path,
+                update_json_only=False,
+                preview_bytes=None,
+                project_transform=transform,
+            )
+        else:
+            try:
+                self.project.save_to_file(path, transform=transform)
+                ok = True
+            except Exception as e:
+                QMessageBox.warning(
+                    self, tr("menu_save_copy_older"),
+                    tr("save_older_failed").format(error=e),
+                )
+                ok = False
+        if not ok:
+            return
+
+        body = tr("save_older_done").format(label=label, path=path)
+        lines = issue_lines(dialog.issues())
+        body += "\n\n" + tr("save_older_what") + "\n" + (
+            "\n".join(lines) if lines else tr("save_older_none")
+        )
+        QMessageBox.information(
+            self, tr("save_older_done_title"), body
+        )
 
     def _save_project_to_path(self, path: str, *, notify_pasted: bool = False) -> bool:
         try:
@@ -7092,6 +7369,10 @@ class MainWindow(QMainWindow):
             if 0 <= self._active_tab_idx < len(self._tabs):
                 tab = self._tabs[self._active_tab_idx]
                 tab.path = path
+                # The file on disk now carries the current schema.
+                from src.model.migrations import PROJECT_SCHEMA_VERSION
+                tab.source_schema = PROJECT_SCHEMA_VERSION
+                tab.source_writer = self._app_version
                 self.tab_widget.setTabText(self._active_tab_idx,
                                            self._tab_title(tab))
                 # Reacquire file lock for the new path (.figlayout only;
@@ -7265,6 +7546,7 @@ class MainWindow(QMainWindow):
         output_path: str,
         update_json_only: bool,
         preview_bytes: Optional[bytes],
+        project_transform=None,
     ) -> bool:
         """Run a :class:`_BundlePackWorker` behind a modal progress
         dialog with Cancel. Returns True on success, False on cancel
@@ -7284,6 +7566,7 @@ class MainWindow(QMainWindow):
             app_version=self._app_version,
             update_json_only=update_json_only,
             preview_bytes=preview_bytes,
+            project_transform=project_transform,
             parent=self,
         )
         result: dict = {}

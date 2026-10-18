@@ -45,3 +45,8 @@ _smoke_gui_out.txt
 /packages/ilmplot/build/
 /packages/ilmplot/dist/
 *.egg-info/
+!/test_raster_text_rotation.py
+!/test_text_match_logic.py
+!/test_update_flow.py
+!/test_text_match_view.py
+!/test_project_downgrade.py

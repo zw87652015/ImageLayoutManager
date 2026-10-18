@@ -284,7 +284,7 @@ def _qimage_arrays(qimage):
     px = raw[:, : w * 4].reshape(h, w, 4)
     blue, green, red, alpha = px[..., 0], px[..., 1], px[..., 2], px[..., 3]
     gray = red * 0.299 + green * 0.587 + blue * 0.114
-    return gray.astype(np.uint8), alpha
+    return gray.astype(np.uint8), alpha.copy()
 
 
 def suggest_plot_area(path, qimage=None):

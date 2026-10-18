@@ -18,6 +18,7 @@ GITHUB_OWNER = "zw87652015"
 GITHUB_REPO  = "ImageLayoutManager"
 GITHUB_URL   = f"https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}"
 WEBSITE_URL  = "https://luojiajiang.uk/image-layout-manager"
+CONTACT_EMAIL = "me@luojiajiang.uk"
 # Self-hosted version manifest. Schema:
 #   { "version": "3.2", "url": "<download_page_url>", "notes": "optional" }
 # Served as a static file from the author's website so update checks don't
@@ -25,13 +26,11 @@ WEBSITE_URL  = "https://luojiajiang.uk/image-layout-manager"
 RELEASES_API = "https://luojiajiang.uk/image-layout-manager/latest.json"
 
 
-def _parse_version(v: str):
-    """Return a tuple of ints for simple semver comparison, ignoring leading 'v'."""
-    v = v.lstrip("vV")
-    try:
-        return tuple(int(x) for x in v.split("."))
-    except ValueError:
-        return (0,)
+from src.utils.distribution import STORE_URI, STORE_WEB_URL, install_channel
+from src.utils.update_release import is_newer, parse_release, parse_version
+
+# Kept as an alias for external callers/tests.
+_parse_version = parse_version
 
 
 class StartupUpdateChecker(QObject):
@@ -45,7 +44,7 @@ class StartupUpdateChecker(QObject):
     exists on GitHub; silent on failures, parse errors, same version, or
     pre-releases.
     """
-    update_available = pyqtSignal(str, str)  # latest_tag, url
+    update_available = pyqtSignal(object)  # Release
 
     def start(self):
         threading.Thread(target=self._run, daemon=True,
@@ -59,14 +58,13 @@ class StartupUpdateChecker(QObject):
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode())
-            latest_tag = data.get("version") or data.get("tag_name") or ""
-            latest_url = data.get("url") or data.get("html_url") or WEBSITE_URL
-            if not latest_tag:
+            release = parse_release(data)
+            if release is None:
                 return
             from src.version import APP_VERSION
-            if _parse_version(latest_tag) > _parse_version(APP_VERSION):
+            if is_newer(release.version, APP_VERSION):
                 # Signal emission is auto-queued to the UI thread.
-                self.update_available.emit(latest_tag, latest_url)
+                self.update_available.emit(release)
         except Exception:
             # Silent on all failures: user can still check manually via About.
             pass
@@ -79,7 +77,7 @@ class _UpdateChecker(QObject):
     reference to this instance until ``result_ready`` fires (or the dialog
     closes, at which point the signal should be disconnected).
     """
-    result_ready = pyqtSignal(str)   # emits status message
+    result_ready = pyqtSignal(str, object)   # status message, Release|None
 
     def start(self):
         threading.Thread(target=self._run, daemon=True,
@@ -93,31 +91,37 @@ class _UpdateChecker(QObject):
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode())
-            latest_tag = data.get("version") or data.get("tag_name") or ""
-            latest_url = data.get("url") or data.get("html_url") or WEBSITE_URL
-            if not latest_tag:
-                self.result_ready.emit("⚠ No release information found.")
+            release = parse_release(data)
+            if release is None:
+                self.result_ready.emit("⚠ No release information found.", None)
                 return
 
             from src.version import APP_VERSION
-            current = _parse_version(APP_VERSION)
-            latest  = _parse_version(latest_tag)
+            latest_url = release.page_url or WEBSITE_URL
 
-            if latest > current:
-                self.result_ready.emit(
-                    f'🔔 New version <b>{latest_tag}</b> is available!  '
-                    f'<a href="{WEBSITE_URL}">{tr("about_download")}</a>'
-                    f' &middot; '
-                    f'<a href="{latest_url}">GitHub</a>'
-                )
-            elif latest == current:
-                self.result_ready.emit(tr("about_latest"))
+            if is_newer(release.version, APP_VERSION):
+                if install_channel() == "installer" and release.installer:
+                    self.result_ready.emit(
+                        f'🔔 New version <b>{release.version}</b> is available!  '
+                        f'<a href="ilm-update-install">{tr("update_download_link")}</a>'
+                        f' &middot; '
+                        f'<a href="{latest_url}">GitHub</a>',
+                        release)
+                else:
+                    self.result_ready.emit(
+                        f'🔔 New version <b>{release.version}</b> is available!  '
+                        f'<a href="{WEBSITE_URL}">{tr("about_download")}</a>'
+                        f' &middot; '
+                        f'<a href="{latest_url}">GitHub</a>',
+                        release)
+            elif parse_version(release.version) == parse_version(APP_VERSION):
+                self.result_ready.emit(tr("about_latest"), release)
             else:
-                self.result_ready.emit(tr("about_pre"))
+                self.result_ready.emit(tr("about_pre"), release)
         except urllib.error.URLError:
-            self.result_ready.emit(tr("about_no_conn"))
+            self.result_ready.emit(tr("about_no_conn"), None)
         except Exception as e:
-            self.result_ready.emit(f"⚠ Update check failed: {e}")
+            self.result_ready.emit(f"⚠ Update check failed: {e}", None)
 
 
 class AboutDialog(QDialog):
@@ -127,6 +131,7 @@ class AboutDialog(QDialog):
         self._app_version = APP_VERSION
         self._app_copyright = APP_COPYRIGHT
         self._checker: _UpdateChecker | None = None
+        self._latest_release = None
 
         self.setWindowTitle(tr("about_title"))
         self.setFixedWidth(500)
@@ -221,6 +226,7 @@ class AboutDialog(QDialog):
         grid.setColumnStretch(1, 1)
         rows = (
             (tr("about_developer"), self._link(f"https://github.com/{GITHUB_OWNER}", f"@{GITHUB_OWNER}")),
+            (tr("about_email"), self._link(f"mailto:{CONTACT_EMAIL}", CONTACT_EMAIL)),
             (tr("about_website"), self._link(WEBSITE_URL, "luojiajiang.uk")),
             (tr("about_repository"), self._link(GITHUB_URL, f"{GITHUB_OWNER}/{GITHUB_REPO}")),
             (tr("about_license"), tr("about_license_summary")),
@@ -263,13 +269,22 @@ class AboutDialog(QDialog):
         self._update_label = QLabel(tr("about_click_check"))
         self._update_label.setObjectName("aboutMeta")
         self._update_label.setWordWrap(True)
-        self._update_label.setOpenExternalLinks(True)
         self._update_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self._update_label.linkActivated.connect(self._on_update_link)
         card_row.addWidget(self._update_label, 1)
         self._check_btn = QPushButton(tr("about_check_btn"))
         self._check_btn.setAutoDefault(False)
         self._check_btn.clicked.connect(self._on_check_updates)
         card_row.addWidget(self._check_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        if install_channel() == "store":
+            # Store policy 10.2.5: updates only through the Store — no
+            # website/GitHub download link may appear in the update UI.
+            self._check_btn.hide()
+            self._update_label.setText(tr("update_store_note"))
+            self._store_btn = QPushButton(tr("update_open_store"))
+            self._store_btn.setAutoDefault(False)
+            self._store_btn.clicked.connect(self._open_store)
+            card_row.addWidget(self._store_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         root.addWidget(card)
         root.addSpacing(16)
 
@@ -287,6 +302,8 @@ class AboutDialog(QDialog):
         dl_btn.setAutoDefault(False)
         dl_btn.setToolTip(WEBSITE_URL)
         dl_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(WEBSITE_URL)))
+        if install_channel() == "store":
+            dl_btn.hide()
         footer.addWidget(dl_btn)
         self._dl_btn = dl_btn
         close_btn = QPushButton(tr("about_close"))
@@ -398,9 +415,33 @@ class AboutDialog(QDialog):
         self._checker.result_ready.connect(self._on_update_result)
         self._checker.start()
 
-    def _on_update_result(self, message: str):
+    def _on_update_result(self, message: str, release):
+        self._latest_release = release
         self._update_label.setText(message)
         self._check_btn.setEnabled(True)
+
+    def _on_update_link(self, href: str):
+        if href == "ilm-update-install":
+            release = getattr(self, "_latest_release", None)
+            if release is not None and release.installer is not None:
+                self._open_update_dialog(release)
+            return
+        QDesktopServices.openUrl(QUrl(href))
+
+    def _open_update_dialog(self, release):
+        from PyQt6.QtCore import QStandardPaths
+        from src.app.update_dialog import UpdateDialog
+        cache_dir = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.CacheLocation)
+        dlg = UpdateDialog(release, cache_dir, self.parent())
+        install = getattr(self.parent(), "_install_update", None)
+        if install is not None:
+            dlg.install_requested.connect(install)
+        dlg.show()
+
+    def _open_store(self):
+        if not QDesktopServices.openUrl(QUrl(STORE_URI)):
+            QDesktopServices.openUrl(QUrl(STORE_WEB_URL))
 
     def closeEvent(self, event):
         # Drop the signal connection so a late thread reply can't call into

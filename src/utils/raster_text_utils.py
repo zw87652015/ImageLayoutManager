@@ -29,12 +29,14 @@ The original file is never modified; everything is regenerated from it.
 from __future__ import annotations
 
 import json
+import math
 import os
 from typing import List, Optional, Tuple
 
 from PIL import Image
 
 from src.model.data_model import RasterTextRegion
+from src.utils.raster_text_frame import image_bounds, to_image, to_text
 
 # Ink-height fractions of the em size, measured on Arial, MS YaHei and SimSun.
 # A label's ink box height depends on which characters it contains, so the em
@@ -51,8 +53,8 @@ CJK_RATIO = 0.94            # CJK glyphs nearly fill their em box
 
 _CAP_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 _ASCENDER_CHARS = set("bdfhkltij([{)]}|/\\!?\"'#$&*@£€§")
-_DESCENDER_CHARS = set("gjpqy,;([{)]}|/\\@_$")
-_X_HEIGHT_CHARS = set("acemnorsuvwxz")
+_DESCENDER_CHARS = set("gjpqy,;([{)]}|/\\@_$µμ")
+_X_HEIGHT_CHARS = set("acemnorsuvwxzµμ")
 
 
 def _is_wide_script(char: str) -> bool:
@@ -476,6 +478,186 @@ def _fit_box(arr, x, y, w, h, pad: int = BOX_PAD):
     return x0, y0, x1 - x0, y1 - y0
 
 
+def _text_frame_patch(arr, x, y, w, h, angle, margin, fill):
+    """Resample *arr* into the text frame of *angle* (numpy bilinear).
+
+    Returns ``(patch, origin)`` where patch is a uint8 HxWx3 image covering
+    text-frame ``[x-margin, x+w+margin) x [y-margin, y+h+margin)`` and
+    origin is its top-left ``(x-margin, y-margin)``.  A pixel centre sits
+    at integer-plus-0.5 in every frame; patch pixel (row, col) samples the
+    image at the centre ``to_image(origin_u + col + 0.5, origin_v + row +
+    0.5)`` expressed in ``coord - 0.5`` index space.  Samples outside the
+    image take *fill* so image edges do not look like ink.
+    """
+    np = _np()
+    H, W = arr.shape[:2]
+    m = int(margin)
+    wp, hp = int(w) + 2 * m, int(h) + 2 * m
+    uu = x - m + np.arange(wp, dtype=np.float64) + 0.5
+    vv = y - m + np.arange(hp, dtype=np.float64) + 0.5
+    a = math.radians(angle)
+    c, s = math.cos(a), math.sin(a)
+    px = uu[None, :] * c - vv[:, None] * s
+    py = uu[None, :] * s + vv[:, None] * c
+    col, row = px - 0.5, py - 0.5
+    c0, r0 = np.floor(col).astype(np.int64), np.floor(row).astype(np.int64)
+    wc, wr = col - c0, row - r0
+    fillf = np.asarray(fill, dtype=np.float32)
+    patch = np.zeros((hp, wp, 3), dtype=np.float32)
+    for rr, wrow in ((r0, 1.0 - wr), (r0 + 1, wr)):
+        for cc, wcol in ((c0, 1.0 - wc), (c0 + 1, wc)):
+            ok = (rr >= 0) & (rr < H) & (cc >= 0) & (cc < W)
+            vals = arr[np.clip(rr, 0, H - 1), np.clip(cc, 0, W - 1), :3].astype(np.float32)
+            vals = np.where(ok[..., None], vals, fillf)
+            patch += vals * (wrow * wcol)[..., None]
+    return patch.astype(np.uint8), (x - m, y - m)
+
+
+def _rotated_margin(h):
+    return max(BOX_PAD + 2, int(round(0.15 * h)))
+
+
+def _rotated_patch(arr, x, y, w, h, angle):
+    """Patch + origin for a rotated region; fill = dominant colour of the
+    region's image AABB so image edges don't read as ink."""
+    H, W = arr.shape[:2]
+    ax, ay, aw, ah = _clip_box(*image_bounds(x, y, w, h, angle), W, H)
+    fill = _dominant_color(arr[ay:ay + ah, ax:ax + aw, :3])[0] if aw and ah else (255, 255, 255)
+    return _text_frame_patch(arr, x, y, w, h, angle, _rotated_margin(h), fill)
+
+
+def _rotated_masks(arr, x, y, w, h, angle, background, chars):
+    """Source-frame masks for a rotated region (``angle != 0``).
+
+    Returns ``dict(origin, inside, text_alpha, foreign, bg, glyph_box)``:
+    ``origin`` is the top-left of the region's image AABB clipped to the
+    image; ``inside`` marks the source pixels whose centre maps inside the
+    text-frame box; ``text_alpha``/``foreign`` share that crop's frame;
+    ``glyph_box`` is the tight glyph box in the *text frame* (or None).
+    The text-frame text mask is dilated by 1 px before mapping back so
+    anti-aliased glyph edges are included.
+    """
+    np = _np()
+    H, W = arr.shape[:2]
+    ax, ay, aw, ah = _clip_box(*image_bounds(x, y, w, h, angle), W, H)
+    src = arr[ay:ay + ah, ax:ax + aw, :3]
+    m = _rotated_margin(h)
+    patch, (ox, oy) = _rotated_patch(arr, x, y, w, h, angle)
+    if background:
+        bg = _hex_to_rgb(background)
+    else:
+        bg = _dominant_color(patch[m:m + h, m:m + w])[0] if h and w else (255, 255, 255)
+    cols = ax + np.arange(aw, dtype=np.float64) + 0.5
+    rows = ay + np.arange(ah, dtype=np.float64) + 0.5
+    ca, sa = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    u = cols[None, :] * ca + rows[:, None] * sa
+    v = -cols[None, :] * sa + rows[:, None] * ca
+    inside = (u >= x) & (u < x + w) & (v >= y) & (v < y + h)
+    text_mask = np.zeros(patch.shape[:2], dtype=bool)
+    tight = None
+    if h > 0 and w > 0 and patch.shape[0] >= m + h and patch.shape[1] >= m + w:
+        box_alpha = _alpha(_distance(patch[m:m + h, m:m + w], bg))
+        text_alpha_box, _foreign_box, tight = _classify_text_pixels(
+            box_alpha, chars=chars, origin=(x, y))
+        text_mask[m:m + h, m:m + w] = text_alpha_box > 0.5
+    dil = text_mask.copy()
+    dil[1:, :] |= text_mask[:-1, :]
+    dil[:-1, :] |= text_mask[1:, :]
+    dil[:, 1:] |= text_mask[:, :-1]
+    dil[:, :-1] |= text_mask[:, 1:]
+    ji = np.floor(u - ox).astype(np.int64)
+    ii = np.floor(v - oy).astype(np.int64)
+    ok = (ii >= 0) & (ii < dil.shape[0]) & (ji >= 0) & (ji < dil.shape[1])
+    sampled = np.zeros((ah, aw), dtype=bool)
+    sampled[ok] = dil[ii[ok], ji[ok]]
+    text_src = inside & sampled
+    src_alpha = _alpha(_distance(src, bg))
+    text_alpha = np.where(text_src, src_alpha, 0.0).astype(np.float32)
+    foreign = inside & (src_alpha > 0.5) & ~text_src
+    glyph_box = None
+    if tight is not None:
+        tx, ty, tw, th = tight
+        glyph_box = (x + tx, y + ty, tw, th)
+    return {"origin": (ax, ay), "inside": inside, "text_alpha": text_alpha,
+            "foreign": foreign, "bg": bg, "glyph_box": glyph_box}
+
+
+_DASH_CHARS = "-−–—‐"
+
+
+def _trim_dash_tick(arr, x, y, w, h, text, chars, info):
+    """Trim a leading/trailing "dash" that is really a tick mark.
+
+    Colorbar/axis ticks often get read as part of the label ("-6.5"), and
+    the tick's ink continuing out of the box marks the region "touching".
+    When the label starts or ends with a dash and the box's edge component
+    (or the matching character box) looks like a tick, cut it off and
+    re-analyse; the trim is accepted only when the new box is clean.
+    Returns ``((x, y, w, h), text, chars, info)`` or None.  All coordinates
+    are in the caller's frame (image or text frame).
+    """
+    np = _np()
+    stripped = (text or "").strip()
+    if len(stripped) <= 1:
+        return None
+    bg = _hex_to_rgb(info["bg"]) if info.get("bg") else sample_background(arr, x, y, w, h)
+    glyph_h = info["glyph_box"][3] if info.get("glyph_box") else 0
+    for side in ("left", "right"):
+        dash = stripped[0] if side == "left" else stripped[-1]
+        if dash not in _DASH_CHARS:
+            continue
+        boundary = None
+        new_chars = list(chars)
+        edge_char = None
+        if side == "left" and chars:
+            first = min(chars, key=lambda c: c[1])
+            if str(first[0]) == dash:
+                edge_char = first
+                boundary = first[1] + first[3]
+        elif side == "right" and chars:
+            last = max(chars, key=lambda c: c[1] + c[3])
+            if str(last[0]) == dash:
+                edge_char = last
+                boundary = last[1]
+        if boundary is None and glyph_h:
+            alpha = _alpha(_distance(arr[y:y + h, x:x + w, :3], bg))
+            labels, count = _connected_components(alpha > 0.5)
+            comps = []
+            for lbl in range(1, count + 1):
+                ys, xs = np.nonzero(labels == lbl)
+                if len(xs):
+                    comps.append((int(xs.min()), int(xs.max()),
+                                  int(ys.min()), int(ys.max())))
+            if comps:
+                if side == "left":
+                    comp = min(comps, key=lambda c: c[0])
+                    cw, chh = comp[1] - comp[0] + 1, comp[3] - comp[2] + 1
+                    if chh <= 0.35 * glyph_h and cw >= 1.5 * chh:
+                        boundary = x + comp[1] + 1
+                else:
+                    comp = max(comps, key=lambda c: c[1])
+                    cw, chh = comp[1] - comp[0] + 1, comp[3] - comp[2] + 1
+                    if chh <= 0.35 * glyph_h and cw >= 1.5 * chh:
+                        boundary = x + comp[0]
+        if boundary is None:
+            continue
+        if edge_char is not None:
+            new_chars = [c for c in chars if c is not edge_char]
+        if side == "left":
+            nx, ny, nw, nh = boundary, y, x + w - boundary, h
+            ntext = stripped[1:].lstrip()
+        else:
+            nx, ny, nw, nh = x, y, boundary - x, h
+            ntext = stripped[:-1].rstrip()
+        if nw <= 0 or not ntext:
+            continue
+        fx, fy, fw, fh = _fit_box(arr, nx, ny, nw, nh)
+        ninfo = analyze_region(arr, fx, fy, fw, fh, chars=new_chars)
+        if ninfo["reason"] is None:
+            return (fx, fy, fw, fh), ntext, new_chars, ninfo
+    return None
+
+
 def regions_from_detections(image: Image.Image, detections) -> List[Tuple[RasterTextRegion, Optional[str]]]:
     """Build candidate regions from OCR detections.
 
@@ -488,17 +670,50 @@ def regions_from_detections(image: Image.Image, detections) -> List[Tuple[Raster
     H, W = arr.shape[:2]
     out = []
     for det in detections:
-        x, y, w, h = _fit_box(arr, *_clip_box(det.x, det.y, det.w, det.h, W, H))
+        angle = getattr(det, "angle", 0.0) or 0.0
         chars = [list(c) for c in (getattr(det, "chars", None) or [])]
+        if angle != 0:
+            # Rotated label: geometry lives in the text frame (see
+            # raster_text_frame). Analyse a resampled, axis-aligned patch
+            # of that frame so the usual checks apply unchanged.
+            patch, (ox, oy) = _rotated_patch(arr, det.x, det.y, det.w, det.h, angle)
+            m = _rotated_margin(det.h)
+            pchars = [[c[0], c[1] - ox, c[2] - oy, c[3], c[4]]
+                      for c in chars if len(c) >= 5]
+            px, py, pw, ph = _fit_box(patch, m, m, det.w, det.h)
+            info = analyze_region(patch, px, py, pw, ph, chars=pchars)
+            text = det.text
+            if info["reason"] == "touching":
+                trimmed = _trim_dash_tick(patch, px, py, pw, ph, text, pchars, info)
+                if trimmed is not None:
+                    (px, py, pw, ph), text, pchars, info = trimmed
+            x, y, w, h = px + ox, py + oy, pw, ph
+            chars = [[c[0], c[1] + ox, c[2] + oy, c[3], c[4]] for c in pchars]
+            glyph_h = info["glyph_box"][3] if info["glyph_box"] else 0.0
+            region = RasterTextRegion(
+                x=x, y=y, w=w, h=h, text=text, vertical=False, angle=angle,
+                font_size_px=round(glyph_h / ink_ratio_for_text(text), 2),
+                background=info["bg"], enabled=info["reason"] is None,
+                warning=info["reason"], foreign_excluded=info["foreign_excluded"],
+                chars=chars,
+            )
+            out.append((region, info["reason"]))
+            continue
+        x, y, w, h = _fit_box(arr, *_clip_box(det.x, det.y, det.w, det.h, W, H))
         info = analyze_region(arr, x, y, w, h, chars=chars)
+        text = det.text
+        if info["reason"] == "touching":
+            trimmed = _trim_dash_tick(arr, x, y, w, h, text, chars, info)
+            if trimmed is not None:
+                (x, y, w, h), text, chars, info = trimmed
         vertical = det.h > det.w * 1.5 and len(det.text.strip()) > 1
         glyph_h = 0.0
         if info["glyph_box"]:
             gx, gy, gw, gh = info["glyph_box"]
             glyph_h = gw if vertical else gh
         region = RasterTextRegion(
-            x=x, y=y, w=w, h=h, text=det.text, vertical=vertical,
-            font_size_px=round(glyph_h / ink_ratio_for_text(det.text), 2),
+            x=x, y=y, w=w, h=h, text=text, vertical=vertical,
+            font_size_px=round(glyph_h / ink_ratio_for_text(text), 2),
             background=info["bg"], enabled=info["reason"] is None,
             warning=info["reason"], foreign_excluded=info["foreign_excluded"],
             chars=chars,
@@ -512,6 +727,20 @@ def reanalyze_region(image: Image.Image, region: RasterTextRegion) -> Optional[s
     refresh its background / size estimate.  Returns the advisory reason."""
     np = _np()
     arr = np.asarray(image.convert("RGB"))
+    angle = getattr(region, "angle", 0.0) or 0.0
+    if angle != 0:
+        m = _rotated_margin(region.h)
+        patch, (ox, oy) = _rotated_patch(arr, region.x, region.y, region.w, region.h, angle)
+        pchars = [[c[0], c[1] - ox, c[2] - oy, c[3], c[4]]
+                  for c in region.chars if len(c) >= 5]
+        info = analyze_region(patch, m, m, region.w, region.h, chars=pchars)
+        region.background = info["bg"]
+        region.warning = info["reason"]
+        region.foreign_excluded = info["foreign_excluded"]
+        if info["glyph_box"]:
+            region.font_size_px = round(
+                info["glyph_box"][3] / ink_ratio_for_text(region.text), 2)
+        return info["reason"]
     info = analyze_region(arr, region.x, region.y, region.w, region.h, chars=region.chars)
     region.background = info["bg"]
     region.warning = info["reason"]
@@ -528,6 +757,26 @@ def is_raster_path(path: Optional[str]) -> bool:
     return bool(path) and os.path.splitext(path)[1].lower() in RASTER_EXTENSIONS
 
 
+def raster_pt_per_px(project, cell, layout_result=None, content_size_mm=None):
+    """Point size of one source pixel in *cell*'s raster image, or None.
+
+    Derived from the image's pixel size (PIL header only, no decode) and the
+    cell's mm-per-unit scale.  None when the image is missing/unreadable or
+    not a raster file.
+    """
+    path = getattr(cell, 'image_path', None)
+    if not is_raster_path(path) or not os.path.exists(path):
+        return None
+    try:
+        with Image.open(path) as im:
+            img_w, img_h = im.size
+    except Exception:
+        return None
+    from src.utils.panel_scale import panel_mm_per_unit
+    mm_per_px = panel_mm_per_unit(project, cell, img_w, img_h, layout_result, content_size_mm)
+    return mm_per_px * 72.0 / 25.4
+
+
 def build_raster_override_spec(project, cell, layout_result=None,
                                content_size_mm=None) -> Optional[dict]:
     """Per-render spec for *cell* or None when nothing needs to change.
@@ -537,18 +786,12 @@ def build_raster_override_spec(project, cell, layout_result=None,
     """
     regions = [r for r in getattr(cell, 'raster_text_regions', [])
                if r.enabled and r.group_id and r.font_size_px > 0]
-    path = getattr(cell, 'image_path', None)
-    if not regions or not is_raster_path(path) or not os.path.exists(path):
+    if not regions:
+        return None
+    pt_per_px = raster_pt_per_px(project, cell, layout_result, content_size_mm)
+    if pt_per_px is None:
         return None
     groups = {g.id: g for g in getattr(project, 'svg_text_groups', [])}
-    try:
-        with Image.open(path) as im:
-            img_w, img_h = im.size
-    except Exception:
-        return None
-    from src.utils.panel_scale import panel_mm_per_unit
-    mm_per_px = panel_mm_per_unit(project, cell, img_w, img_h, layout_result, content_size_mm)
-    pt_per_px = mm_per_px * 72.0 / 25.4
     entries = []
     for r in regions:
         group = groups.get(r.group_id)
@@ -557,13 +800,16 @@ def build_raster_override_spec(project, cell, layout_result=None,
         current_pt = r.font_size_px * pt_per_px
         if current_pt <= 0:
             continue
-        entries.append({
+        entry = {
             "id": r.id, "x": r.x, "y": r.y, "w": r.w, "h": r.h,
             "scale": round(group.font_size_pt / current_pt, 5),
             "anchor": r.anchor if r.anchor in ANCHORS else "center",
             "background": r.background,
             "chars": [list(c) for c in (r.chars or [])],
-        })
+        }
+        if getattr(r, "angle", 0.0):
+            entry["angle"] = r.angle
+        entries.append(entry)
     return {"regions": entries} if entries else None
 
 
@@ -586,6 +832,11 @@ def _place(tx, ty, tw, th, nw, nh, anchor):
 def get_raster_text_mask(image: Image.Image, region):
     np = _np()
     arr = np.asarray(image.convert('RGB'))
+    angle = getattr(region, "angle", 0.0) or 0.0
+    if angle != 0:
+        masks = _rotated_masks(arr, region.x, region.y, region.w, region.h,
+                               angle, region.background, region.chars)
+        return masks["text_alpha"], masks["foreign"], masks["origin"]
     x, y, w, h = _clip_box(region.x, region.y, region.w, region.h, image.width, image.height)
     if not w or not h:
         return np.zeros((0, 0)), np.zeros((0, 0), dtype=bool), (x, y)
@@ -611,6 +862,40 @@ def apply_raster_text_overrides(image: Image.Image, spec: dict,
     layers = []
 
     for entry in spec.get("regions", []):
+        angle = float(entry.get("angle", 0) or 0)
+        if angle != 0:
+            # Rotated region: entry x/y/w/h and chars are text-frame
+            # coordinates; masks and the erased area are source pixels.
+            masks = _rotated_masks(arr, entry["x"], entry["y"], entry["w"],
+                                   entry["h"], angle, entry.get("background"),
+                                   entry.get("chars"))
+            ax, ay = masks["origin"]
+            ah, aw = masks["inside"].shape
+            if overlay_masks is not None:
+                overlay_masks[entry['id']] = {
+                    'alpha': masks["text_alpha"], 'origin': (ax, ay),
+                    'protected_mask': masks["foreign"], 'protected_origin': (ax, ay),
+                }
+            if masks["glyph_box"] is None or aw == 0 or ah == 0:
+                report.append({"id": entry["id"], "status": "skipped_no_text", "scale": entry["scale"]})
+                continue
+            bg = masks["bg"]
+            a2 = masks["text_alpha"]
+            rgb = arr[ay:ay + ah, ax:ax + aw, :3].astype(np.float32)
+            bgf = np.array(bg, dtype=np.float32)
+            safe = np.maximum(a2, 0.05)[..., None]
+            fg = np.clip(bgf + (rgb - bgf) / safe, 0, 255)
+            fg[a2 < 0.05] = bgf
+            layer = np.dstack([fg, a2[..., None] * 255.0]).astype(np.uint8)
+            erased = masks["inside"] & ~masks["foreign"]
+            region_rgb = out[ay:ay + ah, ax:ax + aw, :3]
+            region_rgb[erased] = bg
+            out[ay:ay + ah, ax:ax + aw, :3] = region_rgb
+            region_alpha = out[ay:ay + ah, ax:ax + aw, 3]
+            region_alpha[erased] = 255
+            out[ay:ay + ah, ax:ax + aw, 3] = region_alpha
+            layers.append((entry, angle, masks, (ax, ay, aw, ah), erased, layer))
+            continue
         x, y, w, h = _clip_box(entry["x"], entry["y"], entry["w"], entry["h"], W, H)
         if w == 0 or h == 0:
             report.append({"id": entry["id"], "status": "skipped_no_text", "scale": entry["scale"]})
@@ -650,7 +935,11 @@ def apply_raster_text_overrides(image: Image.Image, spec: dict,
         region_alpha[erase] = 255
         out[y:y + h, x:x + w, 3] = region_alpha
 
-    for entry, box, glyph_box, bg, layer in layers:
+    for item in layers:
+        if len(item) == 6:
+            _apply_rotated(item, arr, out, report, overlay_masks)
+            continue
+        entry, box, glyph_box, bg, layer = item
         gx, gy, gw, gh = glyph_box
         s = float(entry["scale"])
         nw, nh = max(1, int(round(gw * s))), max(1, int(round(gh * s)))
@@ -677,6 +966,77 @@ def apply_raster_text_overrides(image: Image.Image, spec: dict,
         report.append({"id": entry["id"], "status": "applied", "scale": s})
 
     return Image.fromarray(out, "RGBA"), report
+
+
+def _apply_rotated(item, arr, out, report, overlay_masks):
+    """Place the scaled glyph layer for a rotated (angle != 0) entry.
+
+    The layer covers the region's image AABB; it is scaled uniformly about
+    the anchor point *P* (the glyph box's anchor mapped to image
+    coordinates).  A uniform scale in image space is equally uniform in the
+    text frame, so the scaled oriented glyph rect stays axis-aligned there,
+    which is where the bounds/collision tests run.
+    """
+    np = _np()
+    entry, angle, masks, (ax, ay, aw, ah), erased, layer = item
+    s = float(entry["scale"])
+    H, W = arr.shape[:2]
+    bg = masks["bg"]
+    gx, gy, gw, gh = masks["glyph_box"]
+    anchor = entry.get("anchor", "center")
+    if anchor == "left":
+        pu, pv = gx, gy + gh / 2.0
+    elif anchor == "right":
+        pu, pv = gx + gw, gy + gh / 2.0
+    elif anchor == "top":
+        pu, pv = gx + gw / 2.0, gy
+    elif anchor == "bottom":
+        pu, pv = gx + gw / 2.0, gy + gh
+    else:
+        pu, pv = gx + gw / 2.0, gy + gh / 2.0
+    px, py = to_image(pu, pv, angle)
+    sgx, sgy = pu + (gx - pu) * s, pv + (gy - pv) * s
+    sgw, sgh = gw * s, gh * s
+
+    def _restore_erased():
+        sub = out[ay:ay + ah, ax:ax + aw]
+        sub[erased] = arr[ay:ay + ah, ax:ax + aw][erased]
+
+    bx, by, bw, bh = image_bounds(sgx, sgy, sgw, sgh, angle)
+    if bx < 0 or by < 0 or bx + bw > W or by + bh > H:
+        report.append({"id": entry["id"], "status": "skipped_bounds", "scale": s})
+        _restore_erased()
+        return
+    nw, nh = max(1, int(round(aw * s))), max(1, int(round(ah * s)))
+    dx = int(round(px + (ax - px) * s))
+    dy = int(round(py + (ay - py) * s))
+    cx0, cy0 = max(0, dx), max(0, dy)
+    cx1, cy1 = min(W, dx + nw), min(H, dy + nh)
+    if cx1 > cx0 and cy1 > cy0:
+        cols = cx0 + np.arange(cx1 - cx0, dtype=np.float64) + 0.5
+        rows = cy0 + np.arange(cy1 - cy0, dtype=np.float64) + 0.5
+        ca, sa = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+        u = cols[None, :] * ca + rows[:, None] * sa
+        v = -cols[None, :] * sa + rows[:, None] * ca
+        footprint = (u >= sgx) & (u < sgx + sgw) & (v >= sgy) & (v < sgy + sgh)
+        dest = out[cy0:cy1, cx0:cx1, :3]
+        busy = footprint & (_distance(dest, bg) > BG_TOLERANCE)
+        if busy.sum() > max(4, 0.005 * footprint.sum()):
+            report.append({"id": entry["id"], "status": "skipped_collision", "scale": s})
+            _restore_erased()
+            return
+    if (nw, nh) != (aw, ah):
+        layer = np.asarray(Image.fromarray(layer, "RGBA").resize((nw, nh), Image.Resampling.LANCZOS))
+    if cx1 > cx0 and cy1 > cy0:
+        lsub = layer[cy0 - dy:cy1 - dy, cx0 - dx:cx1 - dx]
+        la = lsub[..., 3:4].astype(np.float32) / 255.0
+        dest = out[cy0:cy1, cx0:cx1, :3]
+        dest[...] = (lsub[..., :3].astype(np.float32) * la
+                     + dest.astype(np.float32) * (1 - la)).astype(np.uint8)
+    if overlay_masks is not None:
+        overlay_masks[entry['id']].update(
+            alpha=layer[..., 3].astype(np.float32) / 255.0, origin=(dx, dy))
+    report.append({"id": entry["id"], "status": "applied", "scale": s})
 
 
 def _restore(out, arr, box):

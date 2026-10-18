@@ -13,7 +13,8 @@ Right: the element list (a colour dot shows each text's group) above the group c
 import os
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
-    QLabel, QSplitter, QWidget, QFrame, QSizePolicy, QMenu,
+    QLabel, QSplitter, QWidget, QFrame, QSizePolicy, QMenu, QPushButton,
+    QToolButton,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QByteArray, QRectF, QPointF
 from PyQt6.QtGui import QKeySequence, QPalette, QPainter, QImage, QColor, QPen, QBrush, QShortcut
@@ -27,16 +28,23 @@ from ilmplot.document import has_plot_metadata
 from src.app.help_dialog import show_context_help
 from src.app.i18n import tr
 from src.app.text_groups_widget import section_label
-from src.app.text_group_chips import TextGroupChips, chip_hint, dot_icon, group_colour, populate_group_menu
+from src.app.preview_zoom import ZoomPan
+from src.app.raster_text_region_delegate import TextMatchRowDelegate, REGION_DETAILS_ROLE
+from src.app.text_group_chips import TextGroupChips, chip_hint, group_colour, populate_group_menu
+from src.app.text_match_session import (
+    SessionRecorder, capture, restore, scoped_revert)
+from src.app.commands import TextMatchSessionCommand
 from src.utils.text_group_assign import assign_svg, new_svg_group, ungroup_svg
+from src.utils.text_match import SVG_REL_TOL, format_size, size_clusters, svg_summary
 
-_RENDER_MAX = 480
+_RENDER_MAX = 1600
 
 
 class SvgTextPreview(QWidget):
     """Clickable preview of the SVG with per-group outlines (modelled on RasterTextPreview)."""
 
     selection_changed = pyqtSignal(list)
+    view_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -49,11 +57,20 @@ class SvgTextPreview(QWidget):
         self._hover = None
         self._rubber = None
         self._rubber_additive = False
+        self._zoom = ZoomPan()
+        self._pan_drag = None
+        self._space = False
         self.setMinimumSize(280, 280)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self.setAccessibleName(tr("svgtxt_preview_label"))
 
     def set_content(self, image, rects, colours, tips):
+        if (image is not None and self._image is not None
+                and not image.isNull() and not self._image.isNull()
+                and (image.width(), image.height()) != (self._image.width(), self._image.height())):
+            self._zoom.reset()
+            self.view_changed.emit()
         self._image = image
         self._rects = dict(rects)
         self._colours = dict(colours)
@@ -75,11 +92,53 @@ class SvgTextPreview(QWidget):
     def _transform(self):
         if self._image is None or self._image.isNull():
             return None
-        bounds = QRectF(self.rect()).adjusted(8, 8, -8, -8)
-        scale = min(bounds.width() / self._image.width(), bounds.height() / self._image.height())
-        left = bounds.center().x() - self._image.width() * scale / 2
-        top = bounds.center().y() - self._image.height() * scale / 2
-        return scale, left, top
+        return self._zoom.transform(self.width(), self.height(),
+                                    self._image.width(), self._image.height())
+
+    def _zoom_pan_args(self):
+        return self.width(), self.height(), self._image.width(), self._image.height()
+
+    def wheelEvent(self, event):
+        if self._image is None or self._image.isNull():
+            event.ignore()
+            return
+        self._zoom.zoom_at(event.position().x(), event.position().y(),
+                           event.angleDelta().y() / 120.0, *self._zoom_pan_args())
+        self.view_changed.emit()
+        self.update()
+        event.accept()
+
+    def _pan_to(self, pos):
+        if self._pan_drag is None:
+            return
+        dx, dy = pos.x() - self._pan_drag.x(), pos.y() - self._pan_drag.y()
+        self._pan_drag = pos
+        self._zoom.pan_by(dx, dy, *self._zoom_pan_args())
+        self.view_changed.emit()
+        self.update()
+
+    def resizeEvent(self, event):
+        if self._image is not None and not self._image.isNull():
+            self._zoom.pan_by(0, 0, *self._zoom_pan_args())   # re-clamp
+        super().resizeEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space = True
+            if self._pan_drag is None:
+                self.setCursor(Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space = False
+            if self._pan_drag is None:
+                self.unsetCursor()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
 
     def _to_widget(self, rect):
         scale, left, top = self._transform()
@@ -104,6 +163,8 @@ class SvgTextPreview(QWidget):
             return
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         scale, left, top = self._transform()
+        if scale * self.devicePixelRatioF() < 2.0:
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         target = QRectF(left, top, self._image.width() * scale, self._image.height() * scale)
         painter.drawImage(target, self._image)
         highlight = pal.color(QPalette.ColorRole.Highlight)
@@ -131,6 +192,12 @@ class SvgTextPreview(QWidget):
 
     def mousePressEvent(self, event):
         self.setFocus()
+        if event.button() == Qt.MouseButton.MiddleButton or (
+                event.button() == Qt.MouseButton.LeftButton and self._space):
+            self._pan_drag = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
         if event.button() != Qt.MouseButton.LeftButton or self._transform() is None:
             return
         key = self._key_at(event.position())
@@ -152,6 +219,9 @@ class SvgTextPreview(QWidget):
         self.update()
 
     def mouseMoveEvent(self, event):
+        if self._pan_drag is not None:
+            self._pan_to(event.position())
+            return
         if self._rubber is not None:
             self._rubber = (self._rubber[0], event.position())
             self.update()
@@ -163,6 +233,13 @@ class SvgTextPreview(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event):
+        if self._pan_drag is not None and event.button() in (
+                Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
+            self._pan_drag = None
+            self.setCursor(Qt.CursorShape.OpenHandCursor if self._space
+                           else Qt.CursorShape.ArrowCursor)
+            event.accept()
+            return
         if self._rubber is None or event.button() != Qt.MouseButton.LeftButton:
             return
         area = QRectF(self._rubber[0], self._rubber[1]).normalized()
@@ -188,7 +265,8 @@ class SvgTextInspectorWindow(QDialog):
 
     groups_changed = pyqtSignal()
 
-    def __init__(self, svg_path: str, project, cell=None, parent=None):
+    def __init__(self, svg_path: str, project, cell=None, parent=None,
+                 undo_stack=None, on_change=None, baseline=None):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
         self.svg_path = svg_path
@@ -206,9 +284,17 @@ class SvgTextInspectorWindow(QDialog):
             Qt.WindowType.WindowMaximizeButtonHint
         )
         self.setMinimumSize(780, 540)
-        self.resize(980, 640)
+        self.resize(1120, 680)
 
         self._build_ui()
+        self._cell_id = getattr(cell, 'id', None)
+        self._recorder = SessionRecorder(
+            project, self._cell_id, undo_stack,
+            lambda before, after: TextMatchSessionCommand(
+                project, self._cell_id, before, after, on_change),
+            open_state=baseline)
+        self._baseline = baseline if baseline is not None else self._recorder.open_state
+        self._kept_names = []
         self._refresh_all()
 
     # ──────────────────────────────────────────────────────────────────
@@ -226,10 +312,17 @@ class SvgTextInspectorWindow(QDialog):
         # ── Left: preview ──────────────────────────────────────────────
         left = QWidget()
         lv = QVBoxLayout(left)
-        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setContentsMargins(0, 0, 8, 0)   # keep content clear of the divider
         lv.setSpacing(4)
 
-        lv.addWidget(QLabel(tr("svgtxt_preview_label")))
+        head = QHBoxLayout()
+        head.addWidget(QLabel(tr("svgtxt_preview_label")), 1)
+        self._btn_fit = QPushButton(tr("preview_fit"))
+        self._btn_fit.setToolTip(tr("preview_fit_tip"))
+        self._btn_fit.setEnabled(False)
+        self._btn_fit.clicked.connect(self._on_fit)
+        head.addWidget(self._btn_fit)
+        lv.addLayout(head)
 
         self._norm_label = QLabel()
         self._norm_label.setStyleSheet("color: palette(link); font-style: italic;")
@@ -238,32 +331,41 @@ class SvgTextInspectorWindow(QDialog):
 
         self._preview_label = SvgTextPreview()
         self._preview_label.selection_changed.connect(self._on_preview_selection)
+        self._preview_label.view_changed.connect(
+            lambda: self._btn_fit.setEnabled(not self._preview_label._zoom.fitted))
         lv.addWidget(self._preview_label, 1)
         splitter.addWidget(left)
 
         # ── Right: elements + group chips ──────────────────────────────
         right = QWidget()
         rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setContentsMargins(8, 0, 0, 0)
         rv.setSpacing(8)
 
-        rv.addWidget(self._section_label(tr("svgtxt_elements_label")))
+        summary_row = QHBoxLayout()
+        self._summary_label = QLabel()
+        self._summary_label.setWordWrap(True)
+        summary_row.addWidget(self._summary_label, 1)
+        self._btn_filter = QPushButton()
+        self._btn_filter.setCheckable(True)
+        self._btn_filter.toggled.connect(lambda _on: self._refresh_elements())
+        self._btn_filter.hide()
+        summary_row.addWidget(self._btn_filter)
+        rv.addLayout(summary_row)
 
         self._size_hint = QLabel()
         self._size_hint.setWordWrap(True)
         rv.addWidget(self._size_hint)
 
-        self._elem_list = QListWidget()
-        self._elem_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self._elem_list.setMinimumHeight(120)
-        self._elem_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._elem_list.customContextMenuRequested.connect(self._on_elem_context_menu)
-        self._elem_list.itemSelectionChanged.connect(self._on_list_selection)
-        rv.addWidget(self._elem_list, 2)
-
-        div = QFrame()
-        div.setFrameShape(QFrame.Shape.HLine)
-        rv.addWidget(div)
+        self._suggest_label = self._section_label(tr("textmatch_suggest_label"))
+        self._suggest_label.hide()
+        rv.addWidget(self._suggest_label)
+        self._suggest_box = QWidget()
+        self._suggest_lay = QVBoxLayout(self._suggest_box)
+        self._suggest_lay.setContentsMargins(0, 0, 0, 0)
+        self._suggest_lay.setSpacing(2)
+        self._suggest_box.hide()
+        rv.addWidget(self._suggest_box)
 
         rv.addWidget(self._section_label(tr("text_chips_label")))
         self._chip_hint = QLabel()
@@ -274,17 +376,54 @@ class SvgTextInspectorWindow(QDialog):
         self._groups_widget.new_group_requested.connect(self._on_new_group)
         self._groups_widget.groups_changed.connect(self._on_groups_edited)
         self._groups_widget.members_requested.connect(self._on_members_requested)
-        rv.addWidget(self._groups_widget, 1)
+        rv.addWidget(self._groups_widget)
+
+        rv.addWidget(self._section_label(tr("svgtxt_elements_label")))
+
+        self._elem_list = QListWidget()
+        self._elem_list.setItemDelegate(TextMatchRowDelegate(self._elem_list))
+        self._elem_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._elem_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self._elem_list.setMinimumHeight(120)
+        self._elem_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._elem_list.customContextMenuRequested.connect(self._on_elem_context_menu)
+        self._elem_list.itemSelectionChanged.connect(self._on_list_selection)
+        rv.addWidget(self._elem_list, 2)
+
+        div = QFrame()
+        div.setFrameShape(QFrame.Shape.HLine)
+        rv.addWidget(div)
+        self._status_label = QLabel()
+        self._status_label.setWordWrap(True)
+        self._status_label.setForegroundRole(QPalette.ColorRole.PlaceholderText)
+        rv.addWidget(self._status_label)
+        footer = QHBoxLayout()
+        footer.addStretch(1)
+        self._btn_revert = QPushButton(tr("textmatch_revert"))
+        self._btn_revert.setToolTip(tr("textmatch_revert_tip"))
+        self._btn_revert.clicked.connect(self._on_revert)
+        footer.addWidget(self._btn_revert)
+        self._btn_done = QPushButton(tr("textmatch_done"))
+        self._btn_done.setToolTip(tr("textmatch_done_tip"))
+        self._btn_done.clicked.connect(self.close)
+        footer.addWidget(self._btn_done)
+        rv.addLayout(footer)
 
         splitter.addWidget(right)
         splitter.setChildrenCollapsible(False)
-        left.setMinimumWidth(300)
-        right.setMinimumWidth(380)
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([480, 500])
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([760, 360])
+        # Enter in a field must not close the window.
+        for button in self.findChildren(QPushButton):
+            button.setAutoDefault(False)
 
     _section_label = staticmethod(section_label)
+
+    def _on_fit(self):
+        self._preview_label._zoom.reset()
+        self._preview_label.view_changed.emit()
+        self._preview_label.update()
 
     # ──────────────────────────────────────────────────────────────────
     # Refresh helpers
@@ -349,7 +488,7 @@ class SvgTextInspectorWindow(QDialog):
         sz = renderer.defaultSize()
         if sz.isEmpty():
             sz.setWidth(400); sz.setHeight(400)
-        scale = min(_RENDER_MAX / sz.width(), _RENDER_MAX / sz.height(), 1.0)
+        scale = min(_RENDER_MAX / sz.width(), _RENDER_MAX / sz.height())
         w, h = int(sz.width() * scale), int(sz.height() * scale)
         img = QImage(w, h, QImage.Format.Format_ARGB32)
         img.fill(Qt.GlobalColor.transparent)
@@ -379,22 +518,150 @@ class SvgTextInspectorWindow(QDialog):
         self._elem_list.clear()
         groups = self._group_of_key()
         self._sizes = {}
-        for el in self._element_rows():
-            label = el['text'][:60]
+        rows = self._element_rows()
+        only_ungrouped = self._btn_filter.isChecked()
+
+        # Document order: the displayed size is the live group size, so sorting
+        # by it would reorder rows while a group's size is being stepped.
+        for el in rows:
+            key = el['key']
             if el['size_pt'] is not None:
-                self._sizes[el['key']] = round(el['size_pt'], 1)
-                label = f"{label} · {format_text_size(el['size_pt'])} pt"
-            group = groups.get(el['key'])
-            suffix = f"  [{group[1]}]" if group else ""
-            item = QListWidgetItem(f"{label}{suffix}")
-            item.setData(Qt.ItemDataRole.UserRole, el['key'])
-            colour = group_colour(self.project, group[0]) if group else None
-            if colour:
-                item.setIcon(dot_icon(colour))
+                self._sizes[key] = round(el['size_pt'], 1)
+            group = groups.get(key)
+            size_text = format_size(el['size_pt']) if el['size_pt'] is not None else ''
+            tip = el['text'][:60]
+            if size_text:
+                tip += f" · {size_text}"
+            tip += f" · {group[1] if group else tr('text_chip_ungrouped')}"
+            details = {
+                'text': el['text'][:60],
+                'colour': group_colour(self.project, group[0]) if group else None,
+                'size': size_text,
+                'checkable': False, 'checked': False, 'muted': False,
+                'warning': False,
+                'tooltip': tip,
+            }
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, key)
+            item.setData(REGION_DETAILS_ROLE, details)
+            item.setData(Qt.ItemDataRole.AccessibleTextRole, tip)
+            item.setToolTip(tip)
+            item.setHidden(only_ungrouped and group is not None)
             self._elem_list.addItem(item)
-            if el['key'] in sel_keys:
+            if key in sel_keys:
                 item.setSelected(True)
         self._elem_list.blockSignals(False)
+        self._refresh_summary(rows, groups)
+        self._refresh_suggest(rows, groups)
+        self._update_footer()
+
+    def _refresh_summary(self, rows, groups):
+        summary = svg_summary(rows, groups)
+        ungrouped = summary['total'] - summary['grouped']
+        self._summary_label.setText(tr('textmatch_summary_svg').format(
+            n=summary['total'], grouped=summary['grouped']))
+        self._btn_filter.blockSignals(True)
+        self._btn_filter.setText(tr('textmatch_filter_ungrouped').format(n=ungrouped))
+        self._btn_filter.setVisible(ungrouped > 0)
+        if ungrouped == 0:
+            self._btn_filter.setChecked(False)
+        self._btn_filter.blockSignals(False)
+
+    def _refresh_suggest(self, rows, groups):
+        while self._suggest_lay.count():
+            widget = self._suggest_lay.takeAt(0).widget()
+            if widget is not None:
+                widget.deleteLater()
+        items = [{'id': el['key'], 'size_pt': el['size_pt'],
+                  'text': el['text'], 'flagged': False}
+                 for el in rows
+                 if el['size_pt'] is not None and el['key'] not in groups]
+        clusters = size_clusters(items, SVG_REL_TOL)
+        self._suggest_label.setVisible(bool(clusters))
+        self._suggest_box.setVisible(bool(clusters))
+        for cluster in clusters:
+            self._suggest_lay.addWidget(self._suggest_row(cluster))
+
+    def _suggest_row(self, cluster):
+        ids = list(cluster['ids'])
+        row = QWidget()
+        row.setToolTip(tr('textmatch_suggest_tip'))
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lbl = QLabel(tr('textmatch_suggest_row_svg').format(
+            n=cluster['count'], pt=format_text_size(round(cluster['size_pt'], 1))))
+        font = lbl.font()
+        font.setBold(True)
+        lbl.setFont(font)
+        lay.addWidget(lbl)
+        samples = QLabel(', '.join(cluster['samples']))
+        samples.setWordWrap(True)
+        samples.setForegroundRole(QPalette.ColorRole.PlaceholderText)
+        lay.addWidget(samples, 1)
+        btn = QToolButton()
+        btn.setText(tr('textmatch_assign_btn'))
+        btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        btn.setAutoRaise(True)
+        menu = QMenu(btn)
+        populate_group_menu(
+            menu, self.project,
+            lambda gid, _ids=ids: self._assign_cluster(gid, _ids),
+            lambda _ids=ids, _pt=cluster['size_pt']: self._cluster_new_group(_ids, _pt),
+            lambda: None, can_remove=False)
+        actions = menu.actions()
+        if actions:
+            menu.removeAction(actions[-1])           # Remove-from-group
+            if len(actions) > 1 and actions[-2].isSeparator():
+                menu.removeAction(actions[-2])
+        btn.setMenu(menu)
+        lay.addWidget(btn)
+        row.mousePressEvent = lambda _e, _ids=ids: self._select_keys(_ids)
+        return row
+
+    def _assign_cluster(self, group_id, keys):
+        if assign_svg(self.project, self.svg_path, keys, group_id):
+            self._on_groups_edited()
+
+    def _cluster_new_group(self, keys, size_pt):
+        size = round(size_pt, 1)
+        gid = new_svg_group(self.project,
+                            tr('svgtxt_plot_group_name').format(pt=format_text_size(size)),
+                            size)
+        self._assign_cluster(gid, keys)
+
+    def _other_refs(self):
+        return {r.group_id
+                for c in self.project.get_all_leaf_cells()
+                for r in c.raster_text_regions if r.group_id}
+
+    def _live_cell(self):
+        return (self.project.find_cell_by_id(self._cell_id)
+                if self._cell_id is not None else None) or self._cell
+
+    def _revert_target(self):
+        return scoped_revert(capture(self.project, self._live_cell()),
+                             self._baseline,
+                             {"kind": "svg", "svg_path": self.svg_path},
+                             self._other_refs())
+
+    def _update_footer(self):
+        new_state, _kept = self._revert_target()
+        changed = new_state != capture(self.project, self._live_cell())
+        text = tr('textmatch_changed_status' if changed
+                  else 'textmatch_live_status')
+        if self._kept_names:
+            text += ' ' + tr('textmatch_revert_kept').format(
+                names=', '.join(self._kept_names))
+            self._kept_names = []
+        self._status_label.setText(text)
+        self._btn_revert.setEnabled(changed)
+
+    def _on_revert(self):
+        new_state, kept = self._revert_target()
+        restore(self.project, None, new_state)
+        self._kept_names = kept
+        self._on_groups_edited()
 
     def _update_selection_info(self):
         keys = self._selected_keys()
@@ -420,6 +687,7 @@ class SvgTextInspectorWindow(QDialog):
         menu.exec(self._elem_list.viewport().mapToGlobal(pos))
 
     def _on_groups_edited(self):
+        self._recorder.record()
         self._groups_widget.refresh()
         self._refresh_elements()
         self._refresh_preview()
@@ -489,4 +757,5 @@ class SvgTextInspectorWindow(QDialog):
 
     def refresh(self):
         """Re-populate after external changes (e.g. project reload)."""
+        self._recorder.rebase()
         self._refresh_all()

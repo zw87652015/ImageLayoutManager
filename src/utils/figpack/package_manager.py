@@ -133,6 +133,11 @@ class UnpackResult:
     project_data: Dict[str, Any]   # parsed project.json with paths resolved
     metadata: Dict[str, Any]       # parsed metadata.json (raw)
     missing_count: int = 0
+    # schema_version / file_version captured from project.json BEFORE
+    # migration, so the UI can warn when saving would upgrade a file
+    # written by an older release.
+    project_schema_version: Optional[int] = None
+    project_file_version: Optional[str] = None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -675,6 +680,7 @@ def _pack_project_json_only(
     preview_renderer: Optional[PreviewRendererCB],
     progress: Optional[ProgressCB],
     cancel: Optional[CancelCB],
+    project_transform=None,
 ) -> PackResult:
     """Fast path for ``update_json_only=True``.
 
@@ -732,6 +738,8 @@ def _pack_project_json_only(
 
     # Build new project.json.
     project_dict = project.to_dict()
+    if project_transform is not None:
+        project_dict = project_transform(project_dict)
     transformed = _transform_project_dict(project_dict, path_to_id)
 
     # Build new metadata: keep manifest as-is (status/sha256/sizes
@@ -875,6 +883,7 @@ def pack_project(
     cloud_resolver: Optional[CloudResolverCB] = None,
     progress: Optional[ProgressCB] = None,
     cancel: Optional[CancelCB] = None,
+    project_transform=None,
 ) -> PackResult:
     """Atomically write ``project`` to ``output_path`` as a ``.figpack``.
 
@@ -911,6 +920,7 @@ def pack_project(
             app_version=app_version,
             preview_renderer=preview_renderer,
             progress=progress, cancel=cancel,
+            project_transform=project_transform,
         )
 
     if progress:
@@ -946,6 +956,8 @@ def pack_project(
         project, progress=progress, cancel=cancel, skip_paths=skip_paths,
     )
     project_dict = project.to_dict()
+    if project_transform is not None:
+        project_dict = project_transform(project_dict)
     transformed = _transform_project_dict(project_dict, path_to_id)
     metadata = _build_metadata(manifest, app_version=app_version, project=project)
 
@@ -1365,6 +1377,14 @@ def unpack_project(
                     code="missing_project_json",
                 ) from e
             project_data = json.loads(project_bytes.decode("utf-8"))
+            _raw_schema = project_data.get("schema_version") if isinstance(project_data, dict) else None
+            _raw_writer = project_data.get("file_version") if isinstance(project_data, dict) else None
+            project_schema_version = (
+                _raw_schema if isinstance(_raw_schema, int) else None
+            )
+            project_file_version = (
+                _raw_writer if isinstance(_raw_writer, str) else None
+            )
 
             # Format-version gate.
             ver = metadata.get("figpack_format_version")
@@ -1438,6 +1458,8 @@ def unpack_project(
             project_data=project_data,
             metadata=metadata,
             missing_count=missing,
+            project_schema_version=project_schema_version,
+            project_file_version=project_file_version,
         )
     except BaseException:
         # Roll back partial extraction. The sentinel stays in place;

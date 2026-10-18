@@ -53,13 +53,19 @@ def delete_svg_group(project, group_id):
     project.svg_text_groups = [x for x in project.svg_text_groups if x.id != group_id]
 
 
-def assign_raster(regions, group_id):
-    """Put the raster *regions* into *group_id* and enable them. No-op without a group or regions."""
+def assign_raster(regions, group_id, enable_flagged=True):
+    """Put the raster *regions* into *group_id* and enable them.
+
+    With ``enable_flagged=False`` regions carrying a safety ``warning`` keep
+    their current ``enabled`` state (batch suggestion assignment leaves
+    review candidates unticked).  No-op without a group or regions.
+    """
     if not group_id or not regions:
         return False
     for region in regions:
         region.group_id = group_id
-        region.enabled = True
+        if enable_flagged or not region.warning:
+            region.enabled = True
     return True
 
 

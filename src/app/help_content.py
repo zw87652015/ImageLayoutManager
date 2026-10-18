@@ -307,8 +307,8 @@ TOPICS = (
              "右键图片单元格 → [文字与图表] → [匹配文字大小…]。"),
             ("Select texts, then click a group chip, or right-click → [Add to Group].",
              "选中文字后点击组芯片，或右键 → [加入组]。"),
-            ("Set the group size in points (pt); members update across the project.",
-             "设置组字号（pt），组内文字在整个工程中同步更新。"),
+            ("Set the group size in pt; Revert or Ctrl+Z undoes the session.",
+             "设置组字号（pt），修改即时生效；“还原”或 Ctrl+Z 可撤销本次修改。"),
         ),
         details=(
             ("Sizes are final-figure points, independent of export DPI.",

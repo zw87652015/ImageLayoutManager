@@ -7,13 +7,47 @@ All loaders validate and upgrade copied data before constructing a Project.
 """
 
 import copy
+import json
 import math
 import re
 from typing import Dict, Any, List, Tuple, Callable, Optional
 
 from src.version import APP_VERSION
 
-PROJECT_SCHEMA_VERSION = 7
+PROJECT_SCHEMA_VERSION = 8
+
+# First ILM release that writes each schema version (schema 3 was
+# never released). Used by "Save Copy for Older ILM" and by the
+# overwrite warning shown when saving over a file an older release
+# wrote.
+SCHEMA_FIRST_RELEASE = {
+    1: "3.4.0",
+    2: "3.4.1",
+    4: "3.4.2",
+    5: "3.5.1",
+    6: "3.5.2",
+    7: "3.6.0",
+    8: "3.7.0",
+}
+
+
+def read_project_meta(path: str) -> Tuple[Optional[int], Optional[str]]:
+    """Return ``(schema_version, file_version)`` stored in a plain project
+    JSON file *before* any migration runs, or ``(None, None)`` when the
+    file cannot be parsed as a project dict."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    schema = data.get("schema_version")
+    writer = data.get("file_version")
+    return (
+        schema if isinstance(schema, int) else None,
+        writer if isinstance(writer, str) else None,
+    )
 
 
 class ProjectMigrationError(ValueError):
@@ -215,7 +249,13 @@ def _validate_structure(data):
         for pip in _records(cell, 'pip_items'):
             if points:
                 _validate_point_sizes(pip, ('scale_bar_text_size_pt',))
-        _records(cell, 'raster_text_regions')
+        for region in _records(cell, 'raster_text_regions'):
+            if 'angle' in region:
+                value = region['angle']
+                if (type(value) not in (int, float) or not math.isfinite(value)
+                        or not -90.0 < value <= 90.0):
+                    raise ProjectMigrationError(
+                        f'Invalid raster text region angle: {value!r}.')
         if points:
             _validate_point_sizes(cell, ('scale_bar_text_size_pt', 'svg_normalize_text_pt'))
         if 'plot_reflow' in cell and type(cell['plot_reflow']) is not bool:
@@ -332,9 +372,19 @@ def _migrate_schema_6_to_7(data):
     return data
 
 
+def _migrate_schema_7_to_8(data):
+    stack = list(data.get('cells', []))
+    while stack:
+        cell = stack.pop()
+        for region in cell.get('raster_text_regions', []):
+            region.setdefault('angle', 0.0)
+        stack.extend(cell.get('children', []))
+    return data
+
+
 SCHEMA_MIGRATIONS = {0: _migrate_schema_0_to_1, 1: _migrate_schema_1_to_2, 2: _migrate_schema_2_to_3,
                      3: _migrate_schema_3_to_4, 4: _migrate_schema_4_to_5, 5: _migrate_schema_5_to_6,
-                     6: _migrate_schema_6_to_7}
+                     6: _migrate_schema_6_to_7, 7: _migrate_schema_7_to_8}
 
 
 def migrate_project_data(data: Dict[str, Any]) -> Dict[str, Any]:
