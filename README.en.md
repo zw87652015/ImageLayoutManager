@@ -1,5 +1,7 @@
 # ImageLayoutManager
 
+[![DOI](https://zenodo.org/badge/1117640281.svg)](https://doi.org/10.5281/zenodo.23957684)
+
 [中文说明](README.md)
 
 Academic Image Layout Manager.

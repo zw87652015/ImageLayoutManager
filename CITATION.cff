@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Image Layout Manager"
+authors:
+  - family-names: Jiang
+    given-names: Luojia
+    orcid: "https://orcid.org/0009-0009-2559-7273"
+doi: 10.5281/zenodo.23957684
+license: Apache-2.0
+repository-code: "https://github.com/zw87652015/ImageLayoutManager"
+keywords:
+  - scientific figures
+  - figure layout
+  - academic publishing
+  - image composition
+  - data visualization

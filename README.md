@@ -1,5 +1,7 @@
 # ImageLayoutManager — 学术图像排版工具
 
+[![DOI](https://zenodo.org/badge/1117640281.svg)](https://doi.org/10.5281/zenodo.23957684)
+
 [English README](README.en.md)
 
 ## 简介
