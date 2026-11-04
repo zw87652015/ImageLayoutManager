@@ -1,0 +1,20 @@
+{
+  "title": "Image Layout Manager",
+  "description": "Image Layout Manager is a desktop application for composing multi-panel academic figures: grid and freeform layouts, automatic panel labels, text-size matching across SVG and raster panels, a built-in plot editor, and export to PDF, PNG, TIFF and SVG.",
+  "upload_type": "software",
+  "creators": [
+    {
+      "name": "Jiang, Luojia",
+      "orcid": "0009-0009-2559-7273"
+    }
+  ],
+  "license": "Apache-2.0",
+  "access_right": "open",
+  "keywords": [
+    "scientific figures",
+    "figure layout",
+    "academic publishing",
+    "image composition",
+    "data visualization"
+  ]
+}
