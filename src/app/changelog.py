@@ -9,6 +9,22 @@ from src.app.i18n import current_language
 
 # (version, date, bullets)
 CHANGELOG = [
+    ("3.7.1", "2026-11-25", [
+        {"en": "Double-click a line symbol in the Plot Editor legend to edit that curve's appearance, even when curves overlap.",
+         "zh": "在图表编辑器中双击图例里的线条符号，即可修改对应曲线的样式，曲线重叠时也能直接选中。"},
+        {"en": "Legend settings let you show or hide individual automatic entries or write custom text with Origin-style placeholders (\\l(n) for symbols, %(n) for labels) and LaTeX math in $…$.",
+         "zh": "图例设置可逐项显示或隐藏自动图例，也可用类似 Origin 的占位符自定义图例（\\l(n) 插入符号，%(n) 插入标签），并用 $…$ 输入 LaTeX 数学公式。"},
+        {"en": "Set a worksheet column to Function Curve and enter a formula in its first data cell to plot a curve such as \\sin(x) or \\log(x), or a reference line such as x=3 or y=2.",
+         "zh": "将工作表中的列设为“函数曲线”，在首个数据单元格输入公式，即可绘制 \\sin(x)、\\log(x) 等曲线，或 x=3、y=2 等参考线。"},
+        {"en": "Use MCP tools or the command line to create, inspect and edit .ilmplot.svg plots and export them as images or PDFs.",
+         "zh": "可通过 MCP 工具或命令行创建、查看和编辑 .ilmplot.svg 图表，并导出为图片或 PDF。"},
+        {"en": "Fixed garbled Chinese text when a worksheet long name contains both Chinese and LaTeX math.",
+         "zh": "修复工作表长名称中中文与 LaTeX 公式混排时的中文乱码。"},
+        {"en": "Fixed a case where chart labels stopped updating after worksheet names, units or comments were edited.",
+         "zh": "修复修改工作表中的长名称、单位或注释后，图中文字有时不再更新的问题。"},
+        {"en": "Fixed an issue where newly inserted worksheet columns could appear without Long Name, Units and Comments cells.",
+         "zh": "修复插入工作表新列后，长名称、单位和注释单元格偶尔不显示的问题。"},
+    ]),
     ("3.7.0", "2026-10-18", [
         {"en": "Match Text Size redesigned: a one-line list with sizes in pt, a summary of what still needs review, and suggested groups that put labels of similar size into a group in one step.",
          "zh": "重新设计“匹配文字大小”：单行列表直接显示磅值，摘要提示仍需确认的项目，“建议分组”可一步把字号相近的文字归入同一组。"},

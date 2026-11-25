@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 import threading
 import urllib.request
@@ -245,6 +246,8 @@ class AboutDialog(QDialog):
 
         links = QHBoxLayout()
         links.setSpacing(18)
+        citation_btn = self._link_button(tr("about_citation") + "…", self._show_citation)
+        links.addWidget(citation_btn)
         licenses_btn = self._link_button(tr("about_licenses"), self._show_licenses)
         links.addWidget(licenses_btn)
         self._changelog_btn = self._link_button("▸ " + tr("about_changelog"), self._toggle_changelog)
@@ -313,7 +316,6 @@ class AboutDialog(QDialog):
         root.addLayout(footer)
 
     def _build_changelog(self):
-        import html
         from PyQt6.QtWidgets import QScrollArea, QToolButton, QWidget
         from src.app.changelog import CHANGELOG
         from src.app.i18n import current_language
@@ -387,6 +389,60 @@ class AboutDialog(QDialog):
         from src.app.license_dialog import LicenseDialog
         dlg = LicenseDialog(self)
         dlg.exec()
+
+    def _show_citation(self):
+        from PyQt6.QtWidgets import QApplication, QDialogButtonBox
+        from src.version import APP_CITATION_BIBTEX, APP_CITATION_REFERENCE, APP_CITATION_URL
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("about_citation"))
+        dialog.setMinimumWidth(self.width())
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 20, 24, 16)
+        layout.setSpacing(12)
+
+        prompt = QLabel(tr("about_citation_prompt"))
+        prompt.setWordWrap(True)
+        layout.addWidget(prompt)
+
+        citation = QLabel(
+            f"{html.escape(APP_CITATION_REFERENCE)} "
+            + self._link(APP_CITATION_URL, APP_CITATION_URL)
+        )
+        citation.setTextFormat(Qt.TextFormat.RichText)
+        citation.setWordWrap(True)
+        citation.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        citation.setOpenExternalLinks(True)
+        layout.addWidget(citation)
+
+        feedback = QLabel(tr("about_citation_copied"))
+        feedback.setObjectName("aboutMeta")
+        policy = feedback.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        feedback.setSizePolicy(policy)
+        feedback.hide()
+        layout.addWidget(feedback)
+
+        def copy_text(text):
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(text)
+                feedback.show()
+
+        buttons = QDialogButtonBox()
+        copy_reference = buttons.addButton(
+            tr("about_citation_copy"), QDialogButtonBox.ButtonRole.ActionRole)
+        copy_reference.setAutoDefault(False)
+        copy_reference.clicked.connect(
+            lambda: copy_text(f"{APP_CITATION_REFERENCE} {APP_CITATION_URL}"))
+        copy_bibtex = buttons.addButton(
+            tr("about_citation_copy_bibtex"), QDialogButtonBox.ButtonRole.ActionRole)
+        copy_bibtex.setAutoDefault(False)
+        copy_bibtex.clicked.connect(lambda: copy_text(APP_CITATION_BIBTEX))
+        buttons.addButton(tr("about_close"), QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def _toggle_changelog(self):
         show = not self._changelog_view.isVisible()

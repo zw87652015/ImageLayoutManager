@@ -19,3 +19,21 @@ APP_COPYRIGHT = (
     f"Licensed under {APP_LICENSE}."
 )
 APP_PUBLISHER_URL = "https://github.com/zw87652015/ImageLayoutManager"
+
+# Keep the software-wide DOI and author in sync with CITATION.cff.
+APP_CITATION_DOI = "10.5281/zenodo.23957684"
+APP_CITATION_URL = f"https://doi.org/{APP_CITATION_DOI}"
+_CITATION_YEAR = 2026
+APP_CITATION_REFERENCE = (
+    f"Jiang, L. ({_CITATION_YEAR}). {APP_NAME} [Computer software]. Zenodo."
+)
+APP_CITATION_BIBTEX = (
+    "@misc{jiang_image_layout_manager,\n"
+    "  author = {Jiang, Luojia},\n"
+    f"  title = {{{{{APP_NAME}}}}},\n"
+    f"  year = {{{_CITATION_YEAR}}},\n"
+    "  howpublished = {Zenodo},\n"
+    f"  doi = {{{APP_CITATION_DOI}}},\n"
+    f"  url = {{{APP_CITATION_URL}}}\n"
+    "}\n"
+)

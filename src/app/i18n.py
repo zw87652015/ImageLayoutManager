@@ -722,6 +722,12 @@ _T: dict[str, dict[str, str]] = {
 
     # ── About dialog ─────────────────────────────────────────────
     "about_title":          {"en": "About Image Layout Manager", "zh": "关于 Image Layout Manager"},
+    "about_citation":       {"en": "Cite This Software", "zh": "引用本软件"},
+    "about_citation_prompt": {"en": "If you used Image Layout Manager to prepare figures for a paper, please cite the software in your references.",
+                              "zh": "如果您使用 Image Layout Manager 制作论文图件，请在参考文献中引用本软件。"},
+    "about_citation_copy":  {"en": "Copy Citation", "zh": "复制引用"},
+    "about_citation_copy_bibtex": {"en": "Copy BibTeX", "zh": "复制 BibTeX"},
+    "about_citation_copied": {"en": "Copied to clipboard.", "zh": "已复制到剪贴板。"},
     "about_changelog":      {"en": "What's New",         "zh": "更新日志"},
     "about_version":        {"en": "Version {version}",  "zh": "版本 {version}"},
     "about_changes_count":  {"en": "{n} changes",        "zh": "{n} 项更新"},
