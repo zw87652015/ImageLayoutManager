@@ -31,16 +31,24 @@ class Series:
     yerr: tuple | None = None
     yerr_minus: tuple | None = None
     yerr_plus: tuple | None = None
+    # Function-curve series: the formula text typed in the Function
+    # column's first cell (already sampled into ``x``/``y``).
+    function: 'str | None' = None
+
+
+def function_text(column):
+    """Formula text of a Function column: its first data cell."""
+    return format_cell(column.values[0]) if column.values else ''
 
 
 def _error_columns(worksheet, y_col):
     """(sym, plus, minus) error column indices for a Y column: the
-    first column of each role to its right before the next Y column
-    (whole sheet scanned)."""
+    first column of each role to its right before the next Y or
+    Function column (whole sheet scanned)."""
     sym = plus = minus = None
     for c in range(y_col + 1, worksheet.column_count):
         d = worksheet.column(c).designation
-        if d == 'Y':
+        if d in ('Y', 'Function'):
             break
         if d == 'yErr' and sym is None:
             sym = c
@@ -95,19 +103,25 @@ def _group_label(column, index):
     return text
 
 
-def build_series(worksheet, selected_columns):
-    """One ``Series`` per selected Y column (nearest X to the left)."""
+def build_series(worksheet, selected_columns, functions=True):
+    """One ``Series`` per selected Y column (nearest X to the left)
+    plus one per Function column — a formula from its first cell
+    sampled over the data range — interleaved in column order."""
+    from .formula import FormulaError, parse, sample
     cols = sorted(set(selected_columns))
     ys = [c for c in cols
           if worksheet.column(c).designation == 'Y']
-    if not ys:
+    fs = [c for c in cols
+          if functions
+          and worksheet.column(c).designation == 'Function']
+    if not ys and not fs:
         raise PlotSelectionError(tr('err_no_y'))
     xs = [c for c in cols
           if worksheet.column(c).designation in ('X', 'Label')]
     if not xs:
         xs = [i for i in range(worksheet.column_count)
               if worksheet.column(i).designation == 'X']
-    series = []
+    pairs = []
     for yc in ys:
         ycol = worksheet.column(yc)
         xc = max((c for c in xs if c < yc), default=None)
@@ -153,16 +167,58 @@ def build_series(worksheet, selected_columns):
             x_label = _axis_title(worksheet.column(xc), xc)
         else:
             x_label = 'Row'
-        series.append(Series(tuple(x_values), tuple(y_values),
-                             _legend_text(ycol, yc), x_label, y_label,
-                             tuple(ticklabels) if categorical else None,
-                             yc,
-                             tuple(yerr) if yerr is not None else None,
-                             tuple(yerr_minus)
-                             if yerr_minus is not None else None,
-                             tuple(yerr_plus)
-                             if yerr_plus is not None else None))
+        pairs.append((yc, Series(
+            tuple(x_values), tuple(y_values),
+            _legend_text(ycol, yc), x_label, y_label,
+            tuple(ticklabels) if categorical else None,
+            yc,
+            tuple(yerr) if yerr is not None else None,
+            tuple(yerr_minus)
+            if yerr_minus is not None else None,
+            tuple(yerr_plus)
+            if yerr_plus is not None else None)))
+    data_series = [s for _c, s in pairs]
+    if data_series:
+        all_x = [v for s in data_series for v in s.x]
+        all_y = [v for s in data_series for v in s.y]
+        x_range = (min(all_x), max(all_x))
+        y_range = (min(all_y), max(all_y))
+    else:
+        x_range = y_range = (-10.0, 10.0)
+    first_err = None
+    for fc in fs:
+        fcol = worksheet.column(fc)
+        text = function_text(fcol)
+        if not text.strip():
+            if first_err is None:
+                first_err = tr('err_function_empty')
+            continue
+        try:
+            formula = parse(text)
+        except FormulaError as e:
+            if first_err is None:
+                first_err = str(e)
+            continue
+        lo, hi = x_range if formula.axis == 'y' else y_range
+        fx, fy = sample(formula, lo, hi)
+        if len(fx) < (1 if formula.constant else 2):
+            continue
+        lab = _legend_text(fcol, fc)
+        if lab == column_name(fc):
+            lab = text
+        if data_series:
+            x_label, y_label = (data_series[0].x_label,
+                                data_series[0].y_label)
+        else:
+            x_label, y_label = 'x', 'y'
+        pairs.append((fc, Series(tuple(fx), tuple(fy), lab,
+                                x_label, y_label, None, fc,
+                                function=text)))
+    pairs.sort(key=lambda p: p[0])
+    series = [s for _c, s in pairs]
     if not series:
+        if not ys and first_err is not None:
+            raise PlotSelectionError(first_err)
         raise PlotSelectionError(tr('err_no_numeric'))
     return series
 

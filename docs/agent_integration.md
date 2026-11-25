@@ -1,6 +1,6 @@
 # ImageLayoutManager — Agent Integration Design
 
-**Status**: implemented MCP/GUI bridge, 43-tool surface  
+**Status**: implemented MCP/GUI bridge, 48-tool surface  
 **Owner**: zw87652015  
 **Date**: 2026-05-29
 

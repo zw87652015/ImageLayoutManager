@@ -58,8 +58,11 @@ def math_pixmap(text, font, color, dpr):
         from ilmplot.render import available_font_families
         if family not in available_font_families():
             family = None
-        png = _render_png(safe_text(text), family, size_pt,
-                          weight, rgba, float(dpr or 1.0))
+        from ilmplot.mathtext import math_font_family
+        fams = [family] if family else ['sans-serif']
+        cover = math_font_family(safe_text(text), fams)
+        png = _render_png(safe_text(text), cover or family,
+                          size_pt, weight, rgba, float(dpr or 1.0))
         img = QImage.fromData(png)
         if img.isNull():
             return None

@@ -1569,6 +1569,30 @@ def _draw_brackets(document, ax, s):
         t.set_gid(gid)
 
 
+def _fix_math_text_fonts(fig):
+    """Prepend a glyph-covering family to math-bearing ``Text`` artists.
+
+    Mathtext renders the non-math runs of a ``$...$`` string with the
+    Text's single resolved font, so e.g. CJK next to math would draw
+    ``¤``. ``math_font_family`` finds an installed family covering
+    those characters; the math runs keep their own math fonts.
+    """
+    from matplotlib.text import Text
+    from .mathtext import math_font_family
+    # Tick label strings are only final at draw time; the accessor
+    # populates them (formatter included) without a renderer.
+    for ax_ in fig.axes:
+        for axis in (ax_.xaxis, ax_.yaxis):
+            axis.get_majorticklabels()
+            axis.get_minorticklabels()
+    for artist in fig.findobj(Text):
+        fam = math_font_family(artist.get_text(),
+                               artist.get_fontfamily())
+        if fam is not None:
+            artist.set_fontfamily(
+                [fam] + list(artist.get_fontfamily()))
+
+
 def _build_figure(document: PlotDocument, s: float,
                   width_mm: float, height_mm: float):
     """Build (Figure, Axes) for *document* at typography scale *s*."""
@@ -1937,10 +1961,20 @@ def _build_figure(document: PlotDocument, s: float,
                         alpha=grid.alpha)
     if document.legend:
         from matplotlib.patches import Patch
+        # Item tables for template refs — ``main`` aligns with
+        # document.series/categories/groups, ``bands_t``/``spans_t``
+        # with document.bands/spans; entries are (key, handle, label).
+        main, bands_t, spans_t = [], [], []
         if kind == 'stacked_column':
-            handles = [Patch(facecolor=c.color,
-                             label=safe_text(c.label) or '_nolegend_')
-                       for c in document.categories]
+            handles = []
+            entry_keys = []
+            for c in document.categories:
+                key = 'stack:%s' % c.id
+                handle = Patch(facecolor=c.color,
+                               label=safe_text(c.label) or '_nolegend_')
+                handles.append(handle)
+                entry_keys.append(key)
+                main.append((key, handle, c.label))
             patch_handles = True
         elif kind == 'histogram':
             h_opt = document.histogram
@@ -1962,53 +1996,144 @@ def _build_figure(document: PlotDocument, s: float,
                     Patch(facecolor=to_rgba(g.color, alpha),
                           label=l or '_nolegend_')
                     for g, l in zip(document.groups, h_labels)]
+            entry_keys = ['hist:%s' % g.id for g in document.groups]
+            for g, handle in zip(document.groups, handles):
+                main.append(('hist:%s' % g.id, handle, g.label))
             patch_handles = True
         else:
             patch_handles = False
             handles = [l for l in ax.get_lines()
                        if l.get_label()
                        and not l.get_label().startswith('_')]
-            handles += [Patch(facecolor=b_.color,
-                              label=safe_text(b_.label))
-                        for b_ in document.bands if b_.label]
-            handles += [Patch(facecolor=sp_.color,
-                              label=safe_text(sp_.label))
-                        for sp_ in document.spans if sp_.label]
-        if handles:
-            leg_style = getattr(style, 'legend', None) \
-                if style is not None else None
-            loc = document.legend_location
-            leg_kw = {'loc': loc,
-                      'fontsize': document.font_size_pt * s}
-            if loc == 'outside right':
-                leg_kw['loc'] = 'center left'
-                leg_kw['bbox_to_anchor'] = (1.02, 0.5)
-            if leg_style is not None:
-                leg_kw['ncols'] = leg_style.ncols
-                leg_kw['frameon'] = leg_style.frame
-                if leg_style.frame_color != '#cccccc':
-                    leg_kw['edgecolor'] = leg_style.frame_color
-                if leg_style.text is not None:
-                    from matplotlib.font_manager import FontProperties
-                    ts = leg_style.text
-                    # ``prop`` supersedes ``fontsize`` — drop it.
-                    del leg_kw['fontsize']
-                    leg_kw['prop'] = FontProperties(
-                        family=ts.family or document.font_family,
-                        size=(ts.size_pt * s if ts.size_pt is not None
-                              else document.font_size_pt * s),
-                        weight='bold' if ts.bold else 'normal',
-                        style='italic' if ts.italic else 'normal')
-                    leg_kw['labelcolor'] = ts.color
-            leg = ax.legend(handles=handles, **leg_kw)
+            entry_keys = []
+            for l in handles:
+                gid = l.get_gid() or ''
+                entry_keys.append(
+                    'series:' + gid[len('ilmplot-series-'):]
+                    if gid.startswith('ilmplot-series-') else None)
+            by_gid = {}
+            for l in ax.get_lines():
+                gid = l.get_gid() or ''
+                if gid.startswith('ilmplot-series-'):
+                    by_gid.setdefault(gid, []).append(l)
+            for s_ in document.series:
+                cands = by_gid.get('ilmplot-series-%s' % s_.id, [])
+                handle = next(
+                    (l for l in cands
+                     if not (l.get_label() or '').startswith('_')),
+                    cands[0] if cands else None)
+                main.append(('series:%s' % s_.id, handle, s_.label))
+            bands_t = [('band:%s' % b_.id,
+                        Patch(facecolor=b_.color,
+                              label=safe_text(b_.label)),
+                        b_.label)
+                       for b_ in document.bands]
+            handles += [p for _k, p, lab in bands_t if lab]
+            entry_keys += [k for k, _p, lab in bands_t if lab]
+            spans_t = [('span:%s' % sp_.id,
+                        Patch(facecolor=sp_.color,
+                              label=safe_text(sp_.label)),
+                        sp_.label)
+                       for sp_ in document.spans]
+            handles += [p for _k, p, lab in spans_t if lab]
+            entry_keys += [k for k, _p, lab in spans_t if lab]
+        leg_style = getattr(style, 'legend', None) \
+            if style is not None else None
+        loc = document.legend_location
+        leg_kw = {'loc': loc,
+                  'fontsize': document.font_size_pt * s}
+        if loc == 'outside right':
+            leg_kw['loc'] = 'center left'
+            leg_kw['bbox_to_anchor'] = (1.02, 0.5)
+        if leg_style is not None:
+            leg_kw['ncols'] = leg_style.ncols
+            leg_kw['frameon'] = leg_style.frame
+            if leg_style.frame_color != '#cccccc':
+                leg_kw['edgecolor'] = leg_style.frame_color
+            if leg_style.text is not None:
+                from matplotlib.font_manager import FontProperties
+                ts = leg_style.text
+                # ``prop`` supersedes ``fontsize`` — drop it.
+                del leg_kw['fontsize']
+                leg_kw['prop'] = FontProperties(
+                    family=ts.family or document.font_family,
+                    size=(ts.size_pt * s if ts.size_pt is not None
+                          else document.font_size_pt * s),
+                    weight='bold' if ts.bold else 'normal',
+                    style='italic' if ts.italic else 'normal')
+                leg_kw['labelcolor'] = ts.color
+        leg = None
+        if document.legend_text is None:
+            hidden = set(document.legend_hidden or ())
+            if hidden:
+                pairs = [(k, h) for k, h in zip(entry_keys, handles)
+                         if k not in hidden]
+                entry_keys = [k for k, _h in pairs]
+                handles = [h for _k, h in pairs]
+            if handles:
+                leg = ax.legend(handles=handles, **leg_kw)
+                if leg is not None:
+                    leg._ilmplot_entries = [
+                        (key, h.get_label())
+                        for key, h in zip(entry_keys, handles)]
+        else:
+            from matplotlib.patches import Rectangle
+            from matplotlib.legend_handler import HandlerTuple
+            from .legend_text import parse_template, substitute
+
+            def _ref_item(ref):
+                if ref[0] == 'B':
+                    table, idx = bands_t, int(ref[1:]) - 1
+                elif ref[0] == 'S':
+                    table, idx = spans_t, int(ref[1:]) - 1
+                else:
+                    table, idx = main, int(ref) - 1
+                return table[idx] if 0 <= idx < len(table) else None
+
+            def _label_of(ref):
+                item = _ref_item(ref)
+                return item[2] if item is not None else None
+
+            # Text-only rows get an invisible proxy handle so the row
+            # still lines up with the symbol rows.
+            proxy = Rectangle((0, 0), 1, 1, fill=False,
+                              edgecolor='none', visible=False)
+            t_handles, t_labels, t_keys = [], [], []
+            for refs, text in parse_template(document.legend_text):
+                items = [it for it in (_ref_item(r) for r in refs)
+                         if it is not None]
+                row_handles = [it[1] for it in items
+                               if it[1] is not None]
+                if not row_handles:
+                    row_h = proxy
+                elif len(row_handles) == 1:
+                    row_h = row_handles[0]
+                else:
+                    row_h = tuple(row_handles)
+                t_handles.append(row_h)
+                t_labels.append(
+                    safe_text(substitute(text, _label_of)) or ' ')
+                t_keys.append(items[0][0]
+                              if len(refs) == 1 and items else None)
+            leg = ax.legend(handles=t_handles, labels=t_labels,
+                            handler_map={tuple: HandlerTuple(
+                                ndivide=None)},
+                            **leg_kw)
             if leg is not None:
-                frame = leg.get_frame()
-                frame.set_linewidth(frame.get_linewidth() * s)
-                if leg_style is not None and leg_style.text is not None \
-                        and leg_style.text.underline:
-                    underlines.append(
-                        lambda leg=leg: [t for t in leg.get_texts()
-                                         if t.get_visible()])
+                leg._ilmplot_entries = list(zip(t_keys, t_labels))
+                patch_handles = all(
+                    isinstance(h, Patch)
+                    for row in t_handles
+                    for h in (row if isinstance(row, tuple)
+                              else (row,)))
+        if leg is not None:
+            frame = leg.get_frame()
+            frame.set_linewidth(frame.get_linewidth() * s)
+            if leg_style is not None and leg_style.text is not None \
+                    and leg_style.text.underline:
+                underlines.append(
+                    lambda leg=leg: [t for t in leg.get_texts()
+                                     if t.get_visible()])
     _draw_annotations(document, ax, s)
     _draw_brackets(document, ax, s)
     # Brackets sit above the data; auto-scaled y limits don't reach them.
@@ -2028,6 +2153,7 @@ def _build_figure(document: PlotDocument, s: float,
     if underlines:
         _add_underline(ax, lambda: [t for get in underlines
                                     for t in get()])
+    _fix_math_text_fonts(fig)
     return fig, ax
 
 
@@ -2102,6 +2228,37 @@ def element_regions(document: PlotDocument) -> dict:
             leg = ax.get_legend()
             if leg is not None:
                 regions['legend'] = frac(leg.get_window_extent(renderer))
+                entries = getattr(leg, '_ilmplot_entries', None) or []
+                # ``legend_handles`` is the 3.9+ name; older supported
+                # matplotlib only has ``legendHandles``.
+                lh = getattr(leg, 'legend_handles', None) \
+                    or getattr(leg, 'legendHandles', None) or []
+                texts = leg.get_texts()
+                if len(entries) != len(lh):
+                    # Some matplotlib versions drop '_' labels even
+                    # for explicit handles — realign before pairing.
+                    entries = [e for e in entries
+                               if not (isinstance(e[1], str)
+                                       and e[1].startswith('_'))]
+                entry_regions = {}
+                if len(entries) == len(lh):
+                    for (key, _label), handle, text in zip(
+                            entries, lh, texts):
+                        if key is None or handle is None:
+                            continue
+                        try:
+                            hb = handle.get_window_extent(renderer)
+                            tb = text.get_window_extent(renderer)
+                        except Exception:
+                            continue
+                        # x-range = the handle sample only; y-range =
+                        # the whole row (a line handle has ~no height).
+                        bb = type(hb).from_extents(
+                            hb.x0, min(hb.y0, tb.y0),
+                            hb.x1, max(hb.y1, tb.y1))
+                        entry_regions[key] = frac(bb)
+                if entry_regions:
+                    regions['legend_entries'] = entry_regions
             rect = ax.get_position()
             regions['frame'] = (rect.x0, 1.0 - rect.y1,
                                 rect.x1, 1.0 - rect.y0)

@@ -22,6 +22,8 @@ import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field, fields
 
+from .legend_text import MAX_LEGEND_LINES, MAX_LEGEND_TEXT
+
 SCHEMA_VERSION = 1
 METADATA_ID = 'ilm-plot-document'
 FORMAT_NAME = 'ilm-plot'
@@ -33,7 +35,7 @@ FORMAT_NAME = 'ilm-plot'
 CAPABILITIES = frozenset({'bands', 'error_band', 'spans', 'box_plot',
                           'column_points', 'histogram',
                           'horizontal_bars', 'sample_counts',
-                          'step_lines', 'heatmap'})
+                          'step_lines', 'heatmap', 'legend_custom'})
 
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_SERIES = 100
@@ -72,6 +74,7 @@ MAX_ANNOTATIONS = 20
 MAX_BRACKETS = 20
 MAX_BANDS = 20
 MAX_SPANS = 20
+MAX_LEGEND_HIDDEN = 500
 
 
 class PlotDocumentError(ValueError):
@@ -198,6 +201,43 @@ def _check_requires(value, ctx: str):
     return list(value)
 
 
+_LEGEND_HIDDEN_RE = re.compile(r'^(series|stack|hist|band|span):.+$')
+
+
+def _check_legend_hidden(value, ctx: str):
+    """Hidden legend-entry keys: unique 'kind:id' strings, <= 500.
+    Keys naming no plotted item are tolerated."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_LEGEND_HIDDEN:
+        raise _err(f"{ctx}: expected a list of at most {MAX_LEGEND_HIDDEN} "
+                   "entry keys")
+    out, seen = [], set()
+    for i, v in enumerate(value):
+        if not isinstance(v, str) or not _LEGEND_HIDDEN_RE.match(v):
+            raise _err(f"{ctx}[{i}]: expected 'series:'/'stack:'/'hist:'/"
+                       f"'band:'/'span:' + id, got {v!r}")
+        if v in seen:
+            raise _err(f"{ctx}[{i}]: duplicate entry key {v!r}")
+        seen.add(v)
+        out.append(v)
+    return out
+
+
+def _check_legend_text(value, ctx: str):
+    """Custom legend template: null or a non-blank string within the
+    size limits of ``ilmplot.legend_text``."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise _err(f"{ctx}: expected null or a non-blank string")
+    if len(value) > MAX_LEGEND_TEXT:
+        raise _err(f"{ctx}: at most {MAX_LEGEND_TEXT} characters")
+    if len(value.split('\n')) > MAX_LEGEND_LINES:
+        raise _err(f"{ctx}: at most {MAX_LEGEND_LINES} lines")
+    return value
+
+
 def required_capabilities(document) -> list:
     """Capability ids that must be stamped on *document*'s output."""
     req = []
@@ -235,6 +275,9 @@ def required_capabilities(document) -> list:
     st = getattr(document, 'stacked', None)
     if st is not None and getattr(st, 'horizontal', False):
         req.append('horizontal_bars')
+    if getattr(document, 'legend_hidden', None) \
+            or getattr(document, 'legend_text', None) is not None:
+        req.append('legend_custom')
     return sorted(req)
 
 
@@ -1701,6 +1744,12 @@ class PlotDocument:
     x_tick_labels: list | None = None
     legend: bool = True
     legend_location: str = 'best'
+    # Legend customization: ``legend_hidden`` lists entry keys
+    # ('series:'/'stack:'/'hist:'/'band:'/'span:' + id) dropped from the
+    # automatic legend; ``legend_text`` switches to a custom template
+    # (see legend_text.py) and ignores ``legend_hidden``.
+    legend_hidden: list = field(default_factory=list)
+    legend_text: 'str | None' = None
     grid: bool = False
     series: list = field(default_factory=lambda: [LineSeries()])
     # 'violin' data; 'stacked_column' data; per-kind option objects.
@@ -1766,6 +1815,10 @@ class PlotDocument:
         if self.legend_location not in LEGEND_LOCATIONS:
             raise _err(f"{ctx}.legend_location: unsupported "
                        f"{self.legend_location!r}")
+        self.legend_hidden = _check_legend_hidden(
+            self.legend_hidden, f"{ctx}.legend_hidden")
+        self.legend_text = _check_legend_text(
+            self.legend_text, f"{ctx}.legend_text")
         owners = {'violin': 'violin', 'stacked': 'stacked_column',
                   'ridgeline': 'ridgeline', 'histogram': 'histogram',
                   'heatmap': 'heatmap'}
@@ -2013,6 +2066,10 @@ class PlotDocument:
         # are rejected by from_dict).
         if self.x_tick_labels is not None:
             d['x_tick_labels'] = [[p, l] for p, l in self.x_tick_labels]
+        if self.legend_hidden:
+            d['legend_hidden'] = list(self.legend_hidden)
+        if self.legend_text is not None:
+            d['legend_text'] = self.legend_text
         if self.groups:
             d['groups'] = [g.to_dict() for g in self.groups]
         if self.categories:
@@ -2107,6 +2164,10 @@ class PlotDocument:
         if loc not in LEGEND_LOCATIONS:
             raise _err(f"document.legend_location: unsupported {loc!r}")
         d.legend_location = loc
+        d.legend_hidden = _check_legend_hidden(
+            data.get('legend_hidden'), 'document.legend_hidden')
+        d.legend_text = _check_legend_text(
+            data.get('legend_text'), 'document.legend_text')
         d.grid = _req_bool(data, 'grid', 'document')
         series = data.get('series')
         if not isinstance(series, list) or (not series

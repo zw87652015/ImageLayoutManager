@@ -52,12 +52,22 @@ def _pick_map(mapping, fx, fy, prefix):
     return None
 
 
+def pick_legend_entry(regions, fx, fy):
+    """Legend-entry key (``series:``/``stack:``/…) whose handle sample
+    contains figure-fraction ``(fx, fy)``, else ``None``."""
+    entries = (regions or {}).get('legend_entries') or {}
+    for key, bbox in entries.items():
+        if rect_hit(bbox, fx, fy):
+            return key
+    return None
+
+
 def pick(regions, fx, fy):
     """Topmost element under figure-fraction ``(fx, fy)``.
 
-    Priority: annotation > bracket > legend > title > xlabel > ylabel
-    > xticks > yticks > violin/stack bboxes. Series (proximity) and
-    frame (fallback) are handled separately.
+    Priority: annotation > bracket > legend entry > legend > title >
+    xlabel > ylabel > xticks > yticks > violin/stack bboxes. Series
+    (proximity) and frame (fallback) are handled separately.
     """
     if not regions:
         return None
@@ -65,6 +75,9 @@ def pick(regions, fx, fy):
     if hit:
         return hit
     hit = _pick_map(regions.get('brackets'), fx, fy, 'bracket:')
+    if hit:
+        return hit
+    hit = pick_legend_entry(regions, fx, fy)
     if hit:
         return hit
     for key in _PRIORITY:

@@ -204,6 +204,20 @@ guide.
   page margins default to 0 mm; do not pass `margins` unless the user asks
   for them.
 
+### Plot files (standalone, not the project)
+
+- `plot_create(spec, path, preview_path?)` — write a `*.ilmplot.svg`
+  editable plot file from a JSON spec (chart key + worksheet columns +
+  overrides). `plot_inspect(path, include_values?)` reads the spec back,
+  `plot_edit(path, patch, output_path?)` applies an RFC 7386 merge patch
+  (omit `output_path` to edit in place), `plot_export(path,
+  output_path, format?, transparent?)` renders pdf/svg/png/tiff/jpg.
+- These never touch the open project. To place a plot in the figure,
+  `plot_export` it and `image_import` the image into a cell.
+- The spec shape, chart keys, column designations (X/Y/yErr/Label/
+  Function — a Function column plots the formula in its first cell) and
+  override keys are documented by `imagelayout-cli plot schema`.
+
 ---
 
 ## Recipes

@@ -34,7 +34,8 @@ WORKSHEET_SCHEMA_VERSION = 2
 WORKSHEET_CAPABILITIES = frozenset(
     {'bands', 'error_band', 'spans', 'fills', 'box_plot',
      'column_points', 'histogram', 'horizontal_bars',
-     'sample_counts', 'step_lines', 'heatmap'})
+     'sample_counts', 'step_lines', 'heatmap', 'legend_custom',
+     'function_columns'})
 
 _CHART_KEYS = {c.key for g in CHART_GROUPS for c in g.charts}
 _COLUMN_KEYS = ('designation', 'long_name', 'units', 'comments', 'values')
@@ -106,6 +107,10 @@ def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None,
             if getattr(so, 'error_style', None) == 'band':
                 req.append('error_band')
                 break
+        if getattr(overrides, 'legend_text', None) is not None or any(
+                getattr(so, 'legend', None) is False
+                for so in getattr(overrides, 'series', {}).values()):
+            req.append('legend_custom')
     if chart_key == 'histogram' \
             or getattr(overrides, 'histogram', None) is not None:
         req.append('histogram')
@@ -127,6 +132,8 @@ def worksheet_to_dict(ws, chart_key, plot_columns, overrides=None,
     if chart_key == 'heatmap' \
             or getattr(overrides, 'heatmap', None) is not None:
         req.append('heatmap')
+    if any(c.designation == 'Function' for c in ws.columns):
+        req.append('function_columns')
     hd_ = {}
     if overrides is not None and overrides.histogram is not None:
         hd_ = overrides.histogram.to_dict()

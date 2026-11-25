@@ -278,7 +278,12 @@ class PlotCanvas(QGraphicsView):
         if key is None:
             self._hover.hide()
             return
-        bbox = self._hover_bbox(key)
+        frac = self._frac_point(view_pos)
+        if frac is not None \
+                and hit_test.pick_legend_entry(self._regions, *frac) == key:
+            bbox = self._regions['legend_entries'][key]
+        else:
+            bbox = self._hover_bbox(key)
         if bbox is None:
             self._hover.hide()
             return

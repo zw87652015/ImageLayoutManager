@@ -89,7 +89,7 @@ claude mcp add imagelayout -- "C:/.../imagelayout-cli.exe" "mcp"
 
 ## AI 当前能控制什么
 
-当前 MCP 暴露 36 个工具。概括来说，AI 可以：
+当前 MCP 暴露 48 个工具。概括来说，AI 可以：
 
 - 新建、打开、保存、检查、导出项目。
 - 调整行、列、嵌套分割、网格比例和自由布局几何。
@@ -99,6 +99,7 @@ claude mcp add imagelayout -- "C:/.../imagelayout-cli.exe" "mcp"
 - 添加、删除、调整 PiP 放大插图。
 - 管理尺寸组，让多个单元格共享宽度/高度。
 - 设置或清除持久导出区域。
+- 创建、查看、编辑并导出独立的 Plot Editor 文件（`*.ilmplot.svg`），不影响当前项目。
 - 请求画布截图用于视觉检查。
 
 LLM 侧的概念指南可通过 MCP 资源 `ilm://concepts` 读取；源码对应文件为 `docs/agent_concepts.md`。

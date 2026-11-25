@@ -13,13 +13,14 @@ META_LABELS = ('Long Name', 'Units', 'Comments')
 META_ROWS = 3
 MIN_DATA_ROWS = 32
 DESIGNATIONS = ('X', 'Y', 'Z', 'xErr', 'yErr', 'yErrPlus', 'yErrMinus',
-                'Label', 'Disregard')
+                'Function', 'Label', 'Disregard')
 SUFFIX = {'X': 'X', 'Y': 'Y', 'Z': 'Z', 'xErr': 'xEr±', 'yErr': 'yEr±',
           'yErrPlus': 'yEr+', 'yErrMinus': 'yEr-',
-          'Label': 'L', 'Disregard': ''}
+          'Function': 'f(x)', 'Label': 'L', 'Disregard': ''}
 DESIGNATION_TEXT = {'X': 'X', 'Y': 'Y', 'Z': 'Z', 'xErr': 'X Error',
                     'yErr': 'Y Error', 'yErrPlus': 'Y Error +',
-                    'yErrMinus': 'Y Error -', 'Label': 'Label',
+                    'yErrMinus': 'Y Error -', 'Function': 'Function Curve',
+                    'Label': 'Label',
                     'Disregard': 'Disregard'}
 MAX_COLUMNS = 1024
 MAX_PASTE_CELLS = 5_000_000

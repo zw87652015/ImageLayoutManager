@@ -8,6 +8,8 @@ and selection model.
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from PyQt6.QtCore import (QAbstractTableModel, QEasingCurve,
                           QItemSelection, QItemSelectionModel, QModelIndex,
                           QPersistentModelIndex, QVariantAnimation, Qt)
@@ -21,8 +23,9 @@ from PyQt6.QtWidgets import (QAbstractItemDelegate, QAbstractItemView,
 from src.app.motion import start_animation
 from src.app.theme import get_tokens, token_color
 
-from .i18n import tr
+from .i18n import current_language, tr
 from ilmplot.mathtext import has_math
+from .plot_data import function_text
 from .worksheet import (DESIGNATION_TEXT, META_LABELS, META_ROWS,
                         WorksheetLimitError, parse_tsv, to_tsv)
 
@@ -30,6 +33,7 @@ _META_KEYS = ('meta_long_name', 'meta_units', 'meta_comments')
 _DESIGNATION_KEYS = {'xErr': 'design_xerr', 'yErr': 'design_yerr',
                      'yErrPlus': 'design_yerr_plus',
                      'yErrMinus': 'design_yerr_minus',
+                     'Function': 'design_function',
                      'Label': 'design_label',
                      'Disregard': 'design_disregard'}
 
@@ -42,6 +46,17 @@ def _designation_label(designation, text):
     key = _DESIGNATION_KEYS.get(designation)
     return tr(key) if key is not None else text
 from .zoom import ZOOM_MAX, ZOOM_MIN, next_zoom
+
+
+@lru_cache(maxsize=256)
+def _formula_state(text, lang):
+    """``(formula, error)`` for a Function cell; cached per language so
+    error text follows UI language switches."""
+    from .formula import FormulaError, parse
+    try:
+        return parse(text), None
+    except FormulaError as e:
+        return None, str(e)
 
 
 class WorksheetModel(QAbstractTableModel):
@@ -79,8 +94,25 @@ class WorksheetModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ForegroundRole:
             if index.row() < META_ROWS:
                 return token_color(self._tokens['text_sec'])
-            if self._ws.column(index.column()).designation == 'Disregard':
+            designation = self._ws.column(index.column()).designation
+            if designation == 'Disregard' \
+                    or (designation == 'Function'
+                        and index.row() > META_ROWS):
                 return token_color(self._tokens['text_tert'])
+            if designation == 'Function' and index.row() == META_ROWS:
+                _f, err = _formula_state(
+                    function_text(self._ws.column(index.column())),
+                    current_language())
+                if err is not None:
+                    return token_color(self._tokens['danger'])
+        if role == Qt.ItemDataRole.ToolTipRole \
+                and index.row() == META_ROWS \
+                and self._ws.column(index.column()).designation \
+                == 'Function':
+            _f, err = _formula_state(
+                function_text(self._ws.column(index.column())),
+                current_language())
+            return err if err is not None else tr('tip_function_cell')
         return None
 
     def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
@@ -172,6 +204,9 @@ class _LabelOverlay(QTableView):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Pixel units: scrollTo() does pixel arithmetic on the value.
+        self.setHorizontalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.horizontalHeader().hide()
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
@@ -199,6 +234,10 @@ class _LabelOverlay(QTableView):
             bar.setValue(bar.value() + x)
         elif x + w > self.viewport().width():
             bar.setValue(bar.value() + x + w - self.viewport().width())
+
+    def sync_geometry(self):
+        """Refresh the scrollbar range before a scroll value is mirrored."""
+        self.updateGeometries()
 
     def moveCursor(self, action, modifiers):
         result = super().moveCursor(action, modifiers)
@@ -308,6 +347,9 @@ class WorksheetView(QTableView):
             | QAbstractItemView.EditTrigger.AnyKeyPressed)
         self.setTabKeyNavigation(True)
         self.setCornerButtonEnabled(False)
+        # Pixel units so the overlay's scroll value mirrors exactly.
+        self.setHorizontalScrollMode(
+            QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._cell_menu)
 
@@ -334,6 +376,7 @@ class WorksheetView(QTableView):
         self.horizontalHeader().sectionClicked.connect(
             self._prune_meta_selection)
 
+        self._syncing = False
         self._labels = _LabelOverlay(self)
         self._labels.setModel(self.model())
         self._labels.setSelectionModel(self.selectionModel())
@@ -351,13 +394,14 @@ class WorksheetView(QTableView):
         self._labels.verticalScrollBar().valueChanged.connect(
             lambda v: v and self._labels.verticalScrollBar().setValue(0))
 
-        self._syncing = False
         self.horizontalScrollBar().valueChanged.connect(
             lambda v: self._sync_hscroll(self._labels, v))
+        self.horizontalScrollBar().rangeChanged.connect(
+            lambda _lo, _hi: self._sync_overlay())
         self._labels.horizontalScrollBar().valueChanged.connect(
             lambda v: self._sync_hscroll(self, v))
         self.horizontalHeader().sectionResized.connect(
-            lambda i, _o, n: self._labels.setColumnWidth(i, n))
+            self._on_section_resized)
         self.model().modelReset.connect(self._on_model_reset)
         self.model().rowsInserted.connect(self._sync_vheader_width)
         self.model().rowsRemoved.connect(self._sync_vheader_width)
@@ -385,9 +429,23 @@ class WorksheetView(QTableView):
         for c in range(self.model().columnCount()):
             self._labels.setColumnWidth(c, self.columnWidth(c))
 
+    def _sync_overlay(self):
+        """Bring the meta overlay fully in step with the main grid:
+        column widths, scrollbar range and scroll position."""
+        self._sync_overlay_columns()
+        self._labels.sync_geometry()
+        self._sync_hscroll(self._labels,
+                           self.horizontalScrollBar().value())
+
+    def _on_section_resized(self, i, _old, new):
+        self._labels.setColumnWidth(i, new)
+        self._labels.sync_geometry()
+        self._sync_hscroll(self._labels,
+                           self.horizontalScrollBar().value())
+
     def _on_model_reset(self):
         self._hide_meta_rows()
-        self._sync_overlay_columns()
+        self._sync_overlay()
 
     def _on_ws_event(self, ev):
         kind = ev[0]
@@ -400,9 +458,9 @@ class WorksheetView(QTableView):
             if animate:
                 self._animate_sections(Qt.Orientation.Horizontal,
                                        at, count)
-            self._sync_overlay_columns()
+            self._sync_overlay()
         elif kind == 'columns_removed':
-            self._sync_overlay_columns()
+            self._sync_overlay()
 
     def _resize_section(self, orientation, pindex, size):
         if not pindex.isValid():
@@ -434,6 +492,8 @@ class WorksheetView(QTableView):
         def finish():
             for p in pindexes:
                 self._resize_section(orientation, p, target)
+            if orientation == Qt.Orientation.Horizontal:
+                self._sync_overlay()
             if entry in self._animations:
                 self._animations.remove(entry)
 
@@ -461,8 +521,9 @@ class WorksheetView(QTableView):
             return
         old = self._zoom
         self._zoom = z
-        for anim, _finish in list(self._animations):
+        for anim, finish in list(self._animations):
             anim.stop()
+            finish()
         from . import chrome
         self.setStyleSheet(chrome.worksheet_stylesheet(
             self._theme, self._base_scale * z))
@@ -482,6 +543,7 @@ class WorksheetView(QTableView):
         self.horizontalHeader().setDefaultSectionSize(round(96 * z))
         self._sync_vheader_width()
         self.updateGeometries()
+        self._sync_overlay()
 
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -531,6 +593,7 @@ class WorksheetView(QTableView):
                 vg.left() - vh, vg.top() - labels_h,
                 vh + vg.width(), labels_h)
             self._labels.raise_()
+            self._sync_overlay()
         finally:
             self._in_update_geometries = False
 

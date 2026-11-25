@@ -292,6 +292,43 @@ _STRINGS = {
                           'zh': '未知的图表类型 {value}'},
     'err_unknown_export': {'en': 'Unknown export format {value}',
                            'zh': '未知的导出格式 {value}'},
+    'err_function_empty': {'en': 'Function column: type a formula in '
+                                 'the first cell, e.g. 2*x+1.',
+                           'zh': '函数列：请在第一个单元格输入公式，'
+                                 '如 2*x+1。'},
+    'err_formula_empty': {'en': 'The formula is empty.',
+                          'zh': '公式为空。'},
+    'err_formula_too_long': {'en': 'The formula is too long (at most '
+                                   '{max} characters).',
+                             'zh': '公式过长（最多 {max} 个字符）。'},
+    'err_formula_char': {'en': "Unexpected character '{ch}' at position "
+                               '{pos}.',
+                         'zh': '第 {pos} 个字符 “{ch}” 无法识别。'},
+    'err_formula_syntax': {'en': 'Formula syntax error at position '
+                                 '{pos}.',
+                           'zh': '公式语法错误（第 {pos} 个字符）。'},
+    'err_formula_deep': {'en': 'Formula nested too deeply (at most '
+                               '{max} levels).',
+                         'zh': '公式嵌套过深（最多 {max} 层）。'},
+    'err_formula_variable': {'en': "Only '{var}' is allowed as the "
+                                   "variable — write functions with a "
+                                   "backslash, e.g. \\sin(x) (got "
+                                   "'{name}').",
+                             'zh': "只能使用“{var}”作为变量——函数需加"
+                                   "反斜杠，如 \\sin(x)（遇到“{name}”）。"},
+    'err_formula_function': {'en': "Unknown function '\\{name}'.",
+                              'zh': "未知函数“\\{name}”。"},
+    'err_formula_subscript': {'en': 'Only \\log takes a subscript '
+                                    'base, e.g. \\log_2(x).',
+                              'zh': '只有 \\log 可以带下标底数，'
+                                    '如 \\log_2(x)。'},
+    'err_formula_group': {'en': "Function '\\{name}' needs parentheses, "
+                                'e.g. \\{name}(x).',
+                          'zh': "函数“\\{name}”需要括号，如 \\{name}(x)。"},
+    'err_formula_log_base': {'en': '\\log base must be a number greater '
+                                   'than 0 and not 1.',
+                             'zh': '\\log 的底数必须是大于 0 且不等于 1 '
+                                   '的数。'},
 
     # ── Worksheet ────────────────────────────────────────────────────
     'meta_long_name':  {'en': 'Long Name', 'zh': '长名称'},
@@ -302,8 +339,13 @@ _STRINGS = {
     'design_yerr':     {'en': 'Y Error',   'zh': 'Y 误差'},
     'design_yerr_plus':  {'en': 'Y Error +', 'zh': 'Y 误差 +'},
     'design_yerr_minus': {'en': 'Y Error −', 'zh': 'Y 误差 −'},
+    'design_function': {'en': 'Function Curve', 'zh': '函数曲线'},
     'design_label':    {'en': 'Label',     'zh': '标签'},
     'design_disregard': {'en': 'Disregard', 'zh': '忽略'},
+    'tip_function_cell': {'en': 'Formula of x, e.g. 2*x+1, \\sin(x), '
+                                'x^2; x=3 draws a vertical line',
+                          'zh': 'x 的公式，如 2*x+1、\\sin(x)、x^2；'
+                                'x=3 绘制竖直线'},
     'ws_insert_column_here':  {'en': 'Insert Column Here',
                                'zh': '在此处插入列'},
     'ws_insert_column_left':  {'en': 'Insert Column Left',
@@ -554,6 +596,9 @@ _STRINGS = {
     'sec_histogram': {'en': 'Histogram', 'zh': '直方图'},
     'sec_columns':   {'en': 'Columns',  'zh': '柱状图'},
     'sec_ridgeline': {'en': 'Ridgeline', 'zh': '山脊图'},
+    'sec_legend_entries': {'en': 'Entries', 'zh': '图例项'},
+    'sec_legend_text':   {'en': 'Custom text', 'zh': '自定义文本'},
+    'row_legend_text':   {'en': 'Legend text', 'zh': '图例文本'},
 
     'tip_bold':         {'en': 'Bold',      'zh': '加粗'},
     'tip_italic':       {'en': 'Italic',    'zh': '斜体'},
@@ -565,6 +610,23 @@ _STRINGS = {
                             'outside $…$ also breaks the line.',
                       'zh': '回车换行；Ctrl+回车或点击其他位置应用。'
                             '$…$ 之外输入的 \\n 也会换行。'},
+    'tip_legend_template': {
+        'en': 'One legend row per line. \\l(n) draws the symbol of '
+              'entry n — the n-th series, group or category — only at '
+              'the start of a line; several are allowed. %(n) inserts '
+              'its label. Prefix the number with B or S to reference '
+              'fill bands or spans (\\l(B1), %(S2)). A line without '
+              '\\l is plain text; $...$ is math text. Removing a line '
+              'hides that entry.',
+        'zh': '每行对应一个图例行。\\l(n) 显示第 n 个条目的符号'
+              '（第 n 个系列、组或类别），仅在行首有效，可连续多个；'
+              '%(n) 插入其标签。数字加 B 或 S 前缀可引用填充带或区间'
+              '（\\l(B1)、%(S2)）。无 \\l 的行是纯文本；$...$ 为数学'
+              '文本。删除某行即隐藏该条目。'},
+    'tip_legend_entries_template': {
+        'en': 'Entry switches apply to the automatic legend; they are '
+              'disabled while a custom legend text is set.',
+        'zh': '条目开关作用于自动图例；设置自定义图例文本时不可用。'},
     'tip_align_left':    {'en': 'Align left',    'zh': '左对齐'},
     'tip_align_center':  {'en': 'Align center',  'zh': '居中对齐'},
     'tip_align_right':   {'en': 'Align right',   'zh': '右对齐'},

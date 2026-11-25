@@ -105,7 +105,7 @@ Every change appears live in the ILM window. Undo any step with Ctrl+Z.
 
 ## What the AI can control
 
-The MCP surface exposes 36 tools. At a high level, AI hosts can:
+The MCP surface exposes 48 tools. At a high level, AI hosts can:
 
 - Create, open, save, inspect, and export projects.
 - Reshape layouts with rows, columns, nested splits, grid ratios, and freeform geometry.
@@ -115,6 +115,8 @@ The MCP surface exposes 36 tools. At a high level, AI hosts can:
 - Add, remove, and style Picture-in-Picture (PiP) insets.
 - Manage size groups so multiple cells share width/height.
 - Set or clear persistent export regions.
+- Create, inspect, edit and export standalone Plot Editor files
+  (`*.ilmplot.svg`) without touching the project.
 - Request screenshots for visual verification.
 
 For the LLM-facing conceptual guide, read the bundled MCP resource

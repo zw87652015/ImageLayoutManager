@@ -326,6 +326,66 @@ class RegionTests(unittest.TestCase):
             self.assertIn('violins', regions)
             self.assertIn('g0', regions['violins'])
 
+    def test_legend_entry_regions_line(self):
+        doc = PlotDocument(series=[
+            LineSeries(id='s0', label='Alpha',
+                       x=[0., 1., 2.], y=[0., 1., 0.]),
+            LineSeries(id='s1', label='Beta',
+                       x=[0., 1., 2.], y=[1., 0., 1.]),
+            LineSeries(id='s2', label='',
+                       x=[0., 1., 2.], y=[.5, .6, .5])])
+        regions = element_regions(doc)
+        entries = regions['legend_entries']
+        # The unlabelled series never reaches the legend.
+        self.assertEqual(set(entries), {'series:s0', 'series:s1'})
+        leg = regions['legend']
+        for bb in entries.values():
+            self.assertGreaterEqual(bb[0], leg[0] - 1e-6)
+            self.assertGreaterEqual(bb[1], leg[1] - 1e-6)
+            self.assertLessEqual(bb[2], leg[2] + 1e-6)
+            self.assertLessEqual(bb[3], leg[3] + 1e-6)
+            self.assertLess(bb[2] - bb[0], leg[2] - leg[0])
+        # One column → rows don't overlap vertically.
+        a, b = entries['series:s0'], entries['series:s1']
+        self.assertTrue(a[3] <= b[1] + 1e-6 or b[3] <= a[1] + 1e-6)
+        # The handle sample sits left of the legend's midpoint.
+        mid = (leg[0] + leg[2]) / 2
+        for bb in entries.values():
+            self.assertLess(bb[2], mid)
+
+    def test_legend_entry_regions_areas(self):
+        from ilmplot.document import Band, Span
+        doc = PlotDocument(
+            series=[LineSeries(id='s0', label='L',
+                               x=[0., 1.], y=[0., 1.])],
+            bands=[Band(id='b0', label='Band',
+                        x=[0., 1.], y1=[0., 0.], y2=[1., 1.])],
+            spans=[Span(id='p0', axis='x', lo=0.2, hi=0.8,
+                        label='Span')])
+        self.assertEqual(set(element_regions(doc)['legend_entries']),
+                         {'series:s0', 'band:b0', 'span:p0'})
+
+    def test_legend_entry_regions_stacked(self):
+        regions = element_regions(_stack_doc())
+        self.assertEqual(set(regions['legend_entries']),
+                         {'stack:c0', 'stack:c1'})
+
+    def test_legend_entry_regions_hist(self):
+        for doc in (_hist_doc(),
+                    _hist_doc(histogram=HistOptions(style='step'))):
+            regions = element_regions(doc)
+            self.assertEqual(set(regions['legend_entries']),
+                             {'hist:g0', 'hist:g1'})
+
+    def test_no_legend_no_entries(self):
+        doc = PlotDocument(
+            series=[LineSeries(id='s0', label='A',
+                               x=[0., 1.], y=[0., 1.])],
+            legend=False)
+        regions = element_regions(doc)
+        self.assertNotIn('legend', regions)
+        self.assertNotIn('legend_entries', regions)
+
 
 class HistBinsTests(unittest.TestCase):
 

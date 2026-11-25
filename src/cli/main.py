@@ -584,6 +584,115 @@ def _cmd_edit(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# plot — headless Plot Editor files (*.ilmplot.svg)
+# ---------------------------------------------------------------------------
+
+def _plot_json_object(text: str, what: str) -> dict:
+    try:
+        obj = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"error: {what}: invalid JSON: {e}")
+    if not isinstance(obj, dict):
+        raise SystemExit(f"error: {what}: expected a JSON object")
+    return obj
+
+
+def _plot_read_text(path: str) -> str:
+    if path == "-":
+        return sys.stdin.read()
+    with open(path, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _plot_preview(path: str, preview: str) -> str:
+    """Write a PNG preview of the saved plot; returns its path."""
+    from src.plot_editor import headless
+    return headless.preview_png(path, preview)
+
+
+def _plot_report(args: argparse.Namespace, result: dict) -> int:
+    if getattr(args, "json", False):
+        json.dump({"ok": True, **result}, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        sys.stdout.write(f"{result['path']}\n")
+    sys.stdout.flush()
+    return 0
+
+
+def _plot_call(args: argparse.Namespace, fn) -> int:
+    """Run a headless plot op; ``--json`` gets an envelope, errors exit 1."""
+    from src.plot_editor.headless import HeadlessError
+    try:
+        result = fn()
+    except (HeadlessError, FileNotFoundError) as e:
+        if getattr(args, "json", False):
+            json.dump({"ok": False, "error": "plot_error",
+                       "detail": str(e)}, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        else:
+            sys.stderr.write(f"error: {e}\n")
+        return 1
+    preview = getattr(args, "preview", None)
+    if preview is not None:
+        try:
+            result["preview"] = _plot_preview(result["path"], preview)
+        except Exception as e:  # noqa: BLE001 — preview is best-effort
+            sys.stderr.write(f"warning: preview failed: {e}\n")
+    return _plot_report(args, result)
+
+
+def _cmd_plot_create(args: argparse.Namespace) -> int:
+    from src.plot_editor import headless
+    spec = _plot_json_object(_plot_read_text(args.spec), "spec")
+    return _plot_call(args, lambda: headless.create(spec, args.output))
+
+
+def _cmd_plot_inspect(args: argparse.Namespace) -> int:
+    from src.plot_editor import headless
+    try:
+        spec = headless.inspect(args.file)
+    except (headless.HeadlessError, FileNotFoundError) as e:
+        sys.stderr.write(f"error: {e}\n")
+        return 1
+    if args.no_values:
+        spec = headless.compact_spec(spec)
+    json.dump(spec, sys.stdout, indent=2, ensure_ascii=False)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
+
+
+def _cmd_plot_edit(args: argparse.Namespace) -> int:
+    from src.plot_editor import headless
+    if args.patch is not None:
+        patch = _plot_json_object(args.patch, "patch")
+    else:
+        patch = _plot_json_object(_plot_read_text(args.patch_file),
+                                  "patch")
+    out = None if args.in_place else args.output
+    return _plot_call(args, lambda: headless.edit(args.file, patch, out))
+
+
+def _cmd_plot_export(args: argparse.Namespace) -> int:
+    from src.plot_editor import headless
+    return _plot_call(
+        args, lambda: headless.export(args.file, args.output,
+                                      fmt=args.format,
+                                      transparent=args.transparent))
+
+
+def _cmd_plot_schema(args: argparse.Namespace) -> int:
+    from src.plot_editor import headless
+    sys.stdout.write(headless.SPEC_REFERENCE_MD)
+    if not headless.SPEC_REFERENCE_MD.endswith("\n"):
+        sys.stdout.write("\n")
+    sys.stdout.flush()
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # mcp (MCP-over-stdio adapter — no Qt required)
 # ---------------------------------------------------------------------------
 
@@ -722,6 +831,102 @@ def _build_parser() -> argparse.ArgumentParser:
     ed.add_argument("--list-tools", action="store_true",
                     help="Print the available tool names and exit.")
     ed.set_defaults(func=_cmd_edit)
+
+    # plot ------------------------------------------------------------------
+    pl = sub.add_parser(
+        "plot",
+        help="Create, inspect, edit and export Plot Editor files "
+             "(*.ilmplot.svg) headlessly — no GUI, no project needed.",
+        description="Operate on standalone editable plot files through "
+                    "the same engine the Plot Editor uses. Per-command "
+                    "progress goes to stderr; stdout carries only the "
+                    "output path, the spec JSON, or the --json report.",
+        epilog="examples:\n"
+               "  imagelayout-cli plot create spec.json -o fig.ilmplot.svg "
+               "--preview fig.png\n"
+               "  imagelayout-cli plot inspect fig.ilmplot.svg --no-values\n"
+               "  imagelayout-cli plot edit fig.ilmplot.svg "
+               "--patch '{\"overrides\": {\"xlim\": [0, 10]}}' -o out.svg\n"
+               "  imagelayout-cli plot export fig.ilmplot.svg -o fig.pdf\n"
+               "  imagelayout-cli plot schema",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    plsub = pl.add_subparsers(dest="plot_cmd", required=True,
+                              metavar="PLOT_COMMAND")
+
+    pc = plsub.add_parser(
+        "create",
+        help="Create a *.ilmplot.svg from a JSON spec file ('-' = stdin).",
+    )
+    pc.add_argument("spec", help="JSON spec file ('-' reads stdin)")
+    pc.add_argument("-o", "--output", required=True,
+                    help="Output path (.ilmplot.svg appended when missing)")
+    pc.add_argument("--preview", metavar="PNG",
+                    help="Also write a PNG preview of the result")
+    pc.add_argument("--json", action="store_true",
+                    help="Emit a JSON report instead of the output path")
+    pc.set_defaults(func=_cmd_plot_create)
+
+    pi = plsub.add_parser(
+        "inspect",
+        help="Print the plot spec (worksheet + styling) as JSON.",
+    )
+    pi.add_argument("file", help="*.ilmplot.svg or ILM Plot SVG")
+    pi.add_argument("--no-values", action="store_true",
+                    help="Replace each column's values by its length "
+                         "(n_values) for a compact overview")
+    pi.set_defaults(func=_cmd_plot_inspect)
+
+    pe = plsub.add_parser(
+        "edit",
+        help="Merge-patch a plot file's spec and save the result.",
+        description="Applies an RFC 7386 JSON merge patch to the file's "
+                    "spec (objects merge, null deletes, arrays/scalars "
+                    "replace; 'columns' also accepts an object keyed by "
+                    "column index). Exactly one of -o/-i is required.",
+    )
+    pe.add_argument("file", help="*.ilmplot.svg or ILM Plot SVG")
+    pt = pe.add_mutually_exclusive_group(required=True)
+    pt.add_argument("--patch", metavar="JSON",
+                    help="Merge patch as a JSON object")
+    pt.add_argument("--patch-file", metavar="FILE",
+                    help="Merge patch JSON file ('-' reads stdin)")
+    po = pe.add_mutually_exclusive_group(required=True)
+    po.add_argument("-o", "--output",
+                    help="Write the result here "
+                         "(.ilmplot.svg appended when missing)")
+    po.add_argument("-i", "--in-place", action="store_true",
+                    help="Overwrite FILE (written atomically; refused "
+                         "for read-only sources)")
+    pe.add_argument("--preview", metavar="PNG",
+                    help="Also write a PNG preview of the result")
+    pe.add_argument("--json", action="store_true",
+                    help="Emit a JSON report instead of the output path")
+    pe.set_defaults(func=_cmd_plot_edit)
+
+    px = plsub.add_parser(
+        "export",
+        help="Render a plot file to pdf/svg/png/tiff/jpg.",
+    )
+    px.add_argument("file", help="*.ilmplot.svg or ILM Plot SVG")
+    px.add_argument("-o", "--output", required=True,
+                    help="Output path (format suffix appended when "
+                         "missing or unrecognised)")
+    px.add_argument("-f", "--format",
+                    choices=("pdf", "svg", "png", "tiff", "jpg"),
+                    default=None,
+                    help="Output format (default: infer from -o extension)")
+    px.add_argument("--transparent", action="store_true",
+                    help="Transparent background (png/svg only)")
+    px.add_argument("--json", action="store_true",
+                    help="Emit a JSON report instead of the output path")
+    px.set_defaults(func=_cmd_plot_export)
+
+    ps = plsub.add_parser(
+        "schema",
+        help="Print the plot spec reference for agents (Markdown).",
+    )
+    ps.set_defaults(func=_cmd_plot_schema)
 
     # mcp --------------------------------------------------------------------
     mcp = sub.add_parser(

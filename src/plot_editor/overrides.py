@@ -16,8 +16,8 @@ from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
                        LINE_DRAWSTYLES, MAX_TICK_LABEL,
                        PlotDocument, PlotStyle, RidgeOptions, Span,
                        StackOptions, ViolinOptions,
-                       _HEATMAP_CMAP_NAMES, _check_color, _check_limit,
-                       _is_num)
+                       _HEATMAP_CMAP_NAMES, _check_color,
+                       _check_legend_text, _check_limit, _is_num)
 
 
 class OverridesError(ValueError):
@@ -73,12 +73,14 @@ class SeriesOverride:
     """Per-series overrides keyed by Y column index; all None = unset."""
 
     __slots__ = ('label', 'color', 'linewidth_pt', 'linestyle', 'marker',
-                 'markersize_pt', 'error_style', 'error_alpha', 'drawstyle')
+                 'markersize_pt', 'error_style', 'error_alpha',
+                 'drawstyle', 'legend')
     _KEYS = __slots__
 
     def __init__(self, label=None, color=None, linewidth_pt=None,
                  linestyle=None, marker=None, markersize_pt=None,
-                 error_style=None, error_alpha=None, drawstyle=None):
+                 error_style=None, error_alpha=None, drawstyle=None,
+                 legend=None):
         self.label = label
         self.color = color
         self.linewidth_pt = linewidth_pt
@@ -88,6 +90,9 @@ class SeriesOverride:
         self.error_style = error_style
         self.error_alpha = error_alpha
         self.drawstyle = drawstyle
+        # ``legend``: None = shown (default), False = hidden from the
+        # legend; True is normalised away — there is no "force show".
+        self.legend = False if legend is False else None
 
     def is_empty(self):
         return all(getattr(self, k) is None for k in self._KEYS)
@@ -123,6 +128,9 @@ class SeriesOverride:
         s.error_alpha = _opt_num(data, 'error_alpha', ctx,
                                  lo=0, hi=1, lo_exclusive=True)
         s.drawstyle = _opt_choice(data, 'drawstyle', ctx, LINE_DRAWSTYLES)
+        s.legend = _opt_bool(data, 'legend', ctx)
+        if s.legend is True:
+            s.legend = None
         return s
 
 
@@ -176,13 +184,15 @@ class HeatmapOverride:
 class PlotOverrides:
     """Document-level overrides plus per-series ones."""
 
-    __slots__ = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
+    __slots__ = ('xlabel', 'ylabel', 'legend', 'legend_location',
+                 'legend_text', 'grid',
                  'xlim', 'ylim', 'style', 'series', 'palette',
                  'palette_reverse', 'palette_colors', 'baked_item_colors',
                  'violin', 'ridgeline', 'stacked',
                  'histogram', 'annotations', 'brackets', 'bands',
                  'bar_labels', 'spans', 'fills', 'heatmap')
-    _KEYS = ('xlabel', 'ylabel', 'legend', 'legend_location', 'grid',
+    _KEYS = ('xlabel', 'ylabel', 'legend', 'legend_location',
+             'legend_text', 'grid',
              'xlim', 'ylim', 'style', 'series', 'palette',
              'palette_reverse', 'palette_colors', 'baked_item_colors',
              'violin', 'ridgeline', 'stacked',
@@ -194,6 +204,7 @@ class PlotOverrides:
         self.ylabel = None
         self.legend = None
         self.legend_location = None
+        self.legend_text = None
         self.grid = None
         self.xlim = None
         self.ylim = None
@@ -223,6 +234,7 @@ class PlotOverrides:
     def is_empty(self):
         return (self.xlabel is None and self.ylabel is None
                 and self.legend is None and self.legend_location is None
+                and self.legend_text is None
                 and self.grid is None and self.xlim is None
                 and self.ylim is None and not self.style.to_dict()
                 and all(o.is_empty() for o in self.series.values())
@@ -238,7 +250,8 @@ class PlotOverrides:
     def to_dict(self):
         d = {}
         for k in ('xlabel', 'ylabel', 'legend', 'legend_location',
-                  'grid', 'xlim', 'ylim', 'palette', 'palette_reverse'):
+                  'legend_text', 'grid', 'xlim', 'ylim', 'palette',
+                  'palette_reverse'):
             v = getattr(self, k)
             if v is not None:
                 d[k] = v
@@ -287,6 +300,12 @@ class PlotOverrides:
         o.legend = _opt_bool(data, 'legend', ctx)
         o.legend_location = _opt_choice(data, 'legend_location', ctx,
                                         LEGEND_LOCATIONS)
+        if data.get('legend_text') is not None:
+            try:
+                o.legend_text = _check_legend_text(
+                    data['legend_text'], f"{ctx}.legend_text")
+            except ValueError as e:
+                raise _err(str(e))
         o.grid = _opt_bool(data, 'grid', ctx)
         for name in ('xlim', 'ylim'):
             if data.get(name) is not None:
@@ -422,7 +441,10 @@ def reset_element(overrides, key, y_column=None):
     elif key == 'legend':
         overrides.legend = None
         overrides.legend_location = None
+        overrides.legend_text = None
         overrides.style.legend = None
+        for so in overrides.series.values():
+            so.legend = None
     elif key == 'frame':
         overrides.grid = None
         overrides.style.frame = None
@@ -463,6 +485,33 @@ def parse_axis_limits(lo_text, hi_text):
     if not (math.isfinite(lo) and math.isfinite(hi)) or lo == hi:
         return None, True
     return [lo, hi], False
+
+
+def label_override(text, sheet_label):
+    """Label-override value for a committed edit: ``None`` when *text*
+    is empty or already equals the worksheet-derived *sheet_label* —
+    typing the default must not pin it as an override."""
+    if not text or text == sheet_label:
+        return None
+    return text
+
+
+def drop_redundant_labels(overrides, items):
+    """Clear ``series[*].label`` pins that equal the current sheet label.
+
+    Older files/panels could store the worksheet label itself as an
+    override; such a pin would keep winning over later worksheet edits.
+    Only ``label`` is touched — a ``SeriesOverride`` left empty is
+    dropped from ``overrides.series``.
+    """
+    sheet = {getattr(it, 'y_column', None): getattr(it, 'label', '')
+             for it in items or ()}
+    for y_col in [yc for yc, so in overrides.series.items()
+                  if yc in sheet and so.label == sheet[yc]]:
+        so = overrides.series[y_col]
+        so.label = None
+        if so.is_empty():
+            del overrides.series[y_col]
 
 
 def static_bands(doc, overrides):
@@ -615,6 +664,29 @@ def overrides_from_document(doc, items=None, chart_key=None):
         o.bands = copy.deepcopy(doc.bands)
     if getattr(doc, 'spans', None):
         o.spans = copy.deepcopy(doc.spans)
+    if getattr(doc, 'legend_text', None) is not None:
+        o.legend_text = doc.legend_text
+    hidden = set(getattr(doc, 'legend_hidden', None) or ())
+    if hidden and items is not None:
+        for coll, prefix in ((doc.series, 'series:'),
+                             (doc.groups, 'hist:'
+                              if doc.kind == 'histogram' else None),
+                             (doc.categories, 'stack:')):
+            if prefix is None:
+                continue
+            for i, entry in enumerate(coll):
+                if i >= len(items):
+                    break
+                if prefix + entry.id not in hidden:
+                    continue
+                y_col = getattr(items[i], 'y_column', None)
+                if y_col is None:
+                    continue
+                so = o.series.get(y_col)
+                if so is None:
+                    so = SeriesOverride()
+                    o.series[y_col] = so
+                so.legend = False
     if items is not None and chart_key is not None \
             and doc.kind in ('line', 'ridgeline') \
             and len(items) == len(doc.series):
@@ -721,6 +793,32 @@ def _heatmap_effective_document(base_doc, title, overrides, figure_size):
     return doc.validate()
 
 
+def _resample_function_series(doc, items, overrides):
+    """Re-sample function-curve series over explicit axis limits so
+    reference lines span the whole axis (``xlim`` for ``y = f(x)``,
+    ``ylim`` for ``x = g(y)``)."""
+    from .formula import FormulaError, parse, sample
+    for ds, s in zip(doc.series, items):
+        text = getattr(s, 'function', None)
+        if not text:
+            continue
+        try:
+            formula = parse(text)
+        except FormulaError:
+            continue
+        lim = overrides.xlim if formula.axis == 'y' else overrides.ylim
+        if lim is None or len(lim) != 2:
+            continue
+        lo, hi = float(lim[0]), float(lim[1])
+        if not (math.isfinite(lo) and math.isfinite(hi)):
+            continue
+        if lo > hi:
+            lo, hi = hi, lo
+        xs, ys = sample(formula, lo, hi)
+        if len(xs) >= (1 if formula.constant else 2):
+            ds.x, ds.y = xs, ys
+
+
 def _apply_heatmap_override(doc, heatmap):
     for name in HeatmapOverride._KEYS:
         value = getattr(heatmap, name)
@@ -786,6 +884,8 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
         doc.xlim = list(overrides.xlim)
     if overrides.ylim is not None:
         doc.ylim = list(overrides.ylim)
+    if doc.kind == 'line':
+        _resample_function_series(doc, items, overrides)
     # Kind options stay in the overrides across chart switches but only
     # reach a document of their own kind.
     if overrides.violin is not None and kind == 'violin':
@@ -846,7 +946,11 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
     # include reversal, so they are not passed through theme_colors.
     baked = (overrides.baked_item_colors
              if missing_theme and not snapshot else None)
-    for coll in (doc.series, doc.groups, doc.categories):
+    hidden = []
+    for coll, prefix in ((doc.series, 'series:'),
+                         (doc.groups, 'hist:' if kind == 'histogram'
+                          else None),
+                         (doc.categories, 'stack:')):
         pal_colors = None
         if overrides.palette or overrides.palette_reverse:
             pal_colors = theme_colors(
@@ -859,6 +963,9 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
             y_col = getattr(items[i], 'y_column', None)
             so = overrides.series.get(y_col) if y_col is not None \
                 else None
+            if prefix is not None and so is not None \
+                    and so.legend is False:
+                hidden.append(prefix + entry.id)
             entry.label = so.label if so is not None \
                 and so.label is not None else items[i].label
             if so is not None and so.color is not None:
@@ -884,6 +991,9 @@ def effective_document(base_doc, items, chart_key, title, overrides, *,
                     entry.drawstyle = 'default'
                 elif so.drawstyle is not None and kind == 'line':
                     entry.drawstyle = so.drawstyle
+    doc.legend_hidden = hidden
+    doc.legend_text = overrides.legend_text \
+        if doc.kind != 'heatmap' else None
     if figure_size is not None:
         doc.width_mm = figure_size.width_mm
         doc.height_mm = figure_size.height_mm

@@ -14,14 +14,14 @@ from PyQt6.QtWidgets import (QInputDialog, QMenu, QMessageBox,
 from . import presets
 from .i18n import tr
 from .overrides import (PlotOverrides, assign_palette,
-                        assign_palette_reverse, effective_document,
-                        hold_baked_colours, overrides_from_document,
-                        remap_series_keys, record_overrides_edit,
-                        static_bands)
+                        assign_palette_reverse, drop_redundant_labels,
+                        effective_document, hold_baked_colours,
+                        overrides_from_document, remap_series_keys,
+                        record_overrides_edit, static_bands)
 from .plot_canvas import PlotCanvas
 from .export import CHART_KIND
-from .plot_data import (PlotSelectionError, build_categories,
-                        build_groups, build_matrix, build_series)
+from .headless import build_items as _build_items
+from .plot_data import PlotSelectionError
 from .plot_file import (PlotFileError, chart_from_document,
                         items_from_document, save_plot_file)
 from ilmplot.document import PlotDocumentError
@@ -33,18 +33,6 @@ from .worksheet import Worksheet
 from .worksheet_view import WorksheetView
 
 _SUFFIX = '.ilmplot.svg'
-
-
-def _build_items(worksheet, columns, chart_key):
-    """Series/Group/Category items for ``chart_key`` from the sheet."""
-    kind = CHART_KIND.get(chart_key, ('line', None))[0]
-    if kind in ('violin', 'histogram'):
-        return build_groups(worksheet, columns)
-    if kind == 'stacked_column':
-        return build_categories(worksheet, columns)
-    if kind == 'heatmap':
-        return [build_matrix(worksheet, columns)]
-    return build_series(worksheet, columns)
 
 
 @dataclass
@@ -703,6 +691,7 @@ class PlotTab(QSplitter):
         target.ylabel = source.ylabel
         target.legend = source.legend
         target.legend_location = source.legend_location
+        target.legend_text = source.legend_text
         target.grid = source.grid
         target.xlim = source.xlim
         target.ylim = source.ylim
@@ -808,6 +797,9 @@ class PlotTab(QSplitter):
         self.overrides = pf.overrides if pf.overrides is not None \
             else overrides_from_document(pf.document, series, chart)
         hold_baked_colours(self.overrides, pf.document)
+        # Pins equal to the sheet label would keep winning over later
+        # worksheet edits; they are normalized away, not a user edit.
+        drop_redundant_labels(self.overrides, series)
         self.regions = None
         self._set_path(path)
         self.plot_title = pf.document.title or ''

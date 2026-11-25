@@ -91,6 +91,39 @@ imagelayout-cli.exe edit figure_4.figlayout --dry-run --json `
 
 Pass `--script -` to read it from stdin.
 
+## `plot` — Plot Editor files
+
+`plot` creates, inspects, edits and exports standalone editable plot
+files (`*.ilmplot.svg` — the same files the Plot Editor saves) with no
+GUI and no project. Everything runs through the editor's own engine, so
+a headless file is identical in kind to one saved from the UI.
+
+```powershell
+# Spec reference for agents (chart keys, columns, overrides, examples)
+imagelayout-cli.exe plot schema
+
+# Create from a JSON spec file or stdin
+imagelayout-cli.exe plot create spec.json -o fig.ilmplot.svg --preview fig.png
+Get-Content spec.json | imagelayout-cli.exe plot create - -o fig.ilmplot.svg
+
+# Inspect (spec JSON; --no-values gives a compact overview)
+imagelayout-cli.exe plot inspect fig.ilmplot.svg --no-values
+
+# Merge-patch and save (in place or to a new path)
+imagelayout-cli.exe plot edit fig.ilmplot.svg -i `
+    --patch '{"overrides": {"xlim": [0, 10], "legend_text": "\\l(1) %(1)"}}'
+imagelayout-cli.exe plot edit fig.ilmplot.svg --patch-file patch.json -o out.ilmplot.svg
+
+# Render figure formats (format inferred from the extension)
+imagelayout-cli.exe plot export fig.ilmplot.svg -o fig.pdf
+imagelayout-cli.exe plot export fig.ilmplot.svg -o fig.png --transparent
+```
+
+`create`/`edit`/`export` accept `--json` for a `{"ok": …}` report and
+`create`/`edit` accept `--preview PNG`. The same four operations are
+agent tools (`plot_create`, `plot_inspect`, `plot_edit`, `plot_export`)
+— see [`agent_concepts.md`](agent_concepts.md).
+
 ### Contract
 
 - **Ordered.** `--script` steps run first, then each `--call` in

@@ -1943,6 +1943,80 @@ def mark_reorder(ctx: ToolContext, mark_id: str, to: str) -> Dict[str, Any]:
     return _ok({"mark_id": mark_id, "to": to})
 
 
+# ── plot files (Plot Editor *.ilmplot.svg, headless) ───────────────────
+#
+# These operate on standalone editable plot files, not on ctx.project:
+# they never touch the open figure. Place a rendered result into a cell
+# with image_import afterwards.
+
+
+def _plot_tool_error(e: Exception) -> ToolError:
+    from src.plot_editor.headless import HeadlessError
+    if isinstance(e, FileNotFoundError):
+        return ToolError("file_not_found", str(e))
+    if isinstance(e, HeadlessError):
+        return ToolError("plot_error", str(e))
+    if isinstance(e, OSError):
+        return ToolError("plot_error", str(e))
+    raise e
+
+
+def plot_create(ctx: ToolContext, spec: Dict[str, Any], path: str,
+                preview_path: Optional[str] = None
+                ) -> Dict[str, Any]:
+    """Create a standalone editable plot file from a spec dict."""
+    from src.plot_editor import headless
+    try:
+        result = headless.create(spec, path)
+        if preview_path is not None:
+            result["preview"] = headless.preview_png(result["path"],
+                                                     preview_path)
+        return _ok(result)
+    except (headless.HeadlessError, OSError) as e:
+        raise _plot_tool_error(e)
+
+
+def plot_inspect(ctx: ToolContext, path: str,
+                 include_values: bool = True) -> Dict[str, Any]:
+    """Return the plot spec (worksheet + styling) of an existing file."""
+    from src.plot_editor import headless
+    try:
+        spec = headless.inspect(path)
+        if not include_values:
+            spec = headless.compact_spec(spec)
+        return _ok(spec)
+    except (headless.HeadlessError, OSError) as e:
+        raise _plot_tool_error(e)
+
+
+def plot_edit(ctx: ToolContext, path: str, patch: Dict[str, Any],
+              output_path: Optional[str] = None,
+              preview_path: Optional[str] = None) -> Dict[str, Any]:
+    """Merge-patch a plot file's spec; ``output_path=None`` edits in
+    place (refused for read-only sources)."""
+    from src.plot_editor import headless
+    try:
+        result = headless.edit(path, patch, output_path)
+        if preview_path is not None:
+            result["preview"] = headless.preview_png(result["path"],
+                                                     preview_path)
+        return _ok(result)
+    except (headless.HeadlessError, OSError) as e:
+        raise _plot_tool_error(e)
+
+
+def plot_export(ctx: ToolContext, path: str, output_path: str,
+                format: Optional[str] = None,
+                transparent: bool = False) -> Dict[str, Any]:
+    """Render a plot file to pdf/svg/png/tiff/jpg on disk."""
+    from src.plot_editor import headless
+    try:
+        return _ok(headless.export(path, output_path, fmt=format,
+                                   transparent=transparent))
+    except (headless.HeadlessError, OSError) as e:
+        raise _plot_tool_error(e)
+
+
 # ── dispatch ────────────────────────────────────────────────────────────
 
 
@@ -2001,6 +2075,11 @@ _REGISTRY: Dict[str, Callable[..., Dict[str, Any]]] = {
     # Algorithmic + vision
     "auto_layout":       auto_layout,
     "view_screenshot":   view_screenshot,
+    # Plot Editor files (standalone *.ilmplot.svg, not the project)
+    "plot_create":       plot_create,
+    "plot_inspect":      plot_inspect,
+    "plot_edit":         plot_edit,
+    "plot_export":       plot_export,
 }
 
 

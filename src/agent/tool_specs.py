@@ -1050,6 +1050,114 @@ TOOL_SPECS: List[Dict[str, Any]] = [
                                    "quadratically."},
         }),
     },
+
+    # ── plot files (standalone *.ilmplot.svg, not the project) ────────
+    {
+        "name": "plot_create",
+        "description": (
+            "Create a standalone editable plot file (`*.ilmplot.svg`) "
+            "from a JSON spec — the same editable document the Plot "
+            "Editor produces. It does NOT touch the open project; "
+            "render it into the figure afterwards with `plot_export` + "
+            "`image_import`. Spec: `{\"chart\": <key>, \"columns\": "
+            "[{\"designation\": ..., \"values\": [...]}], \"overrides\": "
+            "{...}, \"title\": ..., \"width_mm\": ..., \"height_mm\": ...}`. "
+            "Chart keys: pure_line, pure_scatters, line_scatters, "
+            "step_line, stacked_line, ridgeline, violin, box, "
+            "column_points, histogram, column, bar, stacked_column, "
+            "stacked_column_pct, stacked_bar, stacked_bar_pct, heatmap. "
+            "Column designations: X, Y, Z, xErr, yErr, yErrPlus, "
+            "yErrMinus, Function, Label, Disregard — each Y takes the "
+            "nearest X/Label column to its left; a Function column plots "
+            "the formula in its first cell (e.g. values: [\"2*x\"]). "
+            "Example: {\"chart\": \"pure_line\", \"columns\": "
+            "[{\"designation\": \"X\", \"values\": [0, 1, 2]}, "
+            "{\"designation\": \"Y\", \"values\": [1, 4, 9]}]}. "
+            "Full spec reference (overrides, legend templates, merge "
+            "patch): run `imagelayout-cli plot schema`."
+        ),
+        "input_schema": _obj({
+            "spec": {"type": "object",
+                     "description": "Plot spec object — chart key, "
+                                    "columns, optional plot_columns / "
+                                    "overrides / title / size. See the "
+                                    "tool description and `imagelayout-"
+                                    "cli plot schema`."},
+            "path": {"type": "string",
+                     "description": "Output path; .ilmplot.svg is "
+                                    "appended when missing."},
+            "preview_path": {"type": "string",
+                             "description": "Optional PNG preview "
+                                            "path for the result."},
+        }, required=("spec", "path")),
+    },
+    {
+        "name": "plot_inspect",
+        "description": (
+            "Read back the spec of an existing plot file "
+            "(`*.ilmplot.svg` or any ILM Plot SVG): chart key, worksheet "
+            "columns with values, overrides, and an `info` block listing "
+            "the plotted items (`n` is the index used by legend_text "
+            "`\\l(n)`; `overrides.series` keys are column indices). "
+            "Use before `plot_edit` to see current values."
+        ),
+        "input_schema": _obj({
+            "path": {"type": "string",
+                     "description": "Plot file to inspect."},
+            "include_values": {"type": "boolean", "default": True,
+                               "description": "False returns each "
+                                              "column's value count "
+                                              "instead of the values."},
+        }, required=("path",)),
+    },
+    {
+        "name": "plot_edit",
+        "description": (
+            "Merge-patch (RFC 7386) the spec of an existing plot file "
+            "and save the result: objects merge recursively, `null` "
+            "deletes a key, arrays/scalars replace. `columns` also "
+            "accepts an object keyed by column index to merge-patch one "
+            "column or append one at the current count. Omit "
+            "`output_path` to edit in place — refused when the file is "
+            "read-only, so pass `output_path` then."
+        ),
+        "input_schema": _obj({
+            "path": {"type": "string",
+                     "description": "Plot file to edit."},
+            "patch": {"type": "object",
+                      "description": "RFC 7386 merge patch over the "
+                                     "spec (see plot_inspect output)."},
+            "output_path": {"type": "string",
+                            "description": "Output path; omit to edit "
+                                           "the input file in place."},
+            "preview_path": {"type": "string",
+                             "description": "Optional PNG preview "
+                                            "path for the result."},
+        }, required=("path", "patch")),
+    },
+    {
+        "name": "plot_export",
+        "description": (
+            "Render a plot file (`*.ilmplot.svg` or ILM Plot SVG) to "
+            "pdf/svg/png/tiff/jpg on disk; `format` is inferred from the "
+            "output extension when omitted (`transparent` applies to "
+            "png/svg). The output is a figure image — place it into the "
+            "project with `image_import`."
+        ),
+        "input_schema": _obj({
+            "path": {"type": "string",
+                     "description": "Plot file to render."},
+            "output_path": {"type": "string",
+                            "description": "Output file path."},
+            "format": {"type": "string",
+                       "enum": ["pdf", "svg", "png", "tiff", "jpg"],
+                       "description": "Output format; inferred from the "
+                                      "extension when omitted."},
+            "transparent": {"type": "boolean", "default": False,
+                            "description": "Transparent background "
+                                           "(png/svg only)."},
+        }, required=("path", "output_path")),
+    },
 ]
 
 

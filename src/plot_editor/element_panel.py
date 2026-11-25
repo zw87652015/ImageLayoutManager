@@ -36,11 +36,14 @@ from ilmplot.document import (LEGEND_LOCATIONS, LINESTYLES, MARKERS,
                        GridStyle, HEATMAP_CMAPS, HistOptions,
                        LegendStyle, RidgeOptions, StackOptions,
                        TextStyle, TitleStyle, ViolinOptions)
+from ilmplot.legend_text import (MAX_LEGEND_LINES, MAX_LEGEND_TEXT,
+                                 default_template)
 from . import palettes
 from .palettes import THEMES, theme_display_key
 from .overrides import (HeatmapOverride, SeriesOverride, assign_palette,
                         assign_palette_reverse, clear_palette,
-                        parse_axis_limits, reset_element, static_bands)
+                        label_override, parse_axis_limits, reset_element,
+                        static_bands)
 from .note_text import MAX_NOTE_TEXT, expand_newline_escapes
 
 _PANEL_WIDTH = 300
@@ -81,19 +84,20 @@ _ANCHOR_KEYS = {a: 'anchor_' + a.replace(' ', '_')
 
 
 class _NoteTextEdit(QPlainTextEdit):
-    """3-line note editor; Ctrl+Enter / focus-out commits."""
+    """Multi-line note editor; Ctrl+Enter / focus-out commits."""
 
     committed = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, lines=3, tooltip=None):
         super().__init__()
         self.setTabChangesFocus(True)
         self.setLineWrapMode(
             QPlainTextEdit.LineWrapMode.WidgetWidth)
         self.setFixedHeight(
-            self.fontMetrics().lineSpacing() * 3
+            self.fontMetrics().lineSpacing() * lines
             + 2 * self.frameWidth() + 6)
-        self.setToolTip(tr('tip_note_text'))
+        self.setToolTip(tooltip if tooltip is not None
+                        else tr('tip_note_text'))
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) \
@@ -837,16 +841,20 @@ class ElementPanel(QFrame):
 
     def _build_axis_label(self, form, key):
         tab = self._tab
-        base = ''
-        if tab.plot is not None and tab.plot.series:
-            base = (tab.plot.series[0].x_label if key == 'xlabel'
-                    else tab.plot.series[0].y_label)
+
+        def base():
+            if tab.plot is not None and tab.plot.series:
+                return (tab.plot.series[0].x_label if key == 'xlabel'
+                        else tab.plot.series[0].y_label)
+            return ''
+
         doc = self._doc()
         self._text_editor(
             form, key, TextStyle, text_row=True,
             text_get=lambda: getattr(tab.overrides, key),
-            text_set=lambda o, t: setattr(o, key, t or None),
-            default_text=base,
+            text_set=lambda o, t: setattr(o, key,
+                                          label_override(t, base())),
+            default_text=base(),
             eff=lambda: getattr(doc.style, key))
 
     def _build_axis(self, form, style_name, lim_name, categorical):
@@ -1046,19 +1054,13 @@ class ElementPanel(QFrame):
         def so():
             return tab.overrides.series.get(y_col)
 
-        e = QLineEdit((so().label if so() else None)
-                      or (ds.label if ds else ''))
-        e.setPlaceholderText(ds.label if ds else '')
-        e.editingFinished.connect(lambda: self._apply_now(
-            lambda o: setattr(get(o), 'label', e.text() or None)))
+        e, _get, _so, esync = self._item_label_edit(y_col, ds)
         self._row(form, tr('row_label'), e,
                   is_set=lambda: so() is not None
                   and so().label is not None,
                   reset=lambda o: setattr(get(o), 'label', None),
                   reset_tip=tr('tip_reset_text'),
-                  sync=lambda: e.setText(
-                      (so().label if so() and so().label is not None
-                       else (ds.label if ds else ''))))
+                  sync=esync)
 
         swatch = self._color_row(
             tr('row_colour'),
@@ -1418,6 +1420,140 @@ class ElementPanel(QFrame):
         self._syncs += [editor._sync_family, editor._sync_size]
         form.addRow(editor)
 
+        self._legend_entries(form, doc)
+        self._legend_text(form, doc)
+
+    def _legend_entries(self, form, doc):
+        """Per-entry show/hide switches + label edits (``\\l(n)`` refs)."""
+        kind = getattr(doc, 'kind', None)
+        if kind == 'line':
+            coll_name, items = 'series', doc.series
+        elif kind == 'histogram':
+            coll_name, items = 'groups', doc.groups
+        elif kind == 'stacked_column':
+            coll_name, items = 'categories', doc.categories
+        else:
+            return
+        rows = []
+        for n, item in enumerate(items, 1):
+            y_col = self._item_y_column(coll_name, item.id)
+            if y_col is not None:
+                rows.append((n, item, y_col))
+        if not rows:
+            return
+        o = self._tab.overrides
+        entry_rows = []
+
+        def contributes(cb, item, so):
+            """Would this entry still produce an automatic legend row?"""
+            if not cb.isChecked():
+                return False
+            if kind in ('stacked_column', 'histogram'):
+                return True
+            s = so()
+            lab = (s.label if s is not None and s.label is not None
+                   else (item.label or ''))
+            return bool(lab) and not lab.startswith('_')
+
+        def visible_count():
+            return sum(1 for cb, item, so in entry_rows
+                       if contributes(cb, item, so))
+
+        self._section(tr('sec_legend_entries'))
+        checks = []
+        for n, item, y_col in rows:
+            e, get, so, esync = self._item_label_edit(y_col, item)
+            cb = QCheckBox()
+            cb.setChecked(not (so() is not None
+                               and so().legend is False))
+
+            def toggled(on, cb=cb, get=get):
+                if on:
+                    self._apply_now(
+                        lambda o: setattr(get(o), 'legend', None))
+                    return
+                if visible_count() == 0:
+                    # Refuse hiding the last visible entry — the legend
+                    # would vanish and could not be reopened by click.
+                    cb.blockSignals(True)
+                    cb.setChecked(True)
+                    cb.blockSignals(False)
+                    return
+                self._apply_now(
+                    lambda o: setattr(get(o), 'legend', False))
+
+            cb.toggled.connect(toggled)
+            roww = QWidget()
+            rh = QHBoxLayout(roww)
+            rh.setContentsMargins(0, 0, 0, 0)
+            rh.setSpacing(4)
+            rh.addWidget(cb)
+            rh.addWidget(e, 1)
+            form.addRow(str(n), roww)
+            checks.append(cb)
+            entry_rows.append((cb, item, so))
+            self._syncs.append(esync)
+            self._syncs.append(lambda cb=cb, so=so: (
+                cb.blockSignals(True),
+                cb.setChecked(not (so() is not None
+                                   and so().legend is False)),
+                cb.blockSignals(False)))
+
+        def sync_enabled():
+            active = o.legend_text is not None
+            for cb in checks:
+                cb.setEnabled(not active)
+                cb.setToolTip(tr('tip_legend_entries_template')
+                              if active else '')
+
+        self._syncs.append(sync_enabled)
+        sync_enabled()
+
+    def _legend_text(self, form, doc):
+        """Custom legend template editor (``\\l(n)``/``%(n)`` refs)."""
+        o = self._tab.overrides
+
+        def default_text():
+            d = self._doc()
+            return default_template(d) if d is not None else ''
+
+        edit = _NoteTextEdit(lines=5, tooltip=tr('tip_legend_template'))
+        edit.setPlainText(o.legend_text
+                          if o.legend_text is not None
+                          else default_text())
+
+        def commit():
+            text = edit.toPlainText().rstrip()
+            cur = o.legend_text
+            if not text.strip() or text == default_text():
+                self._set_invalid(edit, False)
+                if cur is not None:
+                    self._apply_now(
+                        lambda xo: setattr(xo, 'legend_text', None))
+                    edit.setPlainText(default_text())
+                return
+            if len(text) > MAX_LEGEND_TEXT \
+                    or len(text.split('\n')) > MAX_LEGEND_LINES:
+                self._set_invalid(edit, True)
+                return
+            self._set_invalid(edit, False)
+            if text != cur:
+                self._apply_now(
+                    lambda xo: setattr(xo, 'legend_text', text))
+                edit.setPlainText(text)
+
+        edit.committed.connect(commit)
+        self._section(tr('sec_legend_text'))
+        self._row(form, tr('row_legend_text'), edit,
+                  is_set=lambda: o.legend_text is not None,
+                  reset=lambda xo: setattr(xo, 'legend_text', None),
+                  sync=lambda: (
+                      None if edit.hasFocus()
+                      else edit.setPlainText(
+                          o.legend_text
+                          if o.legend_text is not None
+                          else default_text())))
+
     def _build_frame(self, form):
         o = self._tab.overrides
         doc = self._doc()
@@ -1577,44 +1713,29 @@ class ElementPanel(QFrame):
                 if i < len(items) else None
             if y_col is None:
                 continue
-            sheet_label = getattr(items[i], 'label', '') or grp.label
-
-            def get(xo, yc=y_col):
-                s = xo.series.get(yc)
-                if s is None:
-                    s = SeriesOverride()
-                    xo.series[yc] = s
-                return s
-
-            def stored(yc=y_col):
-                s = tab.overrides.series.get(yc)
-                return s.label if s else None
-
-            e = QLineEdit(stored() or grp.label)
-            e.setPlaceholderText(sheet_label)
-            e.editingFinished.connect(
-                lambda e=e, get=get: self._apply_now(
-                    lambda o: setattr(get(o), 'label',
-                                      e.text() or None)))
+            e, get, so, sync = self._item_label_edit(y_col, grp)
             self._row(form, tr('row_label_n', n=i + 1), e,
-                      is_set=lambda st=stored: st() is not None,
+                      is_set=lambda so=so: so() is not None
+                      and so().label is not None,
                       reset=lambda o, get=get:
                           setattr(get(o), 'label', None),
                       reset_tip=tr('tip_reset_text'),
-                      sync=lambda e=e, st=stored, g=grp:
-                          e.setText(st() or g.label))
+                      sync=sync)
 
     def _build_bar_labels(self, form, doc):
         """Stacked xticks panel: one editable label per bar, writing
         ``overrides.bar_labels[index]``."""
         tab = self._tab
         entries = doc.x_tick_labels or []
-        cats = tab.plot.series if tab.plot is not None else []
-        base = getattr(cats[0], 'bar_labels', ()) if cats else ()
         self._section(tr('sec_bar_labels'))
         for x, text in entries:
             idx = int(x)
-            sheet_label = base[idx] if idx < len(base) else str(idx)
+
+            def sheet_label(i=idx):
+                cats = tab.plot.series if tab.plot is not None else []
+                b = (getattr(cats[0], 'bar_labels', ())
+                     if cats else ())
+                return b[i] if i < len(b) else str(i)
 
             def current(i=idx, t=text):
                 m = tab.overrides.bar_labels
@@ -1623,15 +1744,16 @@ class ElementPanel(QFrame):
             def commit(e, i=idx):
                 def fn(o):
                     m = dict(o.bar_labels or {})
-                    if e.text():
-                        m[i] = e.text()
+                    v = label_override(e.text(), sheet_label(i))
+                    if v is not None:
+                        m[i] = v
                     else:
                         m.pop(i, None)
                     o.bar_labels = m or None
                 self._apply_now(fn)
 
             e = QLineEdit(current())
-            e.setPlaceholderText(sheet_label)
+            e.setPlaceholderText(sheet_label())
             e.editingFinished.connect(lambda e=e: commit(e))
             self._row(form, tr('row_label_n', n=idx + 1), e,
                       is_set=lambda i=idx:
@@ -1647,18 +1769,10 @@ class ElementPanel(QFrame):
 
     # ── group-item panels (violin / stacked column) ──────────────────
 
-    def _item_label_color(self, form, coll_name, iid):
-        """Label + colour rows; returns (get, so, item) or None."""
+    def _item_label_edit(self, y_col, item):
+        """Label editor bound to ``overrides.series[y_col].label``;
+        returns ``(edit, get, so, sync)``."""
         tab = self._tab
-        y_col = self._item_y_column(coll_name, iid)
-        doc = self._doc()
-        if y_col is None:
-            note = QLabel(tr('panel_series_detached'))
-            note.setWordWrap(True)
-            form.addRow(note)
-            return None
-        coll = getattr(doc, coll_name)
-        item = next((x for x in coll if x.id == iid), None)
 
         def get(xo):
             s = xo.series.get(y_col)
@@ -1670,19 +1784,45 @@ class ElementPanel(QFrame):
         def so():
             return tab.overrides.series.get(y_col)
 
-        e = QLineEdit((so().label if so() else None)
-                      or (item.label if item else ''))
-        e.setPlaceholderText(item.label if item else '')
+        def sheet_label():
+            # The worksheet-derived label, not the effective document
+            # label (which already includes any override).
+            if tab.plot is not None:
+                for it in tab.plot.series:
+                    if getattr(it, 'y_column', None) == y_col:
+                        return getattr(it, 'label', '') or ''
+            return item.label if item else ''
+
+        e = QLineEdit((so().label if so() else None) or sheet_label())
+        e.setPlaceholderText(sheet_label())
         e.editingFinished.connect(lambda: self._apply_now(
-            lambda o: setattr(get(o), 'label', e.text() or None)))
+            lambda o: setattr(
+                get(o), 'label',
+                label_override(e.text(), sheet_label()))))
+        sync = lambda: e.setText(
+            (so().label if so() and so().label is not None
+             else sheet_label()))
+        return e, get, so, sync
+
+    def _item_label_color(self, form, coll_name, iid):
+        """Label + colour rows; returns (get, so, item) or None."""
+        y_col = self._item_y_column(coll_name, iid)
+        doc = self._doc()
+        if y_col is None:
+            note = QLabel(tr('panel_series_detached'))
+            note.setWordWrap(True)
+            form.addRow(note)
+            return None
+        coll = getattr(doc, coll_name)
+        item = next((x for x in coll if x.id == iid), None)
+
+        e, get, so, sync = self._item_label_edit(y_col, item)
         self._row(form, tr('row_label'), e,
                   is_set=lambda: so() is not None
                   and so().label is not None,
                   reset=lambda o: setattr(get(o), 'label', None),
                   reset_tip=tr('tip_reset_text'),
-                  sync=lambda: e.setText(
-                      (so().label if so() and so().label is not None
-                       else (item.label if item else ''))))
+                  sync=sync)
 
         swatch = self._color_row(
             tr('row_colour'),

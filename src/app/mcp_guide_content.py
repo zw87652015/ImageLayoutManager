@@ -42,7 +42,7 @@ CONFIG_LOCATIONS = (
 ABILITIES = (("Projects", "工程"), ("Rows & cells", "行与单元格"), ("Images", "图片"),
              ("Crop & rotate", "裁剪与旋转"), ("Labels & text", "标注与文字"), ("Scale bars", "比例尺"),
              ("Insets", "插图"), ("Size groups", "尺寸组"), ("Auto layout", "自动布局"),
-             ("Export", "导出"), ("Canvas screenshots", "画布截图"))
+             ("Export", "导出"), ("Plots", "图表"), ("Canvas screenshots", "画布截图"))
 TROUBLE = (
     (("Connection refused", "连接被拒绝"), ("Turn on the server in step 1.", "在第 1 步开启服务。")),
     (("Authentication failed", "认证失败"),

@@ -185,12 +185,18 @@ def document_from_plot(items, chart_key, title='', *,
         y = s.y
         if chart_key == 'stacked_line' and i > 0:
             y = tuple(v + offsets[i] for v in y)
+        # Function curves are plain sampled lines even in scatter
+        # charts — never markers or steps.
+        is_function = getattr(s, 'function', None) is not None
         doc.series.append(LineSeries(
             id='s%d' % i, label=s.label,
             x=list(s.x), y=list(y),
             color=colors[i],
-            linewidth_pt=1.5, linestyle=linestyle, marker=marker,
-            markersize_pt=6.0, drawstyle=drawstyle,
+            linewidth_pt=1.5,
+            linestyle='-' if is_function else linestyle,
+            marker='' if is_function else marker,
+            markersize_pt=6.0,
+            drawstyle='default' if is_function else drawstyle,
             yerr=(list(s.yerr)
                   if kind != 'ridgeline' and s.yerr is not None
                   else None),
